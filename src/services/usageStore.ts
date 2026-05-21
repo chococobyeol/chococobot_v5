@@ -16,6 +16,7 @@ export type UsageRecord = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  usageScope?: 'chat' | 'summary';
   at?: Date;
 };
 
@@ -34,13 +35,13 @@ export class UsageStore {
         guild_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
         model TEXT NOT NULL,
+        usage_scope TEXT NOT NULL DEFAULT 'chat',
         prompt_tokens INTEGER NOT NULL DEFAULT 0,
         completion_tokens INTEGER NOT NULL DEFAULT 0,
         total_tokens INTEGER NOT NULL DEFAULT 0
       );
-      CREATE INDEX IF NOT EXISTS idx_ai_usage_user_date ON ai_usage(guild_id, user_id, usage_date);
-      CREATE INDEX IF NOT EXISTS idx_ai_usage_guild_date ON ai_usage(guild_id, usage_date);
     `);
+    this.migrateUsageScopeColumn();
   }
 
   recordAiUsage(record: UsageRecord): void {
@@ -48,9 +49,9 @@ export class UsageStore {
     this.db
       .prepare(`
         INSERT INTO ai_usage (
-          created_at, usage_date, guild_id, user_id, model,
+          created_at, usage_date, guild_id, user_id, model, usage_scope,
           prompt_tokens, completion_tokens, total_tokens
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         at.toISOString(),
@@ -58,6 +59,7 @@ export class UsageStore {
         record.guildId,
         record.userId,
         record.model,
+        record.usageScope ?? 'chat',
         record.promptTokens,
         record.completionTokens,
         record.totalTokens
@@ -66,9 +68,10 @@ export class UsageStore {
 
   summarizeUser(guildId: string, userId: string, days = 1, today = new Date()): UsageSummary {
     const startDate = startDateIso(days, today);
-    return this.summary('guild_id = ? AND user_id = ? AND usage_date >= ?', [
+    return this.summary('guild_id = ? AND user_id = ? AND usage_scope = ? AND usage_date >= ?', [
       guildId,
       userId,
+      'chat',
       startDate
     ]);
   }
@@ -99,6 +102,15 @@ export class UsageStore {
       completionTokens: Number(row.completionTokens),
       totalTokens: Number(row.totalTokens)
     };
+  }
+
+  private migrateUsageScopeColumn(): void {
+    const columns = this.db.prepare(`PRAGMA table_info(ai_usage)`).all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === 'usage_scope')) {
+      this.db.prepare(`ALTER TABLE ai_usage ADD COLUMN usage_scope TEXT NOT NULL DEFAULT 'chat'`).run();
+    }
+    this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_ai_usage_user_date ON ai_usage(guild_id, user_id, usage_date, usage_scope)`).run();
+    this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_ai_usage_guild_date ON ai_usage(guild_id, usage_date)`).run();
   }
 }
 

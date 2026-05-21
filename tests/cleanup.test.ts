@@ -1,6 +1,5 @@
 import { Collection } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
-import { mineMessageFilter } from '../src/commands/cleanup.js';
 import {
   DEFAULT_OWN_CLEANUP_TARGET,
   DEFAULT_PURGE_TARGET,
@@ -9,6 +8,7 @@ import {
   cleanupUserMessages,
   hasManageMessages,
   isBulkDeletable,
+  mineMessageFilter,
   normalizeCleanupTarget
 } from '../src/services/cleanupService.js';
 

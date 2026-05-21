@@ -27,7 +27,7 @@ services:
       - key: TTS_VOICE
         value: ko-KR-SunHiNeural
       - key: TTS_MAX_CHARS
-        value: 180
+        value: 500
       - key: TTS_READ_BOT_MESSAGES
         value: false
       - key: LOG_LEVEL

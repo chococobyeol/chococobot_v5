@@ -4,8 +4,10 @@ import type { PrefixCommand } from './types.js';
 import type { Settings } from './config.js';
 import type { UsageStore } from './services/usageStore.js';
 import { AiService } from './services/aiService.js';
+import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
+import { SqliteAiMemoryStore } from './services/aiMemoryStore.js';
 import { normalizeTtsEngineName, TtsService } from './services/ttsService.js';
 import { VoiceService } from './services/voiceService.js';
 import {
@@ -25,6 +27,7 @@ export type BotContext = {
   settings: Settings;
   usageStore: UsageStore;
   ai: AiService;
+  aiChat: AiChatService;
   voice: VoiceService;
   voiceSettings: import('./services/voiceSettingsStore.js').VoiceSettingsStore;
   activityLog: BotActivityLogService;
@@ -130,6 +133,14 @@ function summarizeCommandForLog(commandName: string, args: string[]): string {
     case 'command-prefix':
     case 'prefixes':
       return `prefix=${args[0] ?? 'show'}`;
+    case '기억삭제':
+    case 'ai-memory':
+    case 'ai-reset-memory':
+    case 'memory-reset':
+    case 'memory-clear':
+    case '메모리삭제':
+    case '기억초기화':
+      return 'action=reset-memory';
     case '멈춰':
     case 'stop':
     case 'halt':
@@ -406,6 +417,19 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       }
     },
     {
+      name: '기억삭제',
+      aliases: ['ai-memory', 'ai-reset-memory', 'memory-reset', 'memory-clear', '메모리삭제', '기억초기화'],
+      description: '서버 AI 기억을 초기화합니다.',
+      async execute(message, _args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+          throw new Error('서버 관리자만 AI 기억을 지울 수 있어요...');
+        }
+        await context.aiChat.resetGuildMemory(message.guildId);
+        await message.reply({ content: '서버 AI 기억을 지웠어요...', allowedMentions: { repliedUser: false } });
+      }
+    },
+    {
       name: '도움말',
       aliases: ['help', 'commands', '명령어', 'command', 'cmd'],
       description: '사용 가능한 명령어를 보여줍니다.',
@@ -424,6 +448,8 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             `${prefix}멈춰 / ${prefix}stop / ${prefix}halt / ${prefix}cancel / ${prefix}pause / ${prefix}정지 / ${prefix}그만 / ${prefix}멈춤 / ${prefix}스톱 — TTS 재생 멈추기...`,
             `${prefix}음색 [프리셋] / ${prefix}voice [preset] / ${prefix}voice-style [preset] / ${prefix}voicepreset [preset] / ${prefix}tts-voice [preset] / ${prefix}목소리 [프리셋] — 내 TTS 음색 확인/설정...`,
             `${prefix}tts엔진 [edge|gtts] / ${prefix}engine [edge|gtts] / ${prefix}tts-engine [edge|gtts] / ${prefix}ttsengine [edge|gtts] / ${prefix}엔진 [edge|gtts] — 내 TTS 엔진 확인/설정...`,
+            `현재 프리픽스 뒤에 ?를 붙이고 공백을 넣어 AI 채팅해요... 예: \`${prefix}? 안녕\``,
+            `${prefix}기억삭제 / ${prefix}ai-memory / ${prefix}ai-reset-memory / ${prefix}memory-reset / ${prefix}memory-clear / ${prefix}메모리삭제 / ${prefix}기억초기화 — 서버 AI 기억 초기화... (서버 관리자만 가능해요...)`,
             `${prefix}프리픽스 / ${prefix}prefix / ${prefix}command-prefix — 서버 프리픽스 확인/변경... (서버 관리자만 가능해요...)`
           ].join('\n'),
           allowedMentions: { repliedUser: false }
@@ -497,12 +523,15 @@ export async function createBot(
   const { UsageStore } = await import('./services/usageStore.js');
   const { SqliteVoiceSettingsStore } = await import('./services/voiceSettingsStore.js');
   const usageStore = new UsageStore(settings.databasePath);
+  const memoryStore = new SqliteAiMemoryStore(settings.databasePath);
   const voiceSettings = new SqliteVoiceSettingsStore(settings.databasePath);
   const activityLog = new BotActivityLogService(client, new SqliteBotActivityLogStore(settings.databasePath), settings.loggingGuildId);
+  const ai = new AiService(settings, usageStore);
   const context: BotContext = {
     settings,
     usageStore,
-    ai: new AiService(settings, usageStore),
+    ai,
+    aiChat: new AiChatService(settings, ai, memoryStore, activityLog),
     activityLog,
     voiceSettings,
     voice: new VoiceService(
@@ -527,8 +556,16 @@ export async function createBot(
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (await dispatchPrefixCommand(message, commands, context)) return;
     if (!message.guildId) return;
+    if (!message.author.bot) {
+      const prefix = getGuildPrefix(context, message.guildId);
+      const aiPrompt = parseAiChatTrigger(message.content, prefix);
+      if (aiPrompt) {
+        await context.aiChat.handlePrompt(message, aiPrompt);
+        return;
+      }
+    }
+    if (await dispatchPrefixCommand(message, commands, context)) return;
     if (message.author.bot && !settings.ttsReadBotMessages) return;
     const queued = await context.voice.enqueueMessage(message);
     if (queued) {

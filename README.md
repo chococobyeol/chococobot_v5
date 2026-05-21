@@ -15,9 +15,10 @@ Node.js/TypeScript Discord bot for Korean `!` prefix chat cleanup and voice TTS,
 - `!음색` / `!voice` — list or select supported TTS voice presets.
 - `!tts엔진` / `!engine` — list or select your TTS engine (`edge` or `gtts`).
 - `!프리픽스` / `!prefix` — show or change the server command prefix. Allowed values: `!`, `?`, `.`, `~`. Server administrators only.
+- `!<prefix>? <프롬프트>` — ask Groq AI in-channel, for example `!? 안녕` or `~? 오늘 뭐해`.
+- `!도움말` / `!명령어` / `!help` — show the full command list.
+- `!기억삭제` / `!ai-memory` — clear the guild-wide AI memory. Server administrators only.
 - Bot activity logs are written to the dedicated log server configured by `LOGGING_GUILD_ID`.
-
-Slash-command registration is disabled for the v1 prefix bot path so servers do not get slash-command clutter.
 
 ## Why Node.js instead of Python here?
 
@@ -65,8 +66,6 @@ Optional v1 settings:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `DISCORD_CLIENT_ID` | _(empty)_ | Only needed if a legacy slash-command registration path is re-enabled. |
-| `DISCORD_GUILD_ID` | _(empty)_ | Optional guild ID for legacy slash-command registration. |
 | `DATABASE_PATH` | `data/chococobot.sqlite3` | SQLite path for bot state. Use a persistent path such as `/var/data/chococobot.sqlite3` on Render. |
 | `LOGGING_GUILD_ID` | `1507058598423826533` | Dedicated Discord server for bot activity logs and test channels. |
 | `VOICE_IDLE_LEAVE_MS` | `600000` | How long the bot stays in voice after the queue becomes idle before auto-leaving. |
@@ -78,6 +77,9 @@ Optional v1 settings:
 | `TTS_ENGINE` | `edge` | Default TTS engine when a user has not selected one. |
 | `TTS_MAX_CHARS` | `500` | Maximum text length sent to TTS. Messages longer than this are rejected with a warning. |
 | `TTS_READ_BOT_MESSAGES` | `false` | Whether watched-channel TTS should read bot-authored messages. |
+| `AI_MEMORY_RECENT_TURNS` | `8` | How many recent unsummarized AI turns are kept in the live prompt. |
+| `AI_MEMORY_COMPACT_AFTER_TURNS` | `12` | When the bot compacts guild AI memory into a summary. |
+| `AI_MEMORY_MAX_SUMMARY_CHARS` | `2000` | Maximum stored summary length after compaction. |
 | `LOG_LEVEL` | `info` | Logging verbosity label. |
 
 Deferred AI/Groq variables (`GROQ_API_KEY`, `GROQ_MODEL`, `AI_*`) remain in `.env.example` for compatibility, but they are not required for the cleanup/TTS v1 startup path.
@@ -116,6 +118,16 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.
 - TTS synthesis does not fall back to another engine automatically; if the selected engine fails, the bot logs the error and stays silent.
 - The first TTS request auto-installs the Python package for the selected engine if it is missing.
+
+## AI chat behavior
+
+- Use the current server prefix plus `?` and a space to call AI: `!? 안녕`, `~? 오늘 뭐해`, `.? 설명해줘`.
+- The bot replies in the same channel and does not ping the user by default.
+- AI replies are chunked to stay within Discord's message limit.
+- Only explicit AI prompts and replies are stored in guild memory; ordinary chat is not ingested.
+- Guild memory is shared across the server and stores user IDs/user names so future replies can keep track of who said what.
+- `!기억삭제` / `!ai-memory` clears the guild AI memory and is limited to server administrators.
+- Background memory summarization counts against guild AI usage, not the requesting user's quota.
 
 ## Command prefix behavior
 

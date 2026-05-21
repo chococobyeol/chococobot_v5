@@ -267,3 +267,29 @@ describe('프리픽스 prefix command', () => {
     await expect(command!.execute(message, ['?'], context as any)).rejects.toThrow('서버 관리자만 프리픽스를 바꿀 수 있어요...');
   });
 });
+
+describe('기억삭제 prefix command', () => {
+  it('lets server administrators reset guild AI memory', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('기억삭제');
+    expect(command).toBeDefined();
+
+    const resetGuildMemory = vi.fn(async () => undefined);
+    const message = makeMessage('channel-1') as any;
+    message.member = {
+      permissions: {
+        has: vi.fn((permission: bigint) => permission === PermissionFlagsBits.Administrator)
+      }
+    };
+    const context = {
+      aiChat: {
+        resetGuildMemory
+      }
+    };
+
+    await command!.execute(message, [], context as any);
+
+    expect(resetGuildMemory).toHaveBeenCalledWith('guild-1');
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '서버 AI 기억을 지웠어요...' }));
+  });
+});

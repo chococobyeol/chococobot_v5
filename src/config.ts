@@ -2,14 +2,15 @@ import 'dotenv/config';
 
 export type Settings = {
   discordToken: string;
-  discordClientId: string;
-  discordGuildId?: string;
   groqApiKey: string;
   groqModel: string;
   aiSystemPrompt: string;
   aiMaxCompletionTokens: number;
   aiUserDailyTokenLimit: number;
   aiGuildDailyTokenLimit: number;
+  aiMemoryRecentTurns: number;
+  aiMemoryCompactAfterTurns: number;
+  aiMemoryMaxSummaryChars: number;
   cleanMineDefaultTarget: number;
   cleanMineMaxLimit: number;
   cleanAllDefaultTarget: number;
@@ -55,8 +56,6 @@ function boolFromEnv(name: string, fallback: boolean): boolean {
 export function loadSettings(): Settings {
   return {
     discordToken: process.env.DISCORD_TOKEN ?? '',
-    discordClientId: process.env.DISCORD_CLIENT_ID ?? '',
-    discordGuildId: process.env.DISCORD_GUILD_ID || undefined,
     groqApiKey: process.env.GROQ_API_KEY ?? '',
     groqModel: process.env.GROQ_MODEL ?? 'llama-3.1-8b-instant',
     aiSystemPrompt:
@@ -65,6 +64,9 @@ export function loadSettings(): Settings {
     aiMaxCompletionTokens: intFromEnv('AI_MAX_COMPLETION_TOKENS', 800),
     aiUserDailyTokenLimit: intFromEnv('AI_USER_DAILY_TOKEN_LIMIT', 20_000),
     aiGuildDailyTokenLimit: intFromEnv('AI_GUILD_DAILY_TOKEN_LIMIT', 100_000),
+    aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 8),
+    aiMemoryCompactAfterTurns: positiveIntFromEnv('AI_MEMORY_COMPACT_AFTER_TURNS', 12),
+    aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 2000),
     cleanMineDefaultTarget: positiveIntFromEnv('CLEAN_MINE_DEFAULT_TARGET', 500),
     cleanMineMaxLimit: positiveIntFromEnv('CLEAN_MINE_MAX_LIMIT', 500),
     cleanAllDefaultTarget: positiveIntFromEnv('CLEAN_ALL_DEFAULT_TARGET', 1000),
