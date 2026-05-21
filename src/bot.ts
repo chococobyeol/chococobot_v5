@@ -4,6 +4,8 @@ import type { PrefixCommand } from './types.js';
 import type { Settings } from './config.js';
 import type { UsageStore } from './services/usageStore.js';
 import { AiService } from './services/aiService.js';
+import { BotActivityLogService } from './services/botActivityLogService.js';
+import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
 import { normalizeTtsEngineName, TtsService } from './services/ttsService.js';
 import { VoiceService } from './services/voiceService.js';
 import {
@@ -22,6 +24,7 @@ export type BotContext = {
   usageStore: UsageStore;
   ai: AiService;
   voice: VoiceService;
+  activityLog: BotActivityLogService;
 };
 
 type ParsedPrefixCommand = {
@@ -74,6 +77,43 @@ function registerPrefixCommand(commands: Collection<string, PrefixCommand>, comm
   for (const alias of command.aliases) commands.set(alias.toLowerCase(), command);
 }
 
+function summarizeCommandForLog(commandName: string, args: string[]): string {
+  const joined = args.join(' ').trim();
+  switch (commandName) {
+    case '말':
+    case 'say':
+    case 'tts-say':
+    case '말해':
+      return `text=${joined.slice(0, 500)}`;
+    case '청소':
+    case 'clean':
+    case 'clean-mine':
+    case '내청소':
+    case '대청소':
+    case 'clean-all':
+    case 'purge':
+      return `target=${args[0] ?? 'default'}`;
+    case 'tts채널':
+    case 'tts-channel':
+    case 'tts-watch':
+    case 'watch':
+    case '채널tts':
+      return `action=${args[0] ?? 'set-current'}`;
+    case '음색':
+    case 'voice':
+    case 'tts-voice':
+    case '목소리':
+      return `preset=${args[0] ?? 'show'}`;
+    case 'tts엔진':
+    case 'tts-engine':
+    case 'engine':
+    case '엔진':
+      return `engine=${args[0] ?? 'show'}`;
+    default:
+      return `args=${args.join('|').slice(0, 200)}`;
+  }
+}
+
 export function createPrefixCommands(): Collection<string, PrefixCommand> {
   const commands = new Collection<string, PrefixCommand>();
 
@@ -118,6 +158,12 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       async execute(message, _args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
         await context.voice.join(requireGuildMember(message));
+        await context.activityLog.logVoiceConnection({
+          guildId: message.guildId,
+          guildName: message.guild?.name,
+          channelId: message.member?.voice.channel?.id,
+          message: 'voice joined'
+        });
         await message.reply({ content: '음성 채널에 연결했어요.', allowedMentions: { repliedUser: false } });
       }
     },
@@ -128,6 +174,11 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       async execute(message, _args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
         context.voice.leave(message.guildId);
+        await context.activityLog.logVoiceConnection({
+          guildId: message.guildId,
+          guildName: message.guild?.name,
+          message: 'voice left'
+        });
         await message.reply({ content: '음성 채널에서 나왔어요.', allowedMentions: { repliedUser: false } });
       }
     },
@@ -177,9 +228,31 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
         const text = args.join(' ').trim();
         if (!text) throw new Error('읽을 문장을 입력해 주세요.');
+        await context.activityLog.logTtsRequest({
+          guildId: message.guildId,
+          guildName: message.guild?.name,
+          channelId: message.channelId,
+          userId: message.author.id,
+          userName: message.author.username,
+          source: 'command',
+          engine: context.voice.getUserTtsEngine(message.guildId, message.author.id),
+          voice: context.voice.getUserVoicePreset(message.guildId, message.author.id),
+          text
+        });
         const played = await context.voice.speak(message.guildId, text, message.author.id);
         if (played) {
           await message.reply({ content: '읽기 요청을 추가했어요.', allowedMentions: { repliedUser: false } });
+        } else {
+          await context.activityLog.logError({
+            guildId: message.guildId,
+            guildName: message.guild?.name,
+            channelId: message.channelId,
+            userId: message.author.id,
+            userName: message.author.username,
+            commandName: '말',
+            summary: `text=${text.slice(0, 500)}`,
+            error: new Error('TTS synthesis/playback failed')
+          });
         }
       }
     },
@@ -273,17 +346,40 @@ async function dispatchPrefixCommand(
     await message.reply({ content: '`!도움말`로 사용 가능한 명령어를 확인해 주세요.', allowedMentions: { repliedUser: false } });
     return true;
   }
+  const commandSummary = summarizeCommandForLog(command.name, parsed.args);
+  await context.activityLog.logCommand({
+    guildId: message.guildId,
+    guildName: message.guild?.name,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userName: message.author.username,
+    commandName: command.name,
+    summary: commandSummary
+  });
   try {
     await command.execute(message, parsed.args, context);
   } catch (error) {
     logger.error(error);
+    await context.activityLog.logError({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.author.username,
+      commandName: command.name,
+      summary: commandSummary,
+      error
+    });
     const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류가 발생했어요.';
     await message.reply({ content: errorMessage, allowedMentions: { repliedUser: false } });
   }
   return true;
 }
 
-export async function createBot(settings: Settings): Promise<{ client: Client; context: BotContext; commands: Collection<string, PrefixCommand> }> {
+export async function createBot(
+  settings: Settings,
+  options: { bootstrapLogging?: boolean } = {}
+): Promise<{ client: Client; context: BotContext; commands: Collection<string, PrefixCommand> }> {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -296,10 +392,12 @@ export async function createBot(settings: Settings): Promise<{ client: Client; c
   const { UsageStore } = await import('./services/usageStore.js');
   const { SqliteVoiceSettingsStore } = await import('./services/voiceSettingsStore.js');
   const usageStore = new UsageStore(settings.databasePath);
+  const activityLog = new BotActivityLogService(client, new SqliteBotActivityLogStore(settings.databasePath), settings.loggingGuildId);
   const context: BotContext = {
     settings,
     usageStore,
     ai: new AiService(settings, usageStore),
+    activityLog,
     voice: new VoiceService(
       new TtsService(settings.ttsVoice, settings.ttsMaxChars),
       new SqliteVoiceSettingsStore(settings.databasePath),
@@ -311,13 +409,33 @@ export async function createBot(settings: Settings): Promise<{ client: Client; c
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(`Logged in as ${readyClient.user.tag}`);
+    if (options.bootstrapLogging !== false) {
+      void activityLog.ensureLayoutForCurrentGuilds();
+    }
+  });
+
+  client.on(Events.GuildCreate, (guild) => {
+    void activityLog.ensureGuildLogChannel(guild.id);
   });
 
   client.on(Events.MessageCreate, async (message) => {
     if (await dispatchPrefixCommand(message, commands, context)) return;
     if (!message.guildId) return;
     if (message.author.bot && !settings.ttsReadBotMessages) return;
-    await context.voice.enqueueMessage(message);
+    const queued = await context.voice.enqueueMessage(message);
+    if (queued) {
+      await context.activityLog.logTtsRequest({
+        guildId: message.guildId,
+        guildName: message.guild?.name,
+        channelId: message.channelId,
+        userId: message.author.id,
+        userName: message.author.username,
+        source: 'watched-channel',
+        engine: context.voice.getUserTtsEngine(message.guildId, message.author.id),
+        voice: context.voice.getUserVoicePreset(message.guildId, message.author.id),
+        textLength: message.cleanContent.length
+      });
+    }
   });
 
   return { client, context, commands };

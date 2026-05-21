@@ -12,6 +12,7 @@ Node.js/TypeScript Discord bot for Korean `!` prefix chat cleanup and voice TTS,
 - `!tts채널 현재` / `!tts채널 해제` — show or clear the stored auto-read channel.
 - `!음색` / `!voice` — list or select supported TTS voice presets.
 - `!tts엔진` / `!engine` — list or select your TTS engine (`edge` or `gtts`).
+- Bot activity logs are written to the dedicated log server configured by `LOGGING_GUILD_ID`.
 
 Slash-command registration is disabled for the v1 prefix bot path so servers do not get slash-command clutter.
 
@@ -64,6 +65,7 @@ Optional v1 settings:
 | `DISCORD_CLIENT_ID` | _(empty)_ | Only needed if a legacy slash-command registration path is re-enabled. |
 | `DISCORD_GUILD_ID` | _(empty)_ | Optional guild ID for legacy slash-command registration. |
 | `DATABASE_PATH` | `data/chococobot.sqlite3` | SQLite path for bot state. Use a persistent path such as `/var/data/chococobot.sqlite3` on Render. |
+| `LOGGING_GUILD_ID` | `1507058598423826533` | Dedicated Discord server for bot activity logs and test channels. |
 | `CLEAN_MINE_DEFAULT_TARGET` | `500` | Default target count for `!청소` when no number is provided. |
 | `CLEAN_MINE_MAX_LIMIT` | `500` | Maximum accepted target count for own-message cleanup. |
 | `CLEAN_ALL_DEFAULT_TARGET` | `1000` | Default target count for `!대청소` when no number is provided. |
@@ -102,6 +104,25 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.
 - TTS synthesis does not fall back to another engine automatically; if the selected engine fails, the bot logs the error and stays silent.
 - The first TTS request auto-installs the Python package for the selected engine if it is missing.
+
+## Bot activity logging
+
+The bot writes command and error logs to the dedicated logging server only. General chat contents are not recorded unless they are explicitly sent to TTS by a command such as `!말`.
+
+On startup, the bot ensures the logging server contains:
+
+- `메모채널`
+- `봇-채팅-테스트채널`
+- `봇-음성-테스트채널`
+- one text log channel per server the bot has joined
+
+To reset that server and recreate those channels, run:
+
+```bash
+npm run setup:logs
+```
+
+The setup script deletes the logging server's existing channels before recreating the standard layout, so use it only for the dedicated log server.
 
 ## DAVE/E2EE voice check
 

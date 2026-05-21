@@ -100,11 +100,11 @@ export class VoiceService {
     return this.voiceSettings.getWatchedChannelId(guildId) === channelId;
   }
 
-  async enqueueMessage(message: Message): Promise<void> {
-    if (!message.guildId || !this.isWatching(message.guildId, message.channelId)) return;
-    if (!this.states.has(message.guildId)) return;
+  async enqueueMessage(message: Message): Promise<boolean> {
+    if (!message.guildId || !this.isWatching(message.guildId, message.channelId)) return false;
+    if (!this.states.has(message.guildId)) return false;
     const author = message.member?.displayName ?? message.author.displayName ?? message.author.username;
-    await this.speak(message.guildId, `${author}님: ${message.cleanContent}`, message.author.id);
+    return this.speak(message.guildId, `${author}님: ${message.cleanContent}`, message.author.id);
   }
 
   async speak(guildId: string, text: string, userId?: string): Promise<boolean> {

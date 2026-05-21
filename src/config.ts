@@ -15,6 +15,7 @@ export type Settings = {
   cleanAllDefaultTarget: number;
   cleanAllMaxLimit: number;
   databasePath: string;
+  loggingGuildId: string;
   ttsEngine: string;
   ttsVoice: string;
   ttsMaxChars: number;
@@ -68,6 +69,7 @@ export function loadSettings(): Settings {
     cleanAllDefaultTarget: positiveIntFromEnv('CLEAN_ALL_DEFAULT_TARGET', 1000),
     cleanAllMaxLimit: positiveIntFromEnv('CLEAN_ALL_MAX_LIMIT', 1000),
     databasePath: process.env.DATABASE_PATH ?? 'data/chococobot.sqlite3',
+    loggingGuildId: process.env.LOGGING_GUILD_ID ?? '1507058598423826533',
     ttsEngine: process.env.TTS_ENGINE ?? 'edge',
     ttsVoice: process.env.TTS_VOICE ?? 'ko-KR-SunHiNeural',
     ttsMaxChars: positiveIntFromEnv('TTS_MAX_CHARS', 180),
@@ -81,6 +83,7 @@ export function assertRuntimeSettings(settings: Settings): void {
   const missing: string[] = [];
   if (!settings.discordToken) missing.push('DISCORD_TOKEN');
   if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  if (!settings.loggingGuildId) throw new Error('LOGGING_GUILD_ID is required');
   if (!['edge', 'gtts'].includes(settings.ttsEngine.toLowerCase())) {
     throw new Error('TTS_ENGINE must be one of: edge, gtts');
   }
