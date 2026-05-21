@@ -251,9 +251,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           text
         });
         const played = await context.voice.speak(message.guildId, text, message.author.id);
-        if (played) {
-          await message.reply({ content: '읽기 요청을 추가했어요...', allowedMentions: { repliedUser: false } });
-        } else {
+        if (!played) {
           await context.activityLog.logError({
             guildId: message.guildId,
             guildName: message.guild?.name,

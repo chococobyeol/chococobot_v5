@@ -130,6 +130,6 @@ describe('말 prefix command', () => {
 
     expect(join).toHaveBeenCalledTimes(1);
     expect(speak).toHaveBeenCalledWith('guild-1', '안녕', 'user-1');
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '읽기 요청을 추가했어요...' }));
+    expect(message.reply).not.toHaveBeenCalled();
   });
 });
