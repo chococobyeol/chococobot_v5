@@ -26,6 +26,8 @@ export interface VoiceSettingsStore {
   setUserTtsEngine(guildId: string, userId: string, engine: string | undefined): void;
   getWatchedChannelId(guildId: string): string | undefined;
   setWatchedChannelId(guildId: string, channelId: string | undefined): void;
+  getCommandPrefix(guildId: string): string | undefined;
+  setCommandPrefix(guildId: string, prefix: string | undefined): void;
   close?(): void;
 }
 
@@ -57,6 +59,12 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
         engine TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (guild_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS guild_prefix_settings (
+        guild_id TEXT NOT NULL PRIMARY KEY,
+        prefix TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
     `);
   }
@@ -124,6 +132,28 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
       .run(guildId, channelId, new Date().toISOString());
   }
 
+  getCommandPrefix(guildId: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT prefix FROM guild_prefix_settings WHERE guild_id = ?')
+      .get(guildId) as { prefix: string } | undefined;
+    return row?.prefix;
+  }
+
+  setCommandPrefix(guildId: string, prefix: string | undefined): void {
+    if (!prefix) {
+      this.db.prepare('DELETE FROM guild_prefix_settings WHERE guild_id = ?').run(guildId);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO guild_prefix_settings (guild_id, prefix, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(guild_id)
+         DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at`
+      )
+      .run(guildId, prefix, new Date().toISOString());
+  }
+
   close(): void {
     this.db.close();
   }
@@ -133,6 +163,7 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
   private readonly presets = new Map<string, string>();
   private readonly engines = new Map<string, string>();
   private readonly watchedChannels = new Map<string, string>();
+  private readonly prefixes = new Map<string, string>();
 
   getUserVoicePreset(guildId: string, userId: string): string | undefined {
     return this.presets.get(keyFor(guildId, userId));
@@ -164,6 +195,18 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
       return;
     }
     this.watchedChannels.set(guildId, channelId);
+  }
+
+  getCommandPrefix(guildId: string): string | undefined {
+    return this.prefixes.get(guildId);
+  }
+
+  setCommandPrefix(guildId: string, prefix: string | undefined): void {
+    if (!prefix) {
+      this.prefixes.delete(guildId);
+      return;
+    }
+    this.prefixes.set(guildId, prefix);
   }
 }
 

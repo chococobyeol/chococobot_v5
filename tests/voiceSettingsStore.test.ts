@@ -55,6 +55,21 @@ describe('VoiceSettingsStore', () => {
     expect(reopened.getWatchedChannelId('guild-1')).toBeUndefined();
     reopened.close();
   });
+
+  it('persists guild prefixes in sqlite', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'chococo-voice-')), 'voice.sqlite3');
+    const store = new SqliteVoiceSettingsStore(dbPath);
+    store.setCommandPrefix('guild-1', '?');
+    store.setCommandPrefix('guild-2', '.');
+    store.close();
+
+    const reopened = new SqliteVoiceSettingsStore(dbPath);
+    expect(reopened.getCommandPrefix('guild-1')).toBe('?');
+    expect(reopened.getCommandPrefix('guild-2')).toBe('.');
+    reopened.setCommandPrefix('guild-1', undefined);
+    expect(reopened.getCommandPrefix('guild-1')).toBeUndefined();
+    reopened.close();
+  });
 });
 
 describe('VoiceService voice presets', () => {

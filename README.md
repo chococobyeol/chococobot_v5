@@ -14,6 +14,7 @@ Node.js/TypeScript Discord bot for Korean `!` prefix chat cleanup and voice TTS,
 - `!tts채널 현재` / `!tts채널 해제` — show or clear the stored auto-read channel.
 - `!음색` / `!voice` — list or select supported TTS voice presets.
 - `!tts엔진` / `!engine` — list or select your TTS engine (`edge` or `gtts`).
+- `!프리픽스` / `!prefix` — show or change the server command prefix. Allowed values: `!`, `?`, `.`, `~`. Server administrators only.
 - Bot activity logs are written to the dedicated log server configured by `LOGGING_GUILD_ID`.
 
 Slash-command registration is disabled for the v1 prefix bot path so servers do not get slash-command clutter.
@@ -115,6 +116,14 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.
 - TTS synthesis does not fall back to another engine automatically; if the selected engine fails, the bot logs the error and stays silent.
 - The first TTS request auto-installs the Python package for the selected engine if it is missing.
+
+## Command prefix behavior
+
+- The default command prefix is `!`.
+- Each guild can store its own prefix with `!프리픽스` or `!prefix`.
+- Only server administrators can change the stored prefix.
+- Allowed prefixes are limited to `!`, `?`, `.`, and `~` to avoid collisions with normal chat.
+- `!프리픽스 현재` shows the current setting, and `!프리픽스 초기화` restores the default `!`.
 
 ## Bot activity logging
 

@@ -1,4 +1,4 @@
-import { ChannelType } from 'discord.js';
+import { ChannelType, PermissionFlagsBits } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createPrefixCommands } from '../src/bot.js';
 import { TtsService } from '../src/services/ttsService.js';
@@ -8,6 +8,7 @@ import { VoiceService } from '../src/services/voiceService.js';
 function makeContext() {
   const store = new InMemoryVoiceSettingsStore();
   return {
+    voiceSettings: store,
     voice: new VoiceService(new TtsService('ko-KR-SunHiNeural', 500), store, {
       sunhi: 'ko-KR-SunHiNeural',
       injoon: 'ko-KR-InJoonNeural',
@@ -209,8 +210,60 @@ describe('도움말 prefix command', () => {
 
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('`!도움말` / `!명령어` / `!help`')
+        content: expect.stringContaining('현재 프리픽스는 `!`예요...')
       })
     );
+  });
+});
+
+describe('프리픽스 prefix command', () => {
+  it('lets server administrators change and reset the guild prefix', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('프리픽스');
+    expect(command).toBeDefined();
+
+    const message = makeMessage('channel-1') as any;
+    message.member = {
+      permissions: {
+        has: vi.fn((permission: bigint) => permission === PermissionFlagsBits.Administrator)
+      }
+    };
+
+    const context = makeContext();
+
+    await command!.execute(message, [], context as any);
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('현재 프리픽스는 `!`예요...')
+      })
+    );
+
+    const setMessage = makeMessage('channel-1') as any;
+    setMessage.member = message.member;
+    await command!.execute(setMessage, ['?'], context as any);
+    expect(context.voiceSettings.getCommandPrefix('guild-1')).toBe('?');
+    expect(setMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '프리픽스를 `?`로 저장했어요...' }));
+
+    const resetMessage = makeMessage('channel-1') as any;
+    resetMessage.member = message.member;
+    await command!.execute(resetMessage, ['해제'], context as any);
+    expect(context.voiceSettings.getCommandPrefix('guild-1')).toBeUndefined();
+    expect(resetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '프리픽스를 기본값으로 되돌렸어요... 이제 `!`를 사용해요...' }));
+  });
+
+  it('rejects non-administrators', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('프리픽스');
+    expect(command).toBeDefined();
+
+    const message = makeMessage('channel-1') as any;
+    message.member = {
+      permissions: {
+        has: vi.fn(() => false)
+      }
+    };
+    const context = makeContext();
+
+    await expect(command!.execute(message, ['?'], context as any)).rejects.toThrow('서버 관리자만 프리픽스를 바꿀 수 있어요...');
   });
 });

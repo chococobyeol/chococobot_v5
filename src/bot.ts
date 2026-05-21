@@ -1,4 +1,4 @@
-import { ChannelType, Client, Collection, Events, GatewayIntentBits, GuildMember } from 'discord.js';
+import { ChannelType, Client, Collection, Events, GatewayIntentBits, GuildMember, PermissionFlagsBits } from 'discord.js';
 import type { GuildTextBasedChannel, Message, TextChannel } from 'discord.js';
 import type { PrefixCommand } from './types.js';
 import type { Settings } from './config.js';
@@ -17,7 +17,8 @@ import {
 } from './services/cleanupService.js';
 import { logger } from './logger.js';
 
-const PREFIX = '!';
+const DEFAULT_PREFIX = '!';
+const ALLOWED_PREFIXES = ['!', '?', '.', '~'] as const;
 const MAX_TTS_COMMAND_CHARS = 500;
 
 export type BotContext = {
@@ -25,6 +26,7 @@ export type BotContext = {
   usageStore: UsageStore;
   ai: AiService;
   voice: VoiceService;
+  voiceSettings: import('./services/voiceSettingsStore.js').VoiceSettingsStore;
   activityLog: BotActivityLogService;
 };
 
@@ -33,13 +35,22 @@ type ParsedPrefixCommand = {
   args: string[];
 };
 
-export function parsePrefixCommand(content: string): ParsedPrefixCommand | null {
+export function parsePrefixCommand(content: string, prefix = DEFAULT_PREFIX): ParsedPrefixCommand | null {
   const trimmed = content.trim();
-  if (!trimmed.startsWith(PREFIX)) return null;
-  const withoutPrefix = trimmed.slice(PREFIX.length).trim();
+  if (!trimmed.startsWith(prefix)) return null;
+  const withoutPrefix = trimmed.slice(prefix.length).trim();
   if (!withoutPrefix) return null;
   const [rawName, ...args] = withoutPrefix.split(/\s+/);
   return { name: rawName.toLowerCase(), args };
+}
+
+function getGuildPrefix(context: BotContext, guildId?: string): string {
+  if (!guildId) return DEFAULT_PREFIX;
+  return context.voiceSettings.getCommandPrefix(guildId) ?? DEFAULT_PREFIX;
+}
+
+function isAllowedPrefix(prefix: string): prefix is (typeof ALLOWED_PREFIXES)[number] {
+  return (ALLOWED_PREFIXES as readonly string[]).includes(prefix);
 }
 
 function parseOptionalPositiveInt(value: string | undefined): number | undefined {
@@ -114,6 +125,11 @@ function summarizeCommandForLog(commandName: string, args: string[]): string {
     case 'engine':
     case '엔진':
       return `engine=${args[0] ?? 'show'}`;
+    case '프리픽스':
+    case 'prefix':
+    case 'command-prefix':
+    case 'prefixes':
+      return `prefix=${args[0] ?? 'show'}`;
     case '멈춰':
     case 'stop':
     case 'halt':
@@ -337,6 +353,46 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       }
     },
     {
+      name: '프리픽스',
+      aliases: ['prefix', 'command-prefix', 'prefixes'],
+      description: '서버 명령어 프리픽스를 확인하거나 변경합니다.',
+      async execute(message, args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+          throw new Error('서버 관리자만 프리픽스를 바꿀 수 있어요...');
+        }
+
+        const current = getGuildPrefix(context, message.guildId);
+        const raw = args[0]?.trim();
+        if (!raw || ['현재', 'status', 'show', 'info', '조회'].includes(raw.toLowerCase())) {
+          await message.reply({
+            content: [
+              `현재 프리픽스는 \`${current}\`예요...`,
+              `사용 가능: ${ALLOWED_PREFIXES.map((prefix) => `\`${prefix}\``).join(', ')}`,
+              `예시: \`${current}도움말\`, \`${current}청소 3\`, \`${current}말 안녕\``,
+              '서버 관리자만 변경할 수 있어요...'
+            ].join('\n'),
+            allowedMentions: { repliedUser: false }
+          });
+          return;
+        }
+
+        const normalized = raw.toLowerCase();
+        if (['해제', '기본', 'default', 'reset', 'clear', 'none', '초기화'].includes(normalized)) {
+          context.voiceSettings.setCommandPrefix(message.guildId, undefined);
+          await message.reply({ content: '프리픽스를 기본값으로 되돌렸어요... 이제 `!`를 사용해요...', allowedMentions: { repliedUser: false } });
+          return;
+        }
+
+        if (!isAllowedPrefix(raw)) {
+          throw new Error(`허용되는 프리픽스는 ${ALLOWED_PREFIXES.map((prefix) => `\`${prefix}\``).join(', ')}예요...`);
+        }
+
+        context.voiceSettings.setCommandPrefix(message.guildId, raw);
+        await message.reply({ content: `프리픽스를 \`${raw}\`로 저장했어요...`, allowedMentions: { repliedUser: false } });
+      }
+    },
+    {
       name: '멈춰',
       aliases: ['stop', 'halt', 'cancel', 'pause', '정지', '그만', '멈춤', '스톱'],
       description: '현재 TTS 재생을 멈춥니다.',
@@ -353,19 +409,22 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       name: '도움말',
       aliases: ['help', 'commands', '명령어', 'command', 'cmd'],
       description: '사용 가능한 명령어를 보여줍니다.',
-      async execute(message) {
+      async execute(message, _args, context) {
+        const prefix = getGuildPrefix(context, message.guildId ?? undefined);
         await message.reply({
           content: [
-            '`!도움말` / `!명령어` / `!help` — 사용 가능한 명령어 목록을 보여줘요...',
-            '`!청소 [개수]` / `!clean [count]` / `!clear [count]` — 내 최근 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
-            '`!대청소 [개수]` / `!purge [count]` / `!clean-all [count]` / `!bulk-clear [count]` — 관리자용 채널 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
-            '`!들어와` / `!이리와` / `!join` / `!come` / `!여기와` / `!tts-join` — 음성 채널 연결...',
-            '`!나가` / `!꺼져` / `!저리가` / `!leave` / `!go` / `!out` / `!퇴장` / `!tts-leave` — 음성 채널 해제...',
-            '`!tts채널 [#채널|해제]` / `!tts-channel` / `!tts-watch` / `!watch` / `!채널tts` — 채널 TTS 읽기 설정/해제...',
-            '`!말 <문장>` / `!say <text>` / `!speak <text>` / `!talk <text>` / `!read <text>` / `!tts <text>` — 문장을 음성으로 읽기...',
-            '`!멈춰` / `!stop` / `!halt` / `!cancel` / `!pause` / `!정지` / `!그만` / `!멈춤` / `!스톱` — TTS 재생 멈추기...',
-            '`!음색 [프리셋]` / `!voice [preset]` / `!voice-style [preset]` / `!voicepreset [preset]` / `!tts-voice [preset]` / `!목소리 [프리셋]` — 내 TTS 음색 확인/설정...',
-            '`!tts엔진 [edge|gtts]` / `!engine [edge|gtts]` / `!tts-engine [edge|gtts]` / `!ttsengine [edge|gtts]` / `!엔진 [edge|gtts]` — 내 TTS 엔진 확인/설정...'
+            [`현재 프리픽스는 \`${prefix}\`예요...`, `명령은 프리픽스 뒤에 붙여서 써요...`, `예: \`${prefix}도움말\``].join('\n'),
+            `${prefix}도움말 / ${prefix}명령어 / ${prefix}help — 사용 가능한 명령어 목록을 보여줘요...`,
+            `${prefix}청소 [개수] / ${prefix}clean [count] / ${prefix}clear [count] — 내 최근 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...`,
+            `${prefix}대청소 [개수] / ${prefix}purge [count] / ${prefix}clean-all [count] / ${prefix}bulk-clear [count] — 관리자용 채널 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...`,
+            `${prefix}들어와 / ${prefix}이리와 / ${prefix}join / ${prefix}come / ${prefix}여기와 / ${prefix}tts-join — 음성 채널 연결...`,
+            `${prefix}나가 / ${prefix}꺼져 / ${prefix}저리가 / ${prefix}leave / ${prefix}go / ${prefix}out / ${prefix}퇴장 / ${prefix}tts-leave — 음성 채널 해제...`,
+            `${prefix}tts채널 [#채널|해제] / ${prefix}tts-channel / ${prefix}tts-watch / ${prefix}watch / ${prefix}채널tts — 채널 TTS 읽기 설정/해제...`,
+            `${prefix}말 <문장> / ${prefix}say <text> / ${prefix}speak <text> / ${prefix}talk <text> / ${prefix}read <text> / ${prefix}tts <text> — 문장을 음성으로 읽기...`,
+            `${prefix}멈춰 / ${prefix}stop / ${prefix}halt / ${prefix}cancel / ${prefix}pause / ${prefix}정지 / ${prefix}그만 / ${prefix}멈춤 / ${prefix}스톱 — TTS 재생 멈추기...`,
+            `${prefix}음색 [프리셋] / ${prefix}voice [preset] / ${prefix}voice-style [preset] / ${prefix}voicepreset [preset] / ${prefix}tts-voice [preset] / ${prefix}목소리 [프리셋] — 내 TTS 음색 확인/설정...`,
+            `${prefix}tts엔진 [edge|gtts] / ${prefix}engine [edge|gtts] / ${prefix}tts-engine [edge|gtts] / ${prefix}ttsengine [edge|gtts] / ${prefix}엔진 [edge|gtts] — 내 TTS 엔진 확인/설정...`,
+            `${prefix}프리픽스 / ${prefix}prefix / ${prefix}command-prefix — 서버 프리픽스 확인/변경... (서버 관리자만 가능해요...)`
           ].join('\n'),
           allowedMentions: { repliedUser: false }
         });
@@ -384,11 +443,12 @@ async function dispatchPrefixCommand(
 ): Promise<boolean> {
   if (message.author.bot) return false;
   if (!message.guildId) return false;
-  const parsed = parsePrefixCommand(message.content);
+  const prefix = getGuildPrefix(context, message.guildId);
+  const parsed = parsePrefixCommand(message.content, prefix);
   if (!parsed) return false;
   const command = commands.get(parsed.name);
   if (!command) {
-    await message.reply({ content: '`!도움말`로 사용 가능한 명령어를 확인해 주세요...', allowedMentions: { repliedUser: false } });
+    await message.reply({ content: `${prefix}도움말로 사용 가능한 명령어를 확인해 주세요...`, allowedMentions: { repliedUser: false } });
     return true;
   }
   const commandSummary = summarizeCommandForLog(command.name, parsed.args);
@@ -437,15 +497,17 @@ export async function createBot(
   const { UsageStore } = await import('./services/usageStore.js');
   const { SqliteVoiceSettingsStore } = await import('./services/voiceSettingsStore.js');
   const usageStore = new UsageStore(settings.databasePath);
+  const voiceSettings = new SqliteVoiceSettingsStore(settings.databasePath);
   const activityLog = new BotActivityLogService(client, new SqliteBotActivityLogStore(settings.databasePath), settings.loggingGuildId);
   const context: BotContext = {
     settings,
     usageStore,
     ai: new AiService(settings, usageStore),
     activityLog,
+    voiceSettings,
     voice: new VoiceService(
       new TtsService(settings.ttsVoice, settings.ttsMaxChars),
-      new SqliteVoiceSettingsStore(settings.databasePath),
+      voiceSettings,
       settings.ttsVoicePresets,
       settings.ttsEngine as 'edge' | 'gtts',
       settings.voiceIdleLeaveMs
