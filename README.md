@@ -85,6 +85,11 @@ Deferred AI/Groq variables (`GROQ_API_KEY`, `GROQ_MODEL`, `AI_*`) remain in `.en
 
 The 500/1000 cleanup values are target counts, not a single Discord API request. Discord bulk delete accepts at most 100 messages per request and skips/rejects messages older than 14 days, so large cleanup runs must fetch and delete in batches of 100 or fewer while reporting the actual deleted count. The configured max values cap user input; they do not guarantee that Discord will allow every targeted message to be deleted.
 
+Cleanup commands count backwards from the most recent messages in the channel and **do not count the command message itself**.
+
+- `!청소 N` deletes up to `N` of the invoking user's recent messages that appear before the command message.
+- `!대청소 N` deletes up to `N` recent channel messages that appear before the command message.
+
 ## TTS voice presets
 
 The starter voice preset map is defined in `src/config.ts`:

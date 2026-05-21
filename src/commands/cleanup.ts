@@ -31,7 +31,7 @@ export const cleanupCommands: SlashCommand[] = [
   {
     data: new SlashCommandBuilder()
       .setName('clean-mine')
-      .setDescription('내가 쓴 최근 메시지를 삭제해요...')
+  .setDescription('내가 쓴 최근 메시지를 삭제해요... 명령어를 쓴 글은 제외해요...')
       .addIntegerOption((option) =>
         option
           .setName('amount')
@@ -56,7 +56,7 @@ export const cleanupCommands: SlashCommand[] = [
   {
     data: new SlashCommandBuilder()
       .setName('clean-all')
-      .setDescription('관리자용: 최근 채팅을 한 번에 삭제해요...')
+  .setDescription('관리자용: 최근 채팅을 한 번에 삭제해요... 명령어를 쓴 글은 제외해요...')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
       .addIntegerOption((option) =>
         option

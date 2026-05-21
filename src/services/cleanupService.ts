@@ -22,6 +22,7 @@ export type CleanupOptions = {
   maxTarget?: number;
   now?: number | Date;
   maxScanBatches?: number;
+  excludedMessageIds?: readonly Snowflake[];
 };
 
 export type CleanupResult = {
@@ -76,9 +77,11 @@ async function collectCandidates(
   channel: CleanupFetchableChannel,
   requested: number,
   filter: (message: Message) => boolean,
-  maxScanBatches: number
+  maxScanBatches: number,
+  excludedMessageIds: readonly Snowflake[] = []
 ): Promise<{ candidates: Message[]; scanned: number; exhausted: boolean }> {
   const candidates: Message[] = [];
+  const excluded = new Set(excludedMessageIds);
   let scanned = 0;
   let before: Snowflake | undefined;
   let exhausted = false;
@@ -91,7 +94,7 @@ async function collectCandidates(
     }
 
     scanned += fetched.length;
-    candidates.push(...fetched.filter(filter));
+    candidates.push(...fetched.filter((message) => !excluded.has(message.id) && filter(message)));
     before = fetched[fetched.length - 1]?.id;
 
     if (fetched.length < DISCORD_BULK_DELETE_LIMIT || before === undefined) {
@@ -116,7 +119,13 @@ export async function cleanupMessages(
     options.maxScanBatches ?? Math.ceil(requested / DISCORD_BULK_DELETE_LIMIT) * DEFAULT_CLEANUP_SCAN_MULTIPLIER
   );
   const filter = mode === 'own' ? mineMessageFilter(options.userId!) : () => true;
-  const { candidates, scanned, exhausted } = await collectCandidates(channel, requested, filter, maxScanBatches);
+  const { candidates, scanned, exhausted } = await collectCandidates(
+    channel,
+    requested,
+    filter,
+    maxScanBatches,
+    options.excludedMessageIds ?? []
+  );
   const deletable = candidates.filter((message) => isBulkDeletable(message, options.now));
   const skippedOld = candidates.length - deletable.length;
   const batches: number[] = [];

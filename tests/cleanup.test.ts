@@ -83,6 +83,15 @@ describe('cleanupService', () => {
     expect(channel.bulkDelete.mock.calls[0][0].map((item: FakeMessage) => item.author.id)).toEqual(['u1', 'u1']);
   });
 
+  it('can exclude the invoking command message from cleanup counts', async () => {
+    const channel = fakeChannel([[message(1, 'u1'), message(2, 'u1'), message(3, 'u1'), message(4, 'u1')]]);
+
+    const result = await cleanupUserMessages(channel as any, 'u1', { target: 3, excludedMessageIds: ['2'] });
+
+    expect(result.deleted).toBe(3);
+    expect(channel.bulkDelete.mock.calls[0][0].map((item: FakeMessage) => item.id)).toEqual(['1', '3', '4']);
+  });
+
   it('purges 1000 channel messages in API-safe batches of 100 or fewer', async () => {
     const pages = Array.from({ length: 10 }, (_, page) =>
       Array.from({ length: DISCORD_BULK_DELETE_LIMIT }, (_, index) => message(page * DISCORD_BULK_DELETE_LIMIT + index))

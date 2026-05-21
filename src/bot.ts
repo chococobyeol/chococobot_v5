@@ -143,7 +143,8 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         const result = await cleanupUserMessages(channel as CleanupFetchableChannel, message.author.id, {
           target: amount,
           defaultTarget: context.settings.cleanMineDefaultTarget,
-          maxTarget: context.settings.cleanMineMaxLimit
+          maxTarget: context.settings.cleanMineMaxLimit,
+          excludedMessageIds: [message.id]
         });
         await channel.send({ content: formatCleanupResult('내 메시지', result), allowedMentions: { repliedUser: false } });
       }
@@ -161,7 +162,8 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         const result = await cleanupChannelMessages(channel as CleanupFetchableChannel, {
           target: amount,
           defaultTarget: context.settings.cleanAllDefaultTarget,
-          maxTarget: context.settings.cleanAllMaxLimit
+          maxTarget: context.settings.cleanAllMaxLimit,
+          excludedMessageIds: [message.id]
         });
         await channel.send({ content: formatCleanupResult('최근 메시지', result), allowedMentions: { repliedUser: false } });
       }
@@ -354,8 +356,8 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       async execute(message) {
         await message.reply({
           content: [
-            '`!청소 [개수]` — 내 최근 메시지 삭제...',
-            '`!대청소 [개수]` — 관리자용 채널 메시지 삭제...',
+            '`!청소 [개수]` — 내 최근 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
+            '`!대청소 [개수]` — 관리자용 채널 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
             '`!들어와` / `!이리와` / `!나가` / `!꺼져` / `!저리가` — 음성 채널 연결/해제...',
             '`!tts채널 [#채널|해제]` — 채널 TTS 읽기 설정/해제...',
             '`!말 <문장>` — 문장을 음성으로 읽기...',
