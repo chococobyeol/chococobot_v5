@@ -1,0 +1,34 @@
+services:
+  - type: worker
+    name: chococobot-v5
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    disk:
+      name: chococobot-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DATABASE_PATH
+        value: /var/data/chococobot.sqlite3
+      - key: CLEAN_MINE_DEFAULT_TARGET
+        value: 500
+      - key: CLEAN_MINE_MAX_LIMIT
+        value: 500
+      - key: CLEAN_ALL_DEFAULT_TARGET
+        value: 1000
+      - key: CLEAN_ALL_MAX_LIMIT
+        value: 1000
+      - key: TTS_VOICE
+        value: ko-KR-SunHiNeural
+      - key: TTS_MAX_CHARS
+        value: 180
+      - key: TTS_READ_BOT_MESSAGES
+        value: false
+      - key: LOG_LEVEL
+        value: info
