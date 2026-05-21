@@ -68,8 +68,8 @@ function resolveTargetGuildTextChannel(message: Message, rawChannel?: string): G
 }
 
 function requireGuildMember(message: Message): GuildMember {
-  if (!(message.member instanceof GuildMember)) throw new Error('서버 멤버 정보가 필요해요.');
-  return message.member;
+  if (!message.member) throw new Error('서버 멤버 정보가 필요해요.');
+  return message.member as GuildMember;
 }
 
 function registerPrefixCommand(commands: Collection<string, PrefixCommand>, command: PrefixCommand): void {
@@ -153,7 +153,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
     },
     {
       name: '들어와',
-      aliases: ['join', 'tts-join'],
+      aliases: ['join', 'tts-join', '이리와', 'come', '여기와'],
       description: '내 음성 채널에 봇을 연결합니다.',
       async execute(message, _args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
@@ -169,7 +169,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
     },
     {
       name: '나가',
-      aliases: ['leave', 'tts-leave'],
+      aliases: ['leave', 'tts-leave', '꺼져', '저리가', 'go', 'out', '퇴장'],
       description: '봇을 음성 채널에서 내보냅니다.',
       async execute(message, _args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
@@ -228,6 +228,17 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
         const text = args.join(' ').trim();
         if (!text) throw new Error('읽을 문장을 입력해 주세요.');
+        if (!context.voice.isConnected(message.guildId)) {
+          const member = requireGuildMember(message);
+          if (!member.voice.channel) throw new Error('먼저 음성 채널에 들어가 주세요.');
+          await context.voice.join(member);
+          await context.activityLog.logVoiceConnection({
+            guildId: message.guildId,
+            guildName: message.guild?.name,
+            channelId: member.voice.channel.id,
+            message: 'voice auto-joined for tts'
+          });
+        }
         await context.activityLog.logTtsRequest({
           guildId: message.guildId,
           guildName: message.guild?.name,
@@ -316,7 +327,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           content: [
             '`!청소 [개수]` — 내 최근 메시지 삭제',
             '`!대청소 [개수]` — 관리자용 채널 메시지 삭제',
-            '`!들어와` / `!나가` — 음성 채널 연결/해제',
+            '`!들어와` / `!이리와` / `!나가` / `!꺼져` / `!저리가` — 음성 채널 연결/해제',
             '`!tts채널 [#채널|해제]` — 채널 TTS 읽기 설정/해제',
             '`!말 <문장>` — 문장을 음성으로 읽기',
             '`!음색 [프리셋]` — 내 TTS 음색 확인/설정',
@@ -402,7 +413,8 @@ export async function createBot(
       new TtsService(settings.ttsVoice, settings.ttsMaxChars),
       new SqliteVoiceSettingsStore(settings.databasePath),
       settings.ttsVoicePresets,
-      settings.ttsEngine as 'edge' | 'gtts'
+      settings.ttsEngine as 'edge' | 'gtts',
+      settings.voiceIdleLeaveMs
     )
   };
   const commands = createPrefixCommands();

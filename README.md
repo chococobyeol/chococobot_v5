@@ -7,6 +7,7 @@ Node.js/TypeScript Discord bot for Korean `!` prefix chat cleanup and voice TTS,
 - `!청소 [개수]` / `!clean [count]` — delete the invoking user's recent messages. Default target: 500.
 - `!대청소 [개수]` / `!purge [count]` — manage-messages cleanup for recent channel messages. Default target: 1000.
 - `!들어와`, `!나가` — join or leave the caller's voice channel.
+- `!이리와` / `!꺼져` / `!저리가` — aliases for `!들어와` / `!나가`.
 - `!말 <내용>` / `!say <text>` — enqueue TTS in the current guild voice session.
 - `!tts채널 [#채널]` — set the current or named text channel used for auto-read.
 - `!tts채널 현재` / `!tts채널 해제` — show or clear the stored auto-read channel.
@@ -66,6 +67,7 @@ Optional v1 settings:
 | `DISCORD_GUILD_ID` | _(empty)_ | Optional guild ID for legacy slash-command registration. |
 | `DATABASE_PATH` | `data/chococobot.sqlite3` | SQLite path for bot state. Use a persistent path such as `/var/data/chococobot.sqlite3` on Render. |
 | `LOGGING_GUILD_ID` | `1507058598423826533` | Dedicated Discord server for bot activity logs and test channels. |
+| `VOICE_IDLE_LEAVE_MS` | `600000` | How long the bot stays in voice after the queue becomes idle before auto-leaving. |
 | `CLEAN_MINE_DEFAULT_TARGET` | `500` | Default target count for `!청소` when no number is provided. |
 | `CLEAN_MINE_MAX_LIMIT` | `500` | Maximum accepted target count for own-message cleanup. |
 | `CLEAN_ALL_DEFAULT_TARGET` | `1000` | Default target count for `!대청소` when no number is provided. |
@@ -99,6 +101,7 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!tts채널 해제` clears that guild setting.
 - When the watched channel is set and the bot is in voice, messages in that channel are read aloud.
 - `!말 <문장>` still speaks an ad-hoc sentence immediately in the current voice session.
+- If the bot is not already in voice, `!말 <문장>` will join the caller's current voice channel first.
 - `!tts엔진 edge` / `!tts엔진 gtts` stores the TTS engine for that user.
 - Aliases such as `!tts엔진 엣지`, `!tts엔진 구글`, and `!tts엔진 google` are also accepted.
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.

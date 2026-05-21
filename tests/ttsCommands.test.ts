@@ -13,7 +13,7 @@ function makeContext() {
       injoon: 'ko-KR-InJoonNeural',
       bright: 'ko-KR-SunHiNeural',
       calm: 'ko-KR-InJoonNeural'
-    }, 'edge')
+    }, 'edge', 1_000)
   };
 }
 
@@ -94,5 +94,42 @@ describe('tts엔진 prefix command', () => {
     await command!.execute(resetMessage, ['해제'], context as any);
     expect(context.voice.getUserTtsEngine('guild-1', 'user-1')).toBe('edge');
     expect(resetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'TTS 엔진 설정을 기본값으로 되돌렸어요.' }));
+  });
+});
+
+describe('말 prefix command', () => {
+  it('auto-joins the caller voice channel before speaking when not connected', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('말');
+    expect(command).toBeDefined();
+
+    const join = vi.fn(async () => undefined);
+    const speak = vi.fn(async () => true);
+    const message = makeMessage('channel-1') as any;
+    message.member = {
+      voice: { channel: { id: 'voice-1' } },
+      displayName: '테스터'
+    };
+    const context = {
+      voice: {
+        isConnected: vi.fn(() => false),
+        join,
+        speak,
+        getUserTtsEngine: vi.fn(() => 'edge'),
+        getUserVoicePreset: vi.fn(() => 'sunhi')
+      },
+      activityLog: {
+        logVoiceConnection: vi.fn(async () => undefined),
+        logTtsRequest: vi.fn(async () => undefined),
+        logCommand: vi.fn(async () => undefined),
+        logError: vi.fn(async () => undefined)
+      }
+    };
+
+    await command!.execute(message, ['안녕'], context as any);
+
+    expect(join).toHaveBeenCalledTimes(1);
+    expect(speak).toHaveBeenCalledWith('guild-1', '안녕', 'user-1');
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '읽기 요청을 추가했어요.' }));
   });
 });

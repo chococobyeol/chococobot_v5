@@ -60,7 +60,7 @@ describe('VoiceSettingsStore', () => {
 describe('VoiceService voice presets', () => {
   it('validates and stores presets per guild/user without cross-guild leakage', () => {
     const store = new InMemoryVoiceSettingsStore();
-    const service = new VoiceService(new TtsService('ko-KR-SunHiNeural', 180), store, presets, 'edge');
+    const service = new VoiceService(new TtsService('ko-KR-SunHiNeural', 180), store, presets, 'edge', 1_000);
 
     expect(service.listVoicePresets()).toEqual(['injoon', 'sunhi']);
     service.setUserVoicePreset('guild-1', 'user-1', 'sunhi');
@@ -73,7 +73,7 @@ describe('VoiceService voice presets', () => {
 
   it('persists watched TTS channels per guild without cross-guild leakage', () => {
     const store = new InMemoryVoiceSettingsStore();
-    const service = new VoiceService(new TtsService('ko-KR-SunHiNeural', 180), store, presets, 'edge');
+    const service = new VoiceService(new TtsService('ko-KR-SunHiNeural', 180), store, presets, 'edge', 1_000);
 
     service.setWatchedChannel('guild-1', 'channel-1', true);
     service.setWatchedChannel('guild-2', 'channel-2', true);
@@ -88,7 +88,7 @@ describe('VoiceService voice presets', () => {
 
   it('persists tts engines per guild/user without cross-guild leakage', () => {
     const store = new InMemoryVoiceSettingsStore();
-    const service = new VoiceService(new TtsService('ko-KR-SunHiNeural', 180), store, presets, 'edge');
+    const service = new VoiceService(new TtsService('ko-KR-SunHiNeural', 180), store, presets, 'edge', 1_000);
 
     service.setUserTtsEngine('guild-1', 'user-1', 'gtts');
     service.setUserTtsEngine('guild-2', 'user-1', 'edge');

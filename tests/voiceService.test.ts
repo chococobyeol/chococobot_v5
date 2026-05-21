@@ -13,7 +13,7 @@ describe('VoiceService speak failure handling', () => {
       cleanup: vi.fn(async () => undefined)
     } as unknown as TtsService;
     const store = new InMemoryVoiceSettingsStore();
-    const service = new VoiceService(tts, store, { sunhi: 'ko-KR-SunHiNeural' }, 'edge');
+    const service = new VoiceService(tts, store, { sunhi: 'ko-KR-SunHiNeural' }, 'edge', 1_000);
 
     (service as any).states.set('guild-1', {
       connection: { destroy: vi.fn() },
@@ -25,5 +25,34 @@ describe('VoiceService speak failure handling', () => {
     await expect(service.speak('guild-1', '안녕', 'user-1')).resolves.toBe(false);
     expect(tts.synthesize).toHaveBeenCalled();
     expect(tts.cleanup).not.toHaveBeenCalled();
+  });
+
+  it('auto-leaves after being idle for the configured timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const tts = {
+        synthesize: vi.fn(async () => {
+          throw new Error('boom');
+        }),
+        cleanup: vi.fn(async () => undefined)
+      } as unknown as TtsService;
+      const store = new InMemoryVoiceSettingsStore();
+      const service = new VoiceService(tts, store, { sunhi: 'ko-KR-SunHiNeural' }, 'edge', 1_000);
+      const leave = vi.fn();
+      (service as any).leave = leave;
+      (service as any).states.set('guild-1', {
+        connection: { destroy: vi.fn() },
+        player: createAudioPlayer(),
+        queue: [],
+        playing: false
+      });
+
+      await service.speak('guild-1', '안녕', 'user-1');
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(leave).toHaveBeenCalledWith('guild-1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

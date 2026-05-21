@@ -16,6 +16,7 @@ export type Settings = {
   cleanAllMaxLimit: number;
   databasePath: string;
   loggingGuildId: string;
+  voiceIdleLeaveMs: number;
   ttsEngine: string;
   ttsVoice: string;
   ttsMaxChars: number;
@@ -70,6 +71,7 @@ export function loadSettings(): Settings {
     cleanAllMaxLimit: positiveIntFromEnv('CLEAN_ALL_MAX_LIMIT', 1000),
     databasePath: process.env.DATABASE_PATH ?? 'data/chococobot.sqlite3',
     loggingGuildId: process.env.LOGGING_GUILD_ID ?? '1507058598423826533',
+    voiceIdleLeaveMs: positiveIntFromEnv('VOICE_IDLE_LEAVE_MS', 10 * 60 * 1000),
     ttsEngine: process.env.TTS_ENGINE ?? 'edge',
     ttsVoice: process.env.TTS_VOICE ?? 'ko-KR-SunHiNeural',
     ttsMaxChars: positiveIntFromEnv('TTS_MAX_CHARS', 180),

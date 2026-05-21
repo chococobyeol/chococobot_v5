@@ -26,6 +26,7 @@ export type GuildVoiceState = {
   player: AudioPlayer;
   queue: VoiceQueueItem[];
   playing: boolean;
+  idleLeaveTimer?: NodeJS.Timeout;
 };
 
 export class VoiceService {
@@ -35,7 +36,8 @@ export class VoiceService {
     private readonly tts: TtsService,
     private readonly voiceSettings: VoiceSettingsStore,
     private readonly voicePresets: Readonly<Record<string, string>>,
-    private readonly defaultTtsEngine: TtsEngine
+    private readonly defaultTtsEngine: TtsEngine,
+    private readonly idleLeaveMs: number
   ) {}
 
   async join(member: GuildMember): Promise<void> {
@@ -82,10 +84,15 @@ export class VoiceService {
 
   leave(guildId: string): void {
     const state = this.states.get(guildId);
+    if (state?.idleLeaveTimer) clearTimeout(state.idleLeaveTimer);
     state?.player.stop();
     state?.connection.destroy();
     this.states.delete(guildId);
     getVoiceConnection(guildId)?.destroy();
+  }
+
+  isConnected(guildId: string): boolean {
+    return this.states.has(guildId);
   }
 
   setWatchedChannel(guildId: string, channelId: string, enabled: boolean): void {
@@ -109,6 +116,10 @@ export class VoiceService {
 
   async speak(guildId: string, text: string, userId?: string): Promise<boolean> {
     const state = this.getState(guildId);
+    if (state.idleLeaveTimer) {
+      clearTimeout(state.idleLeaveTimer);
+      state.idleLeaveTimer = undefined;
+    }
     state.queue.push({ text, userId });
     if (!state.playing) return this.drain(guildId, state);
     return true;
@@ -155,6 +166,7 @@ export class VoiceService {
     const next = state.queue.shift();
     if (!next) {
       state.playing = false;
+      this.scheduleIdleLeave(guildId, state);
       return false;
     }
     state.playing = true;
@@ -192,6 +204,18 @@ export class VoiceService {
   private resolveEngine(guildId: string, userId: string | undefined): TtsEngine {
     if (!userId) return this.defaultTtsEngine;
     return this.getUserTtsEngine(guildId, userId);
+  }
+
+  private scheduleIdleLeave(guildId: string, state: GuildVoiceState): void {
+    if (this.idleLeaveMs < 1) return;
+    if (state.idleLeaveTimer) clearTimeout(state.idleLeaveTimer);
+    state.idleLeaveTimer = setTimeout(() => {
+      const current = this.states.get(guildId);
+      if (current !== state) return;
+      if (current.playing || current.queue.length > 0) return;
+      logger.info(`Voice idle timeout reached for guild ${guildId}; leaving voice channel.`);
+      this.leave(guildId);
+    }, this.idleLeaveMs);
   }
 }
 
