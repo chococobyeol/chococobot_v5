@@ -356,14 +356,16 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       async execute(message) {
         await message.reply({
           content: [
-            '`!청소 [개수]` — 내 최근 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
-            '`!대청소 [개수]` — 관리자용 채널 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
-            '`!들어와` / `!이리와` / `!나가` / `!꺼져` / `!저리가` — 음성 채널 연결/해제...',
-            '`!tts채널 [#채널|해제]` — 채널 TTS 읽기 설정/해제...',
-            '`!말 <문장>` — 문장을 음성으로 읽기...',
-            '`!멈춰` / `!stop` / `!halt` / `!cancel` / `!pause` — TTS 재생 멈추기...',
-            '`!음색 [프리셋]` — 내 TTS 음색 확인/설정...',
-            '`!tts엔진 [edge|gtts]` — 내 TTS 엔진 확인/설정...'
+            '`!도움말` / `!명령어` / `!help` — 사용 가능한 명령어 목록을 보여줘요...',
+            '`!청소 [개수]` / `!clean [count]` / `!clear [count]` — 내 최근 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
+            '`!대청소 [개수]` / `!purge [count]` / `!clean-all [count]` / `!bulk-clear [count]` — 관리자용 채널 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...',
+            '`!들어와` / `!이리와` / `!join` / `!come` / `!여기와` / `!tts-join` — 음성 채널 연결...',
+            '`!나가` / `!꺼져` / `!저리가` / `!leave` / `!go` / `!out` / `!퇴장` / `!tts-leave` — 음성 채널 해제...',
+            '`!tts채널 [#채널|해제]` / `!tts-channel` / `!tts-watch` / `!watch` / `!채널tts` — 채널 TTS 읽기 설정/해제...',
+            '`!말 <문장>` / `!say <text>` / `!speak <text>` / `!talk <text>` / `!read <text>` / `!tts <text>` — 문장을 음성으로 읽기...',
+            '`!멈춰` / `!stop` / `!halt` / `!cancel` / `!pause` / `!정지` / `!그만` / `!멈춤` / `!스톱` — TTS 재생 멈추기...',
+            '`!음색 [프리셋]` / `!voice [preset]` / `!voice-style [preset]` / `!voicepreset [preset]` / `!tts-voice [preset]` / `!목소리 [프리셋]` — 내 TTS 음색 확인/설정...',
+            '`!tts엔진 [edge|gtts]` / `!engine [edge|gtts]` / `!tts-engine [edge|gtts]` / `!ttsengine [edge|gtts]` / `!엔진 [edge|gtts]` — 내 TTS 엔진 확인/설정...'
           ].join('\n'),
           allowedMentions: { repliedUser: false }
         });

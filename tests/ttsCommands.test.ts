@@ -209,7 +209,7 @@ describe('도움말 prefix command', () => {
 
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('`!청소 [개수]`')
+        content: expect.stringContaining('`!도움말` / `!명령어` / `!help`')
       })
     );
   });
