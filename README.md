@@ -8,7 +8,8 @@ Node.js/TypeScript Discord bot for Korean `!` prefix chat cleanup and voice TTS,
 - `!대청소 [개수]` / `!purge [count]` — manage-messages cleanup for recent channel messages. Default target: 1000.
 - `!들어와`, `!나가` — join or leave the caller's voice channel.
 - `!이리와` / `!꺼져` / `!저리가` — aliases for `!들어와` / `!나가`.
-- `!말 <내용>` / `!say <text>` — enqueue TTS in the current guild voice session.
+- `!말 <내용>` / `!say <text>` / `!speak <text>` — enqueue TTS in the current guild voice session.
+- `!멈춰` / `!stop` / `!halt` / `!cancel` / `!pause` — stop the current TTS playback and clear the queue.
 - `!tts채널 [#채널]` — set the current or named text channel used for auto-read.
 - `!tts채널 현재` / `!tts채널 해제` — show or clear the stored auto-read channel.
 - `!음색` / `!voice` — list or select supported TTS voice presets.
@@ -74,7 +75,7 @@ Optional v1 settings:
 | `CLEAN_ALL_MAX_LIMIT` | `1000` | Maximum accepted target count for admin cleanup. |
 | `TTS_VOICE` | `ko-KR-SunHiNeural` | Default Edge TTS voice. |
 | `TTS_ENGINE` | `edge` | Default TTS engine when a user has not selected one. |
-| `TTS_MAX_CHARS` | `180` | Maximum text length sent to TTS. |
+| `TTS_MAX_CHARS` | `500` | Maximum text length sent to TTS. Messages longer than this are rejected with a warning. |
 | `TTS_READ_BOT_MESSAGES` | `false` | Whether watched-channel TTS should read bot-authored messages. |
 | `LOG_LEVEL` | `info` | Logging verbosity label. |
 
@@ -101,7 +102,9 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!tts채널 해제` clears that guild setting.
 - When the watched channel is set and the bot is in voice, messages in that channel are read aloud.
 - `!말 <문장>` still speaks an ad-hoc sentence immediately in the current voice session.
+- `!말 <문장>` rejects text longer than `TTS_MAX_CHARS` and tells the user the limit.
 - If the bot is not already in voice, `!말 <문장>` will join the caller's current voice channel first.
+- `!멈춰` / `!stop` / `!halt` / `!cancel` / `!pause` stops the current voice playback and clears queued TTS.
 - `!tts엔진 edge` / `!tts엔진 gtts` stores the TTS engine for that user.
 - Aliases such as `!tts엔진 엣지`, `!tts엔진 구글`, and `!tts엔진 google` are also accepted.
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.

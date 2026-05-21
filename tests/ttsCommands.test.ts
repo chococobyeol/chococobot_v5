@@ -8,7 +8,7 @@ import { VoiceService } from '../src/services/voiceService.js';
 function makeContext() {
   const store = new InMemoryVoiceSettingsStore();
   return {
-    voice: new VoiceService(new TtsService('ko-KR-SunHiNeural', 180), store, {
+    voice: new VoiceService(new TtsService('ko-KR-SunHiNeural', 500), store, {
       sunhi: 'ko-KR-SunHiNeural',
       injoon: 'ko-KR-InJoonNeural',
       bright: 'ko-KR-SunHiNeural',
@@ -131,5 +131,67 @@ describe('말 prefix command', () => {
     expect(join).toHaveBeenCalledTimes(1);
     expect(speak).toHaveBeenCalledWith('guild-1', '안녕', 'user-1');
     expect(message.reply).not.toHaveBeenCalled();
+  });
+
+  it('rejects overly long text with a clear limit message', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('말');
+    expect(command).toBeDefined();
+
+    const join = vi.fn(async () => undefined);
+    const speak = vi.fn(async () => true);
+    const message = makeMessage('channel-1') as any;
+    message.member = {
+      voice: { channel: { id: 'voice-1' } },
+      displayName: '테스터'
+    };
+    const context = {
+      settings: { ttsMaxChars: 500 },
+      voice: {
+        isConnected: vi.fn(() => false),
+        join,
+        speak,
+        getUserTtsEngine: vi.fn(() => 'edge'),
+        getUserVoicePreset: vi.fn(() => 'sunhi')
+      },
+      activityLog: {
+        logVoiceConnection: vi.fn(async () => undefined),
+        logTtsRequest: vi.fn(async () => undefined),
+        logCommand: vi.fn(async () => undefined),
+        logError: vi.fn(async () => undefined)
+      }
+    };
+
+    await expect(command!.execute(message, ['가'.repeat(501)], context as any)).rejects.toThrow('한 번에 500자까지만 읽을 수 있어요...');
+    expect(join).not.toHaveBeenCalled();
+    expect(speak).not.toHaveBeenCalled();
+  });
+});
+
+describe('멈춰 prefix command', () => {
+  it('stops current playback and clears the queue', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('멈춰');
+    expect(command).toBeDefined();
+
+    const stopPlayback = vi.fn(() => true);
+    const message = makeMessage('channel-1') as any;
+    const context = {
+      voice: {
+        isConnected: vi.fn(() => true),
+        stopPlayback
+      },
+      activityLog: {
+        logVoiceConnection: vi.fn(async () => undefined),
+        logTtsRequest: vi.fn(async () => undefined),
+        logCommand: vi.fn(async () => undefined),
+        logError: vi.fn(async () => undefined)
+      }
+    };
+
+    await command!.execute(message, [], context as any);
+
+    expect(stopPlayback).toHaveBeenCalledWith('guild-1');
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '재생을 멈췄어요...' }));
   });
 });

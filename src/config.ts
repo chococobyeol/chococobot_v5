@@ -74,7 +74,7 @@ export function loadSettings(): Settings {
     voiceIdleLeaveMs: positiveIntFromEnv('VOICE_IDLE_LEAVE_MS', 10 * 60 * 1000),
     ttsEngine: process.env.TTS_ENGINE ?? 'edge',
     ttsVoice: process.env.TTS_VOICE ?? 'ko-KR-SunHiNeural',
-    ttsMaxChars: positiveIntFromEnv('TTS_MAX_CHARS', 180),
+    ttsMaxChars: positiveIntFromEnv('TTS_MAX_CHARS', 500),
     ttsReadBotMessages: boolFromEnv('TTS_READ_BOT_MESSAGES', false),
     ttsVoicePresets: DEFAULT_TTS_VOICE_PRESETS,
     logLevel: process.env.LOG_LEVEL ?? 'info'

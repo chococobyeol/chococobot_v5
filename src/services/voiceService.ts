@@ -26,6 +26,7 @@ export type GuildVoiceState = {
   player: AudioPlayer;
   queue: VoiceQueueItem[];
   playing: boolean;
+  generation: number;
   idleLeaveTimer?: NodeJS.Timeout;
 };
 
@@ -69,7 +70,8 @@ export class VoiceService {
         connection,
         player,
         queue: [],
-        playing: false
+        playing: false,
+        generation: 0
       });
       player.on('error', (error) => logger.error('Audio player error:', error));
     } catch (error) {
@@ -125,6 +127,17 @@ export class VoiceService {
     return true;
   }
 
+  stopPlayback(guildId: string): boolean {
+    const state = this.states.get(guildId);
+    if (!state) return false;
+    state.generation += 1;
+    state.queue.length = 0;
+    state.playing = false;
+    state.player.stop(true);
+    this.scheduleIdleLeave(guildId, state);
+    return true;
+  }
+
   listVoicePresets(): string[] {
     return Object.keys(this.voicePresets).sort();
   }
@@ -163,6 +176,7 @@ export class VoiceService {
   }
 
   private async drain(guildId: string, state: GuildVoiceState): Promise<boolean> {
+    const generation = state.generation;
     const next = state.queue.shift();
     if (!next) {
       state.playing = false;
@@ -175,6 +189,9 @@ export class VoiceService {
     let played = false;
     try {
       filePath = await this.tts.synthesize(next.text, this.resolveVoice(guildId, next.userId), this.resolveEngine(guildId, next.userId));
+      if (!this.states.has(guildId) || this.states.get(guildId) !== state || state.generation !== generation) {
+        return false;
+      }
       const resource = createAudioResource(filePath);
       state.player.play(resource);
       await entersState(state.player, AudioPlayerStatus.Idle, 60_000);
@@ -185,6 +202,9 @@ export class VoiceService {
       if (filePath) await this.tts.cleanup(filePath);
     }
 
+    if (!this.states.has(guildId) || this.states.get(guildId) !== state || state.generation !== generation) {
+      return played;
+    }
     const restPlayed = this.states.has(guildId) ? await this.drain(guildId, state) : false;
     return played || restPlayed;
   }

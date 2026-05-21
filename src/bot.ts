@@ -18,6 +18,7 @@ import {
 import { logger } from './logger.js';
 
 const PREFIX = '!';
+const MAX_TTS_COMMAND_CHARS = 500;
 
 export type BotContext = {
   settings: Settings;
@@ -84,6 +85,10 @@ function summarizeCommandForLog(commandName: string, args: string[]): string {
     case 'say':
     case 'tts-say':
     case '말해':
+    case 'speak':
+    case 'talk':
+    case 'read':
+    case 'tts':
       return `text=${joined.slice(0, 500)}`;
     case '청소':
     case 'clean':
@@ -109,6 +114,16 @@ function summarizeCommandForLog(commandName: string, args: string[]): string {
     case 'engine':
     case '엔진':
       return `engine=${args[0] ?? 'show'}`;
+    case '멈춰':
+    case 'stop':
+    case 'halt':
+    case 'cancel':
+    case 'pause':
+    case '정지':
+    case '그만':
+    case '멈춤':
+    case '스톱':
+      return 'action=stop';
     default:
       return `args=${args.join('|').slice(0, 200)}`;
   }
@@ -120,7 +135,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
   const definitions: PrefixCommand[] = [
     {
       name: '청소',
-      aliases: ['clean', 'clean-mine', '내청소'],
+      aliases: ['clean', 'clean-mine', 'clear', '내청소'],
       description: '내가 쓴 최근 메시지를 삭제합니다.',
       async execute(message, args, context) {
         const channel = requireGuildTextChannel(message);
@@ -135,7 +150,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
     },
     {
       name: '대청소',
-      aliases: ['clean-all', 'purge'],
+      aliases: ['clean-all', 'purge', 'bulk-clear'],
       description: '관리자용: 최근 채팅을 삭제합니다.',
       async execute(message, args, context) {
         const channel = requireGuildTextChannel(message);
@@ -222,12 +237,15 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
     },
     {
       name: '말',
-      aliases: ['말해', 'say', 'tts-say'],
+      aliases: ['말해', 'say', 'tts-say', 'speak', 'talk', 'read', 'tts'],
       description: '지정한 문장을 음성 채널에서 읽습니다.',
       async execute(message, args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
         const text = args.join(' ').trim();
         if (!text) throw new Error('읽을 문장을 입력해 주세요...');
+        if (text.length > MAX_TTS_COMMAND_CHARS) {
+          throw new Error(`한 번에 ${MAX_TTS_COMMAND_CHARS}자까지만 읽을 수 있어요...`);
+        }
         if (!context.voice.isConnected(message.guildId)) {
           const member = requireGuildMember(message);
           if (!member.voice.channel) throw new Error('먼저 음성 채널에 들어가 주세요...');
@@ -267,7 +285,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
     },
     {
       name: '음색',
-      aliases: ['voice', 'tts-voice', '목소리'],
+      aliases: ['voice', 'tts-voice', '목소리', 'voice-style', 'voicepreset'],
       description: '내 TTS 음색 프리셋을 확인하거나 설정합니다.',
       async execute(message, args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
@@ -287,7 +305,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
     },
     {
       name: 'tts엔진',
-      aliases: ['tts-engine', 'engine', '엔진'],
+      aliases: ['tts-engine', 'engine', '엔진', 'ttsengine'],
       description: '내 TTS 엔진을 확인하거나 설정합니다.',
       async execute(message, args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
@@ -317,6 +335,19 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       }
     },
     {
+      name: '멈춰',
+      aliases: ['stop', 'halt', 'cancel', 'pause', '정지', '그만', '멈춤', '스톱'],
+      description: '현재 TTS 재생을 멈춥니다.',
+      async execute(message, _args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        if (!context.voice.isConnected(message.guildId)) {
+          throw new Error('봇이 음성 채널에 연결되어 있지 않아요... `!들어와`를 먼저 실행해 주세요...');
+        }
+        context.voice.stopPlayback(message.guildId);
+        await message.reply({ content: '재생을 멈췄어요...', allowedMentions: { repliedUser: false } });
+      }
+    },
+    {
       name: '도움말',
       aliases: ['help', 'commands'],
       description: '사용 가능한 명령어를 보여줍니다.',
@@ -328,6 +359,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             '`!들어와` / `!이리와` / `!나가` / `!꺼져` / `!저리가` — 음성 채널 연결/해제...',
             '`!tts채널 [#채널|해제]` — 채널 TTS 읽기 설정/해제...',
             '`!말 <문장>` — 문장을 음성으로 읽기...',
+            '`!멈춰` / `!stop` / `!halt` / `!cancel` / `!pause` — TTS 재생 멈추기...',
             '`!음색 [프리셋]` — 내 TTS 음색 확인/설정...',
             '`!tts엔진 [edge|gtts]` — 내 TTS 엔진 확인/설정...'
           ].join('\n'),

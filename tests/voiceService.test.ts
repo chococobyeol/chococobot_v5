@@ -19,7 +19,8 @@ describe('VoiceService speak failure handling', () => {
       connection: { destroy: vi.fn() },
       player: createAudioPlayer(),
       queue: [],
-      playing: false
+      playing: false,
+      generation: 0
     });
 
     await expect(service.speak('guild-1', '안녕', 'user-1')).resolves.toBe(false);
@@ -44,7 +45,8 @@ describe('VoiceService speak failure handling', () => {
         connection: { destroy: vi.fn() },
         player: createAudioPlayer(),
         queue: [],
-        playing: false
+        playing: false,
+        generation: 0
       });
 
       await service.speak('guild-1', '안녕', 'user-1');
