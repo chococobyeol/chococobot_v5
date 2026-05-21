@@ -1,4 +1,4 @@
-import { ChannelType, type Client, type Guild, type TextChannel } from 'discord.js';
+import { ChannelType, type CategoryChannel, type Client, type Guild, type TextChannel } from 'discord.js';
 import type { BotActivityLogStore } from './botActivityLogStore.js';
 import { logger } from '../logger.js';
 
@@ -26,12 +26,8 @@ function sanitizeChannelName(value: string): string {
   return normalized || 'channel';
 }
 
-function formatLogHeader(kind: string, details: { guildId: string; channelId?: string; userId?: string }): string {
-  const lines = [`[${kind}]`, `guild=${details.guildId}`];
-  if (details.channelId) lines.push(`channel=${details.channelId}`);
-  if (details.userId) lines.push(`user=${details.userId}`);
-  return lines.join(' | ');
-}
+const TEST_CHANNEL_CATEGORY_NAME = '봇 테스트 채널';
+const LOG_CHANNEL_CATEGORY_NAME = '서버별 로그';
 
 export class BotActivityLogService {
   constructor(
@@ -67,22 +63,32 @@ export class BotActivityLogService {
     await this.ensureAllSourceGuildLogChannels(guild);
   }
 
-  async ensureGuildLogChannel(sourceGuildId: string): Promise<TextChannel | undefined> {
+  async ensureGuildLogChannel(sourceGuildId: string, parent?: CategoryChannel): Promise<TextChannel | undefined> {
     const guild = await this.resolveLoggingGuild();
     if (!guild) return undefined;
     const sourceGuild = await this.client.guilds.fetch(sourceGuildId).catch(() => null);
     if (!sourceGuild) return undefined;
+    const desiredName = this.buildLogChannelName(sourceGuild);
+    const desiredTopic = `Source guild: ${sourceGuild.name} (${sourceGuild.id})`;
 
     const existingChannelId = this.store.getLogChannelId(sourceGuildId);
     if (existingChannelId) {
       const cached = await guild.channels.fetch(existingChannelId).catch(() => null);
-      if (cached?.type === ChannelType.GuildText) return cached;
+      if (cached?.type === ChannelType.GuildText) {
+        if (cached.name !== desiredName || cached.topic !== desiredTopic) {
+          await cached.edit({ name: desiredName, topic: desiredTopic, parent: parent?.id }).catch((error) => logger.warn('Failed to rename logging channel:', error));
+        } else if (parent && cached.parentId !== parent.id) {
+          await cached.edit({ parent: parent.id }).catch((error) => logger.warn('Failed to move logging channel:', error));
+        }
+        return cached;
+      }
     }
 
     const channel = await guild.channels.create({
-      name: this.buildLogChannelName(sourceGuild),
+      name: desiredName,
       type: ChannelType.GuildText,
-      topic: `Source guild: ${sourceGuild.name} (${sourceGuild.id})`
+      topic: desiredTopic,
+      parent: parent?.id
     });
     this.store.setLogChannelId(sourceGuildId, channel.id);
     return channel;
@@ -91,14 +97,11 @@ export class BotActivityLogService {
   async logCommand(details: CommandLogDetails): Promise<void> {
     const channel = await this.ensureGuildLogChannel(details.guildId);
     if (!channel) return;
+    const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
     await channel.send({
       content: truncate(
         [
-          formatLogHeader('COMMAND', {
-            guildId: details.guildId,
-            channelId: details.channelId,
-            userId: details.userId
-          }),
+          `${sourceLabel}-COMMAND`,
           `guildName=${details.guildName ?? 'unknown'}`,
           `userName=${details.userName ?? 'unknown'}`,
           `command=${details.commandName}`,
@@ -119,15 +122,12 @@ export class BotActivityLogService {
   }): Promise<void> {
     const channel = await this.ensureGuildLogChannel(details.guildId);
     if (!channel) return;
+    const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
     const errorText = details.error instanceof Error ? `${details.error.name}: ${details.error.message}` : String(details.error);
     await channel.send({
       content: truncate(
         [
-          formatLogHeader('ERROR', {
-            guildId: details.guildId,
-            channelId: details.channelId,
-            userId: details.userId
-          }),
+          `${sourceLabel}-ERROR`,
           `guildName=${details.guildName ?? 'unknown'}`,
           `userName=${details.userName ?? 'unknown'}`,
           `command=${details.commandName}`,
@@ -145,10 +145,13 @@ export class BotActivityLogService {
   }): Promise<void> {
     const channel = await this.ensureGuildLogChannel(details.guildId);
     if (!channel) return;
+    const sourceLabel = details.channelId
+      ? await this.resolveSourceChannelLabel(details.guildId, details.channelId)
+      : `guild-${details.guildId}`;
     await channel.send({
       content: truncate(
         [
-          formatLogHeader('VOICE', { guildId: details.guildId, channelId: details.channelId }),
+          `${sourceLabel}-VOICE`,
           `guildName=${details.guildName ?? 'unknown'}`,
           `message=${details.message}`
         ].join('\n'))
@@ -169,6 +172,7 @@ export class BotActivityLogService {
   }): Promise<void> {
     const channel = await this.ensureGuildLogChannel(details.guildId);
     if (!channel) return;
+    const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
     const body =
       details.source === 'command'
         ? `text=${truncate(details.text ?? '')}`
@@ -176,11 +180,7 @@ export class BotActivityLogService {
     await channel.send({
       content: truncate(
         [
-          formatLogHeader('TTS', {
-            guildId: details.guildId,
-            channelId: details.channelId,
-            userId: details.userId
-          }),
+          `${sourceLabel}-TTS`,
           `guildName=${details.guildName ?? 'unknown'}`,
           `userName=${details.userName ?? 'unknown'}`,
           `source=${details.source}`,
@@ -194,48 +194,91 @@ export class BotActivityLogService {
   }
 
   private buildLogChannelName(sourceGuild: Guild): string {
-    return sanitizeChannelName(`서버로그-${sourceGuild.id.slice(-6)}`);
+    const name = sanitizeChannelName(`LOG-${sourceGuild.name}-${sourceGuild.id}`);
+    return name.length <= 100 ? name : name.slice(0, 100).replace(/-+$/g, '');
   }
 
   private async ensureFixedChannels(guild: Guild): Promise<void> {
-    await this.ensureTextChannel(guild, '메모채널', 'Memorandum / memo channel');
-    await this.ensureTextChannel(guild, '봇-채팅-테스트채널', 'Bot chat test channel');
-    await this.ensureVoiceChannel(guild, '봇-음성-테스트채널');
+    const testCategory = await this.ensureCategory(guild, TEST_CHANNEL_CATEGORY_NAME);
+    await this.ensureTextChannel(guild, '메모채널', 'Memorandum / memo channel', testCategory);
+    await this.ensureTextChannel(guild, '봇-채팅-테스트채널', 'Bot chat test channel', testCategory);
+    await this.ensureVoiceChannel(guild, '봇-음성-테스트채널', testCategory);
   }
 
   private async ensureAllSourceGuildLogChannels(guild: Guild): Promise<void> {
+    const logCategory = await this.ensureCategory(guild, LOG_CHANNEL_CATEGORY_NAME);
     const guilds = await this.client.guilds.fetch();
     for (const sourceGuild of guilds.values()) {
       if (sourceGuild.id === guild.id) continue;
-      await this.ensureGuildLogChannel(sourceGuild.id);
+      await this.ensureGuildLogChannel(sourceGuild.id, logCategory);
     }
   }
 
-  private async ensureTextChannel(guild: Guild, name: string, topic: string): Promise<void> {
+  private async ensureTextChannel(guild: Guild, name: string, topic: string, parent?: CategoryChannel): Promise<void> {
     const existing = guild.channels.cache.find(
       (channel): channel is TextChannel => channel.type === ChannelType.GuildText && channel.name === name
     );
-    if (existing) return;
+    if (existing) {
+      if (parent && existing.parentId !== parent.id) {
+        await existing.edit({ parent: parent.id }).catch((error) => logger.warn(`Failed to move text channel ${name}:`, error));
+      }
+      return;
+    }
     await guild.channels
       .create({
         name,
         type: ChannelType.GuildText,
-        topic
+        topic,
+        parent: parent?.id
       })
       .catch((error) => logger.warn(`Failed to create text channel ${name}:`, error));
   }
 
-  private async ensureVoiceChannel(guild: Guild, name: string): Promise<void> {
+  private async ensureVoiceChannel(guild: Guild, name: string, parent?: CategoryChannel): Promise<void> {
     const existing = guild.channels.cache.find(
       (channel) => channel.type === ChannelType.GuildVoice && channel.name === name
     );
-    if (existing) return;
+    if (existing) {
+      if (parent && existing.parentId !== parent.id) {
+        await existing.edit({ parent: parent.id }).catch((error) => logger.warn(`Failed to move voice channel ${name}:`, error));
+      }
+      return;
+    }
     await guild.channels
       .create({
         name,
-        type: ChannelType.GuildVoice
+        type: ChannelType.GuildVoice,
+        parent: parent?.id
       })
       .catch((error) => logger.warn(`Failed to create voice channel ${name}:`, error));
+  }
+
+  private async ensureCategory(guild: Guild, name: string): Promise<CategoryChannel> {
+    const existing = guild.channels.cache.find(
+      (channel): channel is CategoryChannel => channel.type === ChannelType.GuildCategory && channel.name === name
+    );
+    if (existing) return existing;
+    const created = await guild.channels
+      .create({
+        name,
+        type: ChannelType.GuildCategory
+      })
+      .catch((error) => {
+        logger.warn(`Failed to create category ${name}:`, error);
+        return null;
+      });
+    if (!created || created.type !== ChannelType.GuildCategory) {
+      throw new Error(`Unable to create required category: ${name}`);
+    }
+    return created;
+  }
+
+  private async resolveSourceChannelLabel(guildId: string, channelId: string): Promise<string> {
+    const guild = await this.client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) return `unknown-${channelId}`;
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    const channelName = channel?.name ?? 'unknown';
+    return `${sanitizeChannelName(channelName)}-${channelId}`;
   }
 
   private async resolveLoggingGuild(): Promise<Guild | null> {
