@@ -351,7 +351,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
     },
     {
       name: '도움말',
-      aliases: ['help', 'commands'],
+      aliases: ['help', 'commands', '명령어', 'command', 'cmd'],
       description: '사용 가능한 명령어를 보여줍니다.',
       async execute(message) {
         await message.reply({

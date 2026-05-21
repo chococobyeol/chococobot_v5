@@ -195,3 +195,22 @@ describe('멈춰 prefix command', () => {
     expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '재생을 멈췄어요...' }));
   });
 });
+
+describe('도움말 prefix command', () => {
+  it('responds to !명령어 as an alias for help', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('명령어');
+    expect(command).toBeDefined();
+
+    const message = makeMessage('channel-1');
+    const context = makeContext();
+
+    await command!.execute(message, [], context as any);
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('`!청소 [개수]`')
+      })
+    );
+  });
+});
