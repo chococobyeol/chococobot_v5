@@ -42,7 +42,7 @@ export class VoiceService {
 
   async join(member: GuildMember): Promise<void> {
     const channel = member.voice.channel;
-    if (!channel) throw new Error('먼저 음성 채널에 들어가 주세요.');
+    if (!channel) throw new Error('먼저 음성 채널에 들어가 주세요...');
     await this.joinChannel(channel);
   }
 
@@ -75,7 +75,7 @@ export class VoiceService {
     } catch (error) {
       if (isDaveCloseCode(error)) {
         throw new Error(
-          'Discord DAVE/E2EE voice 연결 실패(4017 가능): @discordjs/voice와 @snazzah/davey 버전을 확인해 주세요.'
+          'Discord DAVE/E2EE voice 연결 실패(4017 가능): @discordjs/voice와 @snazzah/davey 버전을 확인해 주세요...'
         );
       }
       throw error;
@@ -191,7 +191,7 @@ export class VoiceService {
 
   private getState(guildId: string): GuildVoiceState {
     const state = this.states.get(guildId);
-    if (!state) throw new Error('봇이 아직 음성 채널에 연결되어 있지 않아요. `!들어와`를 먼저 실행해 주세요.');
+    if (!state) throw new Error('봇이 아직 음성 채널에 연결되어 있지 않아요... `!들어와`를 먼저 실행해 주세요...');
     return state;
   }
 
@@ -220,5 +220,5 @@ export class VoiceService {
 }
 
 export function assertTextChannel(channel: TextBasedChannel | null): asserts channel is TextBasedChannel {
-  if (!channel) throw new Error('텍스트 채널을 찾을 수 없어요.');
+  if (!channel) throw new Error('텍스트 채널을 찾을 수 없어요...');
 }

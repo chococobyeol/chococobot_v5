@@ -164,5 +164,5 @@ export function cleanupChannelMessages(
 export function formatCleanupResult(label: string, result: CleanupResult): string {
   const partial = result.deleted < result.requested ? ` (요청 ${result.requested}개 중 처리)` : '';
   const skipped = result.skippedOld > 0 ? `, 2주 초과 ${result.skippedOld}개 건너뜀` : '';
-  return `${label} ${result.deleted}개를 삭제했어요${partial}.${skipped}`;
+  return `${label} ${result.deleted}개를 삭제했어요...${partial}${skipped}`;
 }

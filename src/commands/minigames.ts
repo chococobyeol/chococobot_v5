@@ -6,7 +6,7 @@ export function drawChoices(raw: string, count: number): string[] {
     .split(',')
     .map((choice) => choice.trim())
     .filter(Boolean);
-  if (!choices.length) throw new Error('쉼표로 구분된 선택지를 입력해 주세요.');
+  if (!choices.length) throw new Error('쉼표로 구분된 선택지를 입력해 주세요...');
   if (count > choices.length) throw new Error('뽑을 개수가 선택지 개수보다 많아요.');
   return choices.sort(() => Math.random() - 0.5).slice(0, count);
 }

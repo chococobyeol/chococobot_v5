@@ -55,21 +55,21 @@ describe('tts채널 prefix command', () => {
 
     await command!.execute(message, [], context as any);
     expect(context.voice.getWatchedChannelId('guild-1')).toBe('channel-1');
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<#channel-1>를 TTS 채널로 설정했어요.' }));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<#channel-1>를 TTS 채널로 설정했어요...' }));
 
     const currentMessage = makeMessage('channel-1');
     await command!.execute(currentMessage, ['현재'], context as any);
-    expect(currentMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '현재 TTS 채널은 <#channel-1>예요.' }));
+    expect(currentMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '현재 TTS 채널은 <#channel-1>예요...' }));
 
     const clearMessage = makeMessage('channel-1');
     await command!.execute(clearMessage, ['해제'], context as any);
     expect(context.voice.getWatchedChannelId('guild-1')).toBeUndefined();
-    expect(clearMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'TTS 채널 설정을 해제했어요.' }));
+    expect(clearMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'TTS 채널 설정을 해제했어요...' }));
 
     const targetMessage = makeMessage('channel-1', { id: 'channel-2', type: ChannelType.GuildText });
     await command!.execute(targetMessage, ['channel-2'], context as any);
     expect(context.voice.getWatchedChannelId('guild-1')).toBe('channel-2');
-    expect(targetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<#channel-2>를 TTS 채널로 설정했어요.' }));
+    expect(targetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<#channel-2>를 TTS 채널로 설정했어요...' }));
   });
 });
 
@@ -88,12 +88,12 @@ describe('tts엔진 prefix command', () => {
     const setMessage = makeMessage('channel-1');
     await command!.execute(setMessage, ['구글'], context as any);
     expect(context.voice.getUserTtsEngine('guild-1', 'user-1')).toBe('gtts');
-    expect(setMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '내 TTS 엔진을 gtts로 저장했어요.' }));
+    expect(setMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '내 TTS 엔진을 gtts로 저장했어요...' }));
 
     const resetMessage = makeMessage('channel-1');
     await command!.execute(resetMessage, ['해제'], context as any);
     expect(context.voice.getUserTtsEngine('guild-1', 'user-1')).toBe('edge');
-    expect(resetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'TTS 엔진 설정을 기본값으로 되돌렸어요.' }));
+    expect(resetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'TTS 엔진 설정을 기본값으로 되돌렸어요...' }));
   });
 });
 
@@ -130,6 +130,6 @@ describe('말 prefix command', () => {
 
     expect(join).toHaveBeenCalledTimes(1);
     expect(speak).toHaveBeenCalledWith('guild-1', '안녕', 'user-1');
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '읽기 요청을 추가했어요.' }));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '읽기 요청을 추가했어요...' }));
   });
 });

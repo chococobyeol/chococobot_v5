@@ -50,7 +50,7 @@ function parseOptionalPositiveInt(value: string | undefined): number | undefined
 
 function requireGuildTextChannel(message: Message): TextChannel {
   const channel = message.channel;
-  if (channel.type !== ChannelType.GuildText) throw new Error('서버 텍스트 채널에서만 사용할 수 있어요.');
+  if (channel.type !== ChannelType.GuildText) throw new Error('서버 텍스트 채널에서만 사용할 수 있어요...');
   return channel;
 }
 
@@ -64,11 +64,11 @@ function resolveTargetGuildTextChannel(message: Message, rawChannel?: string): G
   const channel = message.guild?.channels.cache.get(channelId);
   if (channel?.type === ChannelType.GuildText) return channel;
 
-  throw new Error('설정할 텍스트 채널을 찾을 수 없어요. `!tts채널 #채널`처럼 입력해 주세요.');
+  throw new Error('설정할 텍스트 채널을 찾을 수 없어요... `!tts채널 #채널`처럼 입력해 주세요...');
 }
 
 function requireGuildMember(message: Message): GuildMember {
-  if (!message.member) throw new Error('서버 멤버 정보가 필요해요.');
+  if (!message.member) throw new Error('서버 멤버 정보가 필요해요...');
   return message.member as GuildMember;
 }
 
@@ -156,7 +156,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       aliases: ['join', 'tts-join', '이리와', 'come', '여기와'],
       description: '내 음성 채널에 봇을 연결합니다.',
       async execute(message, _args, context) {
-        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
         await context.voice.join(requireGuildMember(message));
         await context.activityLog.logVoiceConnection({
           guildId: message.guildId,
@@ -164,7 +164,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           channelId: message.member?.voice.channel?.id,
           message: 'voice joined'
         });
-        await message.reply({ content: '음성 채널에 연결했어요.', allowedMentions: { repliedUser: false } });
+        await message.reply({ content: '음성 채널에 연결했어요...', allowedMentions: { repliedUser: false } });
       }
     },
     {
@@ -172,14 +172,14 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       aliases: ['leave', 'tts-leave', '꺼져', '저리가', 'go', 'out', '퇴장'],
       description: '봇을 음성 채널에서 내보냅니다.',
       async execute(message, _args, context) {
-        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
         context.voice.leave(message.guildId);
         await context.activityLog.logVoiceConnection({
           guildId: message.guildId,
           guildName: message.guild?.name,
           message: 'voice left'
         });
-        await message.reply({ content: '음성 채널에서 나왔어요.', allowedMentions: { repliedUser: false } });
+        await message.reply({ content: '음성 채널에서 나왔어요...', allowedMentions: { repliedUser: false } });
       }
     },
     {
@@ -187,12 +187,12 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       aliases: ['tts-channel', 'tts-watch', 'watch', '채널tts'],
       description: 'TTS가 읽을 텍스트 채널을 설정하거나 해제합니다.',
       async execute(message, args, context) {
-        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
         const action = args[0]?.trim();
         if (!action) {
           context.voice.setWatchedChannel(message.guildId, message.channelId, true);
           await message.reply({
-            content: `<#${message.channelId}>를 TTS 채널로 설정했어요.`,
+            content: `<#${message.channelId}>를 TTS 채널로 설정했어요...`,
             allowedMentions: { repliedUser: false }
           });
           return;
@@ -202,7 +202,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         if (['현재', 'status', 'show', 'info', '조회'].includes(normalized)) {
           const watchedChannelId = context.voice.getWatchedChannelId(message.guildId);
           await message.reply({
-            content: watchedChannelId ? `현재 TTS 채널은 <#${watchedChannelId}>예요.` : '현재 설정된 TTS 채널이 없어요.',
+            content: watchedChannelId ? `현재 TTS 채널은 <#${watchedChannelId}>예요...` : '현재 설정된 TTS 채널이 없어요...',
             allowedMentions: { repliedUser: false }
           });
           return;
@@ -211,13 +211,13 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         if (['해제', '끄기', 'off', 'disable', 'unset', 'clear', 'none', '없음', '초기화'].includes(normalized)) {
           const watchedChannelId = context.voice.getWatchedChannelId(message.guildId);
           context.voice.setWatchedChannel(message.guildId, watchedChannelId ?? message.channelId, false);
-          await message.reply({ content: 'TTS 채널 설정을 해제했어요.', allowedMentions: { repliedUser: false } });
+          await message.reply({ content: 'TTS 채널 설정을 해제했어요...', allowedMentions: { repliedUser: false } });
           return;
         }
 
         const channel = resolveTargetGuildTextChannel(message, action);
         context.voice.setWatchedChannel(message.guildId, channel.id, true);
-        await message.reply({ content: `<#${channel.id}>를 TTS 채널로 설정했어요.`, allowedMentions: { repliedUser: false } });
+        await message.reply({ content: `<#${channel.id}>를 TTS 채널로 설정했어요...`, allowedMentions: { repliedUser: false } });
       }
     },
     {
@@ -225,12 +225,12 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       aliases: ['말해', 'say', 'tts-say'],
       description: '지정한 문장을 음성 채널에서 읽습니다.',
       async execute(message, args, context) {
-        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
         const text = args.join(' ').trim();
-        if (!text) throw new Error('읽을 문장을 입력해 주세요.');
+        if (!text) throw new Error('읽을 문장을 입력해 주세요...');
         if (!context.voice.isConnected(message.guildId)) {
           const member = requireGuildMember(message);
-          if (!member.voice.channel) throw new Error('먼저 음성 채널에 들어가 주세요.');
+          if (!member.voice.channel) throw new Error('먼저 음성 채널에 들어가 주세요...');
           await context.voice.join(member);
           await context.activityLog.logVoiceConnection({
             guildId: message.guildId,
@@ -252,7 +252,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         });
         const played = await context.voice.speak(message.guildId, text, message.author.id);
         if (played) {
-          await message.reply({ content: '읽기 요청을 추가했어요.', allowedMentions: { repliedUser: false } });
+          await message.reply({ content: '읽기 요청을 추가했어요...', allowedMentions: { repliedUser: false } });
         } else {
           await context.activityLog.logError({
             guildId: message.guildId,
@@ -272,19 +272,19 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       aliases: ['voice', 'tts-voice', '목소리'],
       description: '내 TTS 음색 프리셋을 확인하거나 설정합니다.',
       async execute(message, args, context) {
-        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
         const preset = args[0]?.toLowerCase();
         if (!preset) {
           const presets = context.voice.listVoicePresets();
           const current = context.voice.getUserVoicePreset(message.guildId, message.author.id) ?? '기본값';
           await message.reply({
-            content: [`현재 음색: ${current}`, `사용 가능: ${presets.join(', ')}`, '`!음색 sunhi`처럼 설정해 주세요.'].join('\n'),
+            content: [`현재 음색: ${current}`, `사용 가능: ${presets.join(', ')}`, '`!음색 sunhi`처럼 설정해 주세요...'].join('\n'),
             allowedMentions: { repliedUser: false }
           });
           return;
         }
         context.voice.setUserVoicePreset(message.guildId, message.author.id, preset);
-        await message.reply({ content: `내 TTS 음색을 ${preset}로 저장했어요.`, allowedMentions: { repliedUser: false } });
+        await message.reply({ content: `내 TTS 음색을 ${preset}로 저장했어요...`, allowedMentions: { repliedUser: false } });
       }
     },
     {
@@ -292,12 +292,12 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       aliases: ['tts-engine', 'engine', '엔진'],
       description: '내 TTS 엔진을 확인하거나 설정합니다.',
       async execute(message, args, context) {
-        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
         const raw = args[0]?.trim();
         if (!raw) {
           const current = context.voice.getUserTtsEngine(message.guildId, message.author.id);
           await message.reply({
-            content: [`현재 엔진: ${current}`, `사용 가능: ${context.voice.listTtsEngines().join(', ')}`, '`!tts엔진 edge` 또는 `!tts엔진 gtts`처럼 설정해 주세요.'].join('\n'),
+            content: [`현재 엔진: ${current}`, `사용 가능: ${context.voice.listTtsEngines().join(', ')}`, '`!tts엔진 edge` 또는 `!tts엔진 gtts`처럼 설정해 주세요...'].join('\n'),
             allowedMentions: { repliedUser: false }
           });
           return;
@@ -306,7 +306,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         const normalized = raw.toLowerCase();
         if (['해제', '기본', 'default', 'reset', 'clear', 'none'].includes(normalized)) {
           context.voice.clearUserTtsEngine(message.guildId, message.author.id);
-          await message.reply({ content: 'TTS 엔진 설정을 기본값으로 되돌렸어요.', allowedMentions: { repliedUser: false } });
+          await message.reply({ content: 'TTS 엔진 설정을 기본값으로 되돌렸어요...', allowedMentions: { repliedUser: false } });
           return;
         }
 
@@ -315,7 +315,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           throw new Error(`알 수 없는 TTS 엔진이에요. 사용 가능: ${context.voice.listTtsEngines().join(', ')}`);
         }
         context.voice.setUserTtsEngine(message.guildId, message.author.id, engine);
-        await message.reply({ content: `내 TTS 엔진을 ${engine}로 저장했어요.`, allowedMentions: { repliedUser: false } });
+        await message.reply({ content: `내 TTS 엔진을 ${engine}로 저장했어요...`, allowedMentions: { repliedUser: false } });
       }
     },
     {
@@ -325,13 +325,13 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       async execute(message) {
         await message.reply({
           content: [
-            '`!청소 [개수]` — 내 최근 메시지 삭제',
-            '`!대청소 [개수]` — 관리자용 채널 메시지 삭제',
-            '`!들어와` / `!이리와` / `!나가` / `!꺼져` / `!저리가` — 음성 채널 연결/해제',
-            '`!tts채널 [#채널|해제]` — 채널 TTS 읽기 설정/해제',
-            '`!말 <문장>` — 문장을 음성으로 읽기',
-            '`!음색 [프리셋]` — 내 TTS 음색 확인/설정',
-            '`!tts엔진 [edge|gtts]` — 내 TTS 엔진 확인/설정'
+            '`!청소 [개수]` — 내 최근 메시지 삭제...',
+            '`!대청소 [개수]` — 관리자용 채널 메시지 삭제...',
+            '`!들어와` / `!이리와` / `!나가` / `!꺼져` / `!저리가` — 음성 채널 연결/해제...',
+            '`!tts채널 [#채널|해제]` — 채널 TTS 읽기 설정/해제...',
+            '`!말 <문장>` — 문장을 음성으로 읽기...',
+            '`!음색 [프리셋]` — 내 TTS 음색 확인/설정...',
+            '`!tts엔진 [edge|gtts]` — 내 TTS 엔진 확인/설정...'
           ].join('\n'),
           allowedMentions: { repliedUser: false }
         });
@@ -354,7 +354,7 @@ async function dispatchPrefixCommand(
   if (!parsed) return false;
   const command = commands.get(parsed.name);
   if (!command) {
-    await message.reply({ content: '`!도움말`로 사용 가능한 명령어를 확인해 주세요.', allowedMentions: { repliedUser: false } });
+    await message.reply({ content: '`!도움말`로 사용 가능한 명령어를 확인해 주세요...', allowedMentions: { repliedUser: false } });
     return true;
   }
   const commandSummary = summarizeCommandForLog(command.name, parsed.args);
@@ -381,7 +381,7 @@ async function dispatchPrefixCommand(
       summary: commandSummary,
       error
     });
-    const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류가 발생했어요.';
+    const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류가 발생했어요...';
     await message.reply({ content: errorMessage, allowedMentions: { repliedUser: false } });
   }
   return true;

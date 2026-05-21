@@ -18,10 +18,10 @@ export class AiService {
     const userUsage = this.usageStore.summarizeUser(params.guildId, params.userId, 1);
     const guildUsage = this.usageStore.summarizeGuild(params.guildId, 1);
     if (userUsage.totalTokens >= this.settings.aiUserDailyTokenLimit) {
-      throw new AiLimitError('오늘 개인 AI 토큰 한도를 이미 사용했어요.');
+      throw new AiLimitError('오늘 개인 AI 토큰 한도를 이미 사용했어요...');
     }
     if (guildUsage.totalTokens >= this.settings.aiGuildDailyTokenLimit) {
-      throw new AiLimitError('오늘 서버 AI 토큰 한도를 이미 사용했어요.');
+      throw new AiLimitError('오늘 서버 AI 토큰 한도를 이미 사용했어요...');
     }
 
     const completion = await this.groq.chat.completions.create({
@@ -43,6 +43,6 @@ export class AiService {
       totalTokens: usage?.total_tokens ?? 0
     });
 
-    return completion.choices[0]?.message?.content?.trim() || '응답이 비어 있어요.';
+    return completion.choices[0]?.message?.content?.trim() || '응답이 비어 있어요...';
   }
 }

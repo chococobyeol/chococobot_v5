@@ -22,7 +22,7 @@ export { mineMessageFilter };
 async function ensureGuildText(interaction: ChatInputCommandInteraction) {
   const channel = interaction.channel;
   if (!channel || channel.type !== ChannelType.GuildText) {
-    throw new Error('서버 텍스트 채널에서만 사용할 수 있어요.');
+    throw new Error('서버 텍스트 채널에서만 사용할 수 있어요...');
   }
   return channel;
 }
@@ -31,7 +31,7 @@ export const cleanupCommands: SlashCommand[] = [
   {
     data: new SlashCommandBuilder()
       .setName('clean-mine')
-      .setDescription('내가 쓴 최근 메시지를 삭제합니다.')
+      .setDescription('내가 쓴 최근 메시지를 삭제해요...')
       .addIntegerOption((option) =>
         option
           .setName('amount')
@@ -56,7 +56,7 @@ export const cleanupCommands: SlashCommand[] = [
   {
     data: new SlashCommandBuilder()
       .setName('clean-all')
-      .setDescription('관리자용: 최근 채팅을 한 번에 삭제합니다.')
+      .setDescription('관리자용: 최근 채팅을 한 번에 삭제해요...')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
       .addIntegerOption((option) =>
         option

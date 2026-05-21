@@ -11,7 +11,7 @@ export const aiCommands: SlashCommand[] = [
         option.setName('prompt').setDescription('질문 또는 요청').setMaxLength(1800).setRequired(true)
       ),
     async execute(interaction, context) {
-      if (!interaction.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+      if (!interaction.guildId) throw new Error('서버에서만 사용할 수 있어요...');
       await interaction.deferReply();
       try {
         const answer = await context.ai.ask({
@@ -33,7 +33,7 @@ export const aiCommands: SlashCommand[] = [
       .addIntegerOption((option) => option.setName('days').setDescription('조회 일수').setMinValue(1).setMaxValue(30))
       .addUserOption((option) => option.setName('user').setDescription('관리자용: 특정 유저 조회')),
     async execute(interaction, context) {
-      if (!interaction.guildId) throw new Error('서버에서만 사용할 수 있어요.');
+      if (!interaction.guildId) throw new Error('서버에서만 사용할 수 있어요...');
       const days = interaction.options.getInteger('days') ?? 1;
       const requestedUser = interaction.options.getUser('user');
       const canQueryOthers = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
