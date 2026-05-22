@@ -32,6 +32,15 @@ const DEFAULT_PREFIX = '!';
 const ALLOWED_PREFIXES = ['!', '?', '.', '~'] as const;
 const MAX_TTS_COMMAND_CHARS = 500;
 const CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT = 1;
+const PENDING_CHANNEL_HISTORY_TTL_MS = 5 * 60 * 1000;
+
+type PendingChannelHistoryRequest = {
+  mode: 'summary' | 'qa';
+  query: string;
+  createdAt: number;
+};
+
+const pendingChannelHistoryRequests = new Map<string, PendingChannelHistoryRequest>();
 
 export type BotContext = {
   settings: Settings;
@@ -151,6 +160,56 @@ function normalizeChannelReference(value: string): string {
   if (normalized === 'memo') return '메모';
   if (normalized === 'bot-test' || normalized === 'bottest') return '봇테스트';
   return normalized;
+}
+
+function pendingChannelHistoryKey(message: Message): string {
+  return `${message.guildId ?? 'dm'}:${message.channelId}:${message.author.id}`;
+}
+
+function getPendingChannelHistoryRequest(message: Message): PendingChannelHistoryRequest | undefined {
+  const key = pendingChannelHistoryKey(message);
+  const pending = pendingChannelHistoryRequests.get(key);
+  if (!pending) return undefined;
+  if (Date.now() - pending.createdAt > PENDING_CHANNEL_HISTORY_TTL_MS) {
+    pendingChannelHistoryRequests.delete(key);
+    return undefined;
+  }
+  return pending;
+}
+
+function setPendingChannelHistoryRequest(message: Message, pending: Omit<PendingChannelHistoryRequest, 'createdAt'>): void {
+  pendingChannelHistoryRequests.set(pendingChannelHistoryKey(message), { ...pending, createdAt: Date.now() });
+}
+
+function clearPendingChannelHistoryRequest(message: Message): void {
+  pendingChannelHistoryRequests.delete(pendingChannelHistoryKey(message));
+}
+
+function channelHistoryModeFromPrompt(prompt: string): 'summary' | 'qa' | null {
+  const normalized = prompt.toLowerCase();
+  if (/요약|정리|summar/i.test(normalized)) return 'summary';
+  if (/질문|물어|뭐|무엇|무슨|왜|어떻게|\?|qa|q&a/i.test(normalized)) return 'qa';
+  return null;
+}
+
+function looksLikeChannelHistoryPrompt(prompt: string): boolean {
+  return Boolean(channelHistoryModeFromPrompt(prompt)) && /채널|<#\d+>|#[^\s]+|내용|기록|대화|메모/.test(prompt);
+}
+
+function findTextChannelFromNaturalReference(message: Message, prompt: string): GuildTextBasedChannel | 'ambiguous' | null {
+  const channels = Array.from(message.guild?.channels.cache.values() ?? []).filter(
+    (candidate): candidate is GuildTextBasedChannel => candidate.type === ChannelType.GuildText
+  );
+  const normalizedPrompt = normalizeChannelReference(prompt);
+  const matches = channels.filter((candidate) => {
+    const normalizedName = normalizeChannelReference(candidate.name);
+    if (normalizedName.length < 2) return false;
+    return normalizedPrompt.includes(normalizedName) || normalizedName.includes(normalizedPrompt);
+  });
+
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length > 1) return 'ambiguous';
+  return null;
 }
 
 function requireGuildMember(message: Message): GuildMember {
@@ -919,6 +978,71 @@ async function handleNaturalLanguageRoute(
   }
 }
 
+async function handlePendingChannelHistoryReply(
+  message: Message,
+  prompt: string,
+  context: BotContext
+): Promise<boolean> {
+  const pending = getPendingChannelHistoryRequest(message);
+  if (!pending) return false;
+
+  const targetChannel = findTextChannelFromNaturalReference(message, prompt);
+  if (targetChannel && targetChannel !== 'ambiguous') {
+    clearPendingChannelHistoryRequest(message);
+    return handleChannelHistoryPlan(
+      message,
+      {
+        kind: 'channel-history',
+        mode: pending.mode,
+        targetChannelReference: `<#${targetChannel.id}>`,
+        query: pending.query
+      },
+      context
+    );
+  }
+
+  if (targetChannel === 'ambiguous') {
+    await message.reply({ content: '비슷한 채널이 여러 개 있어요... 정확한 채널 멘션으로 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  return false;
+}
+
+async function handleDirectChannelHistoryPrompt(
+  message: Message,
+  prompt: string,
+  context: BotContext
+): Promise<boolean> {
+  const mode = channelHistoryModeFromPrompt(prompt);
+  if (!mode || !looksLikeChannelHistoryPrompt(prompt)) return false;
+
+  const targetChannel = findTextChannelFromNaturalReference(message, prompt);
+  if (targetChannel && targetChannel !== 'ambiguous') {
+    clearPendingChannelHistoryRequest(message);
+    return handleChannelHistoryPlan(
+      message,
+      {
+        kind: 'channel-history',
+        mode,
+        targetChannelReference: `<#${targetChannel.id}>`,
+        query: prompt
+      },
+      context
+    );
+  }
+
+  if (targetChannel === 'ambiguous') {
+    setPendingChannelHistoryRequest(message, { mode, query: prompt });
+    await message.reply({ content: '비슷한 채널이 여러 개 있어요... 어느 채널을 요약할지 채널 멘션으로 말해 주세요...', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  setPendingChannelHistoryRequest(message, { mode, query: prompt });
+  await message.reply({ content: '어느 채널을 요약할지 못 찾았어요... 채널 이름이나 멘션을 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
+  return true;
+}
+
 function extractLeadingChannelReference(text: string): string | undefined {
   const [first] = text.trim().split(/\s+/);
   if (!first) return undefined;
@@ -942,6 +1066,8 @@ export async function handleMessageCreate(
     }
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
+      if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
+      if (await handleDirectChannelHistoryPrompt(message, aiPrompt, context)) return true;
       if (context.aiCommandPlanner) {
         try {
           const member = message.member as GuildMember | null;
@@ -972,6 +1098,12 @@ export async function handleMessageCreate(
                 context
               );
             case 'clarify':
+              if (looksLikeChannelHistoryPrompt(aiPrompt)) {
+                const mode = channelHistoryModeFromPrompt(aiPrompt) ?? 'summary';
+                setPendingChannelHistoryRequest(message, { mode, query: aiPrompt });
+              }
+              await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+              return true;
             case 'unavailable':
               await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
               return true;

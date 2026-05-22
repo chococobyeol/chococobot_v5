@@ -468,7 +468,62 @@ describe('handleMessageCreate', () => {
         ])
       })
     );
+    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('remembers a pending channel-history clarification and uses the next channel answer', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const memoChannel = {
+      id: 'memo-2',
+      name: '메모채널',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: vi.fn(async () =>
+          [
+            {
+              id: 'memo-message-1',
+              channelId: 'memo-2',
+              createdTimestamp: Date.now(),
+              content: '메모 내용',
+              author: { id: 'user-2', username: 'writer', bot: false },
+              member: { displayName: '작성자' }
+            }
+          ] as any
+        )
+      }
+    };
+    const first = makeMessage('!? 내용 요약해줘');
+    const second = makeMessage('!? 메모 채널');
+    first.guild.channels.cache.set('memo-2', memoChannel);
+    second.guild.channels.cache.set('memo-2', memoChannel);
+
+    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
+    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+
+    expect(first.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('어느 채널을 요약할지')
+      })
+    );
+    expect(second.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '채널 기록 답변'
+      })
+    );
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('채널: <#memo-2>') })
+        ])
+      })
+    );
+    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
   });
 
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {
