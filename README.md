@@ -160,6 +160,15 @@ The setup script deletes the logging server's existing channels before recreatin
 
 On startup the bot prints `@discordjs/voice`'s dependency report and verifies `@snazzah/davey` can be imported. If voice connection fails with `4017`, treat it as a DAVE/E2EE dependency/version problem first.
 
+
+## Operator-only commands
+
+These commands are intentionally not shown in the public `!도움말` output.
+
+| Command | Scope | Description |
+| --- | --- | --- |
+| `!로그채널삭제` / `!로그정리` / `!로그삭제` | `LOGGING_GUILD_ID` server only, Discord administrator only | Deletes managed bot log text channels (`LOG-*` or `Source guild:` topic) and clears stored log-channel mappings. Use this only when rebuilding the logging server layout. |
+
 ## Render deployment
 
 Use a Render **Background Worker** for the Discord gateway process (no public HTTP server is required).

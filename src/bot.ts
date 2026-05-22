@@ -662,7 +662,6 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             `${prefix}tts엔진 [edge|gtts] / ${prefix}engine [edge|gtts] / ${prefix}tts-engine [edge|gtts] / ${prefix}ttsengine [edge|gtts] / ${prefix}엔진 [edge|gtts] — 내 TTS 엔진 확인/설정...`,
             `현재 프리픽스 뒤에 ?를 붙이고 공백을 넣어 AI 채팅해요... 예: \`${prefix}? 안녕\``,
             `${prefix}기억삭제 / ${prefix}ai-memory / ${prefix}ai-reset-memory / ${prefix}memory-reset / ${prefix}memory-clear / ${prefix}메모리삭제 / ${prefix}기억초기화 — 서버 AI 기억 초기화... (서버 관리자만 가능해요...)`,
-            `${prefix}로그채널삭제 / ${prefix}로그정리 / ${prefix}로그삭제 — 로그 서버에서 봇 로그 채널을 삭제해요... (로그 서버 관리자만 가능해요...)`,
             `${prefix}프리픽스 / ${prefix}prefix / ${prefix}command-prefix — 서버 프리픽스 확인/변경... (서버 관리자만 가능해요...)`
           ].join('\n'),
           allowedMentions: { repliedUser: false }
