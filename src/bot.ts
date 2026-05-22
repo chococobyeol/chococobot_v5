@@ -4,10 +4,18 @@ import type { PrefixCommand } from './types.js';
 import type { Settings } from './config.js';
 import type { UsageStore } from './services/usageStore.js';
 import { AiService } from './services/aiService.js';
+import type { AiChatMessage } from './services/aiService.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
+import { ConfirmationManager, type ConfirmationScope } from './services/confirmationManager.js';
+import {
+  assessChannelHistoryQuery,
+  fetchChannelHistory,
+  formatChannelHistoryMessages
+} from './services/channelHistoryService.js';
 import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
 import { SqliteAiMemoryStore } from './services/aiMemoryStore.js';
+import { routeNaturalLanguageCommand, type RoutedNaturalLanguageCommand } from './services/nlCommandRouter.js';
 import { normalizeTtsEngineName, TtsService } from './services/ttsService.js';
 import { VoiceService } from './services/voiceService.js';
 import {
@@ -47,10 +55,6 @@ export function parsePrefixCommand(content: string, prefix = DEFAULT_PREFIX): Pa
   return { name: rawName.toLowerCase(), args };
 }
 
-function isBareAiChatTrigger(content: string, prefix: string): boolean {
-  return content.trim() === `${prefix}?`;
-}
-
 function getGuildPrefix(context: BotContext, guildId?: string): string {
   if (!guildId) return DEFAULT_PREFIX;
   return context.voiceSettings.getCommandPrefix(guildId) ?? DEFAULT_PREFIX;
@@ -79,9 +83,15 @@ function resolveTargetGuildTextChannel(message: Message, rawChannel?: string): G
   const mentioned = message.mentions.channels.first();
   if (mentioned?.type === ChannelType.GuildText) return mentioned;
 
-  const channelId = rawChannel.trim().replace(/^<#/, '').replace(/>$/, '');
+  const channelToken = rawChannel.trim().replace(/^<#/, '').replace(/>$/, '');
+  const channelId = channelToken.replace(/^#/, '');
   const channel = message.guild?.channels.cache.get(channelId);
   if (channel?.type === ChannelType.GuildText) return channel;
+
+  const namedChannel = message.guild?.channels.cache.find(
+    (candidate) => candidate.type === ChannelType.GuildText && candidate.name === channelId
+  );
+  if (namedChannel?.type === ChannelType.GuildText) return namedChannel;
 
   throw new Error('설정할 텍스트 채널을 찾을 수 없어요... `!tts채널 #채널`처럼 입력해 주세요...');
 }
@@ -476,6 +486,31 @@ async function dispatchPrefixCommand(
   const prefix = getGuildPrefix(context, message.guildId);
   const parsed = parsePrefixCommand(message.content, prefix);
   if (!parsed) return false;
+  return dispatchResolvedCommand(message, commands, context, parsed, prefix);
+}
+
+async function dispatchCommandQuery(
+  message: Message,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  query: string
+): Promise<boolean> {
+  if (message.author.bot) return false;
+  if (!message.guildId) return false;
+  const parsed = parsePrefixCommand(`${DEFAULT_PREFIX}${query.trim()}`, DEFAULT_PREFIX);
+  if (!parsed) return false;
+  return dispatchResolvedCommand(message, commands, context, parsed, DEFAULT_PREFIX);
+}
+
+async function dispatchResolvedCommand(
+  message: Message,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  parsed: ParsedPrefixCommand,
+  prefix: string
+): Promise<boolean> {
+  const guildId = message.guildId;
+  if (!guildId) return false;
   const command = commands.get(parsed.name);
   if (!command) {
     if (parsed.name === '?') return false;
@@ -484,7 +519,7 @@ async function dispatchPrefixCommand(
   }
   const commandSummary = summarizeCommandForLog(command.name, parsed.args);
   await context.activityLog.logCommand({
-    guildId: message.guildId,
+    guildId,
     guildName: message.guild?.name,
     channelId: message.channelId,
     userId: message.author.id,
@@ -497,7 +532,7 @@ async function dispatchPrefixCommand(
   } catch (error) {
     logger.error(error);
     await context.activityLog.logError({
-      guildId: message.guildId,
+      guildId,
       guildName: message.guild?.name,
       channelId: message.channelId,
       userId: message.author.id,
@@ -510,6 +545,163 @@ async function dispatchPrefixCommand(
     await message.reply({ content: errorMessage, allowedMentions: { repliedUser: false } });
   }
   return true;
+}
+
+const DISCORD_SAFE_CHUNK_LIMIT = 1900;
+
+function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT): string[] {
+  const normalized = content.trim();
+  if (!normalized) return [];
+  const chunks: string[] = [];
+  let remaining = normalized;
+  while (remaining.length > limit) {
+    let sliceIndex = remaining.lastIndexOf('\n', limit);
+    if (sliceIndex < Math.floor(limit * 0.5)) sliceIndex = limit;
+    chunks.push(remaining.slice(0, sliceIndex).trim());
+    remaining = remaining.slice(sliceIndex).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks.filter(Boolean).map((chunk) => (chunk.length > 2000 ? chunk.slice(0, limit) : chunk));
+}
+
+async function replyWithChunks(message: Message, content: string): Promise<void> {
+  const chunks = chunkDiscordMessage(content);
+  if (!chunks.length) {
+    await message.reply({ content: '응답이 비어 있어요...', allowedMentions: { parse: [], repliedUser: false } });
+    return;
+  }
+
+  await message.reply({ content: chunks[0], allowedMentions: { parse: [], repliedUser: false } });
+  const channel = message.channel as GuildTextBasedChannel;
+  for (const chunk of chunks.slice(1)) {
+    await channel.send({ content: chunk, allowedMentions: { parse: [], repliedUser: false } });
+  }
+}
+
+function buildChannelHistoryMessages(
+  history: Awaited<ReturnType<typeof fetchChannelHistory>>,
+  targetChannelId: string,
+  mode: 'summary' | 'qa',
+  query: string
+): AiChatMessage[] {
+  const messages: AiChatMessage[] = [
+    { role: 'system', content: `당신은 Discord 채널 기록을 바탕으로 답하는 도우미예요.` },
+    { role: 'system', content: `대상 채널: <#${targetChannelId}>` },
+    ...formatChannelHistoryMessages(history, targetChannelId)
+  ];
+  messages.push({
+    role: 'user',
+    content:
+      mode === 'summary'
+        ? `이 채널 대화를 한국어로 간결하게 요약해 주세요...\n${query}`
+        : `다음 채널 기록을 바탕으로 질문에 답해 주세요...\n${query}`
+  });
+  return messages;
+}
+
+async function handleNaturalLanguageRoute(
+  message: Message,
+  route: RoutedNaturalLanguageCommand,
+  context: BotContext,
+  commands: Collection<string, PrefixCommand>,
+  confirmations: ConfirmationManager
+): Promise<boolean> {
+  if (!message.guildId) return false;
+
+  switch (route.kind) {
+    case 'clarify':
+      await message.reply({ content: route.message, allowedMentions: { repliedUser: false } });
+      return true;
+    case 'command':
+      return dispatchCommandQuery(message, commands, context, route.query);
+    case 'confirmation': {
+      const scope: ConfirmationScope = {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        intent: route.intent,
+        targetChannelId: extractLeadingChannelReference(route.normalizedArgs),
+        normalizedArgs: route.normalizedArgs
+      };
+      const confirmation = confirmations.create(scope, route.preview);
+      await message.reply({
+        content: [route.preview, `확인 토큰: \`${confirmation.token}\``, '확인을 처리하는 흐름은 다음 작업에서 이어갈 수 있어요...'].join('\n'),
+        allowedMentions: { repliedUser: false }
+      });
+      return true;
+    }
+    case 'channel-history': {
+      const targetChannel = resolveTargetGuildTextChannel(message, route.targetChannelReference);
+      const assessment = assessChannelHistoryQuery(route.query);
+      if (assessment.status !== 'ready') {
+        await message.reply({ content: assessment.prompt, allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      const history = await fetchChannelHistory(targetChannel, {
+        limit: assessment.limit,
+        lookbackHours: assessment.lookbackHours
+      });
+      if (!history.length) {
+        await message.reply({ content: '대상 채널에서 읽을 기록을 찾지 못했어요...', allowedMentions: { repliedUser: false } });
+        return true;
+      }
+
+      const answer = await context.ai.askMessages({
+        guildId: message.guildId,
+        userId: message.author.id,
+        usageScope: 'summary',
+        messages: buildChannelHistoryMessages(history, targetChannel.id, route.mode, route.query)
+      });
+      await replyWithChunks(message, answer);
+      return true;
+    }
+  }
+}
+
+function extractLeadingChannelReference(text: string): string | undefined {
+  const [first] = text.trim().split(/\s+/);
+  if (!first) return undefined;
+  if (first.startsWith('<#') || first.startsWith('#')) return first;
+  return undefined;
+}
+
+export async function handleMessageCreate(
+  message: Message,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  confirmations: ConfirmationManager
+): Promise<boolean> {
+  if (!message.guildId) return false;
+  if (!message.author.bot) {
+    if (await dispatchPrefixCommand(message, commands, context)) return true;
+    const prefix = getGuildPrefix(context, message.guildId);
+    const routed = routeNaturalLanguageCommand(message.content, prefix);
+    if (routed && (await handleNaturalLanguageRoute(message, routed, context, commands, confirmations))) {
+      return true;
+    }
+    const aiPrompt = parseAiChatTrigger(message.content, prefix);
+    if (aiPrompt) {
+      await context.aiChat.handlePrompt(message, aiPrompt);
+      return true;
+    }
+  }
+  if (message.author.bot && !context.settings.ttsReadBotMessages) return false;
+  const queued = await context.voice.enqueueMessage(message);
+  if (queued) {
+    await context.activityLog.logTtsRequest({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.author.username,
+      source: 'watched-channel',
+      engine: context.voice.getUserTtsEngine(message.guildId, message.author.id),
+      voice: context.voice.getUserVoicePreset(message.guildId, message.author.id),
+      textLength: message.cleanContent.length
+    });
+  }
+  return Boolean(queued);
 }
 
 export async function createBot(
@@ -532,6 +724,7 @@ export async function createBot(
   const voiceSettings = new SqliteVoiceSettingsStore(settings.databasePath);
   const activityLog = new BotActivityLogService(client, new SqliteBotActivityLogStore(settings.databasePath), settings.loggingGuildId);
   const ai = new AiService(settings, usageStore);
+  const confirmations = new ConfirmationManager();
   const context: BotContext = {
     settings,
     usageStore,
@@ -561,38 +754,7 @@ export async function createBot(
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (!message.guildId) return;
-    if (!message.author.bot) {
-      if (await dispatchPrefixCommand(message, commands, context)) return;
-      const prefix = getGuildPrefix(context, message.guildId);
-      if (isBareAiChatTrigger(message.content, prefix)) {
-        await message.reply({
-          content: `${prefix}? 뒤에 질문이나 요청을 적어 주세요...`,
-          allowedMentions: { repliedUser: false }
-        });
-        return;
-      }
-      const aiPrompt = parseAiChatTrigger(message.content, prefix);
-      if (aiPrompt) {
-        await context.aiChat.handlePrompt(message, aiPrompt);
-        return;
-      }
-    }
-    if (message.author.bot && !settings.ttsReadBotMessages) return;
-    const queued = await context.voice.enqueueMessage(message);
-    if (queued) {
-      await context.activityLog.logTtsRequest({
-        guildId: message.guildId,
-        guildName: message.guild?.name,
-        channelId: message.channelId,
-        userId: message.author.id,
-        userName: message.author.username,
-        source: 'watched-channel',
-        engine: context.voice.getUserTtsEngine(message.guildId, message.author.id),
-        voice: context.voice.getUserVoicePreset(message.guildId, message.author.id),
-        textLength: message.cleanContent.length
-      });
-    }
+    await handleMessageCreate(message, commands, context, confirmations);
   });
 
   return { client, context, commands };
