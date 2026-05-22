@@ -5,7 +5,7 @@
   "description": "DAVE-safe Discord bot with cleanup, voice TTS, mini games, and Groq AI usage monitoring.",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
