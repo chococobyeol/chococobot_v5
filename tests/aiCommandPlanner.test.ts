@@ -158,10 +158,24 @@ describe('AiCommandPlanner', () => {
     expect(system).toContain('없는 채널명은 만들지 말고 clarify');
     expect(system).toContain('특정 주제, 단어, 언급');
     expect(system).toContain('targetChannelReference를 "서버 전체"');
+    expect(system).not.toContain('이전 채널 기록 요청: mode=');
     expect(user.length).toBeLessThanOrEqual(limits.maxPlannerPromptChars);
     expect(commandLines.length).toBeLessThanOrEqual(limits.maxCommands);
     expect(commandLines.every((line) => line.length <= limits.maxCommandLineChars)).toBe(true);
     expect(channelLines.length).toBeLessThanOrEqual(limits.maxChannels);
     expect(channelLines.every((line) => line.length <= limits.maxChannelLineChars)).toBe(true);
   });
+
+  it('includes pending channel-history context for follow-up planning', () => {
+    const messages = buildPlannerMessages(makeMessage(), '왜 없지? 짬뽕지존은?', {
+      prefix: '!',
+      commands: makeCommands(1),
+      availableChannels: [{ id: 'delivery-1', name: '배달', mention: '<#delivery-1>' }],
+      pendingHistory: { mode: 'summary', query: '짬뽕' }
+    });
+
+    expect(messages[0].content).toContain('이전 채널 기록 요청: mode=summary, query=짬뽕');
+    expect(messages[0].content).toContain('짬뽕지존');
+  });
+
 });

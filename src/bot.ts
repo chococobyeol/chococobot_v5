@@ -46,6 +46,10 @@ type PendingChannelHistoryRequest = {
 
 const pendingChannelHistoryRequests = new Map<string, PendingChannelHistoryRequest>();
 
+export function clearPendingChannelHistoryRequestsForTests(): void {
+  pendingChannelHistoryRequests.clear();
+}
+
 export type BotContext = {
   settings: Settings;
   usageStore: UsageStore;
@@ -811,22 +815,52 @@ function buildChannelHistoryMessages(
   return messages;
 }
 
+function cleanHistoryTopic(rawTopic: string | undefined): string | null {
+  const topic = rawTopic
+    ?.trim()
+    .replace(/^(이|그|저)\s+/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^(?:대화내용|대화 내용|대화|서버|채널|기록)\s*(?:중에|에서|에|대용중에)?\s*/, '')
+    .replace(/에\s*(?:대한|관한)$/i, '')
+    .replace(/\s*(?:나|이나|이랑|랑)\s*(?:뭐\s*)?(?:그런\s*)?(?:비슷한\s*)?거$/i, '')
+    .replace(/\s*(?:뭐\s*)?(?:그런\s*)?비슷한\s*거$/i, '')
+    .replace(/(?:은|는|이|가|을|를|도|만)$/u, '')
+    .trim();
+  if (topic && topic.length >= 2 && !/^(대화내용|대화 내용|대화|서버|채널|기록|내용)$/.test(topic)) return topic;
+  return null;
+}
+
 function extractHistorySearchTopic(query: string): string | null {
+  if (/요약|정리|최근.*(?:대화|내용)|무슨\s*대화|뭐.*말했/i.test(query) && !/찾아|검색|있나|있는지|있었는지|나왔|언급|비슷|관련/i.test(query)) {
+    return null;
+  }
+
   const patterns = [
     /^\s*[\"“”'‘’]?(.+?)[\"“”'‘’]?\s*(?:와|과|랑|이랑|이나|나)?\s*(?:뭐\s*)?(?:그런\s*)?비슷한\s*거/i,
-    /(?:대화내용|대화\s*내용|서버|채널|기록)?\s*(?:중에|에서)?\s*["“”'‘’]?(.+?)["“”'‘’]?(?:에\s*대한|에\s*관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|찾아봐|찾아줘|찾아|검색해|검색해줘|검색)/i,
-    /["“”'‘’]?(.+?)["“”'‘’]?(?:에\s*대한|에\s*관한|관련)\s*(?:내용|얘기|언급)/i
+    /(?:대화내용|대화\s*내용|대화|서버|채널|기록)?\s*(?:중에|에서|대용중에)?\s*[\"“”'‘’]?(.+?)[\"“”'‘’]?(?:에\s*대한|에\s*관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|봐줘|찾아봐|찾아줘|찾아|검색해|검색해줘|검색)/i,
+    /[\"“”'‘’]?(.+?)[\"“”'‘’]?(?:에\s*대한|에\s*관한|관련)\s*(?:내용|얘기|언급)/i
   ];
   for (const pattern of patterns) {
-    const match = query.match(pattern);
-    const rawTopic = match?.[1]?.trim().replace(/^(이|그|저)\s+/, '').replace(/\s+/g, ' ');
-    const topic = rawTopic
-      ?.replace(/^(?:대화내용|대화 내용|서버|채널|기록)\s*(?:중에|에서|에)?\s*/, '')
-      .replace(/에\s*(?:대한|관한)$/i, '')
-      .replace(/\s*(?:나|이나|이랑|랑)\s*(?:뭐\s*)?(?:그런\s*)?(?:비슷한\s*)?거$/i, '')
-      .replace(/\s*(?:뭐\s*)?(?:그런\s*)?비슷한\s*거$/i, '')
-      .trim();
-    if (topic && topic.length >= 2 && !/^(대화내용|대화 내용|서버|채널|기록)$/.test(topic)) return topic;
+    const topic = cleanHistoryTopic(query.match(pattern)?.[1]);
+    if (topic) return topic;
+  }
+
+  if (/^[0-9A-Za-z가-힣]+$/.test(query) && !/^(최근|요약|정리|내용|대화|채널|서버)$/i.test(query.trim())) {
+    return cleanHistoryTopic(query);
+  }
+  return null;
+}
+
+function extractPendingHistoryRefinementTopic(prompt: string): string | null {
+  const normalized = prompt.trim();
+  const patterns = [
+    /([0-9A-Za-z가-힣]{2,30})(?:은|는|이|가|도)?\s*\??$/u,
+    /(?:왜\s*없지|없어|그럼|그러면|혹시|아니)?[\s?!.…]*(.+?)(?:은|는|이|가|도)?\s*\??$/u,
+    /(.+?)(?:도|은|는)\s*\??$/u
+  ];
+  for (const pattern of patterns) {
+    const topic = cleanHistoryTopic(normalized.match(pattern)?.[1]);
+    if (topic && !isBotBehaviorComplaint(topic)) return topic;
   }
   return null;
 }
@@ -1240,6 +1274,13 @@ async function handlePendingChannelHistoryReply(
     return true;
   }
 
+  if (looksLikeChannelHistoryPrompt(prompt) && extractHistorySearchTopic(prompt)) return false;
+
+  const refinedTopic = extractPendingHistoryRefinementTopic(prompt);
+  if (refinedTopic) {
+    return handleGuildChannelHistoryPlan(message, pending.mode, refinedTopic, context);
+  }
+
   return false;
 }
 
@@ -1305,7 +1346,7 @@ export async function handleMessageCreate(
     }
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
-      if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
+      const pendingHistoryRequest = getPendingChannelHistoryRequest(message);
       if (context.aiCommandPlanner) {
         try {
           const member = message.member as GuildMember | null;
@@ -1316,10 +1357,12 @@ export async function handleMessageCreate(
             userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
             botVoiceConnected: context.voice.isConnected(message.guildId),
             maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
+            pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
             onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
           });
           switch (plan.kind) {
             case 'chat':
+              if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
               if (await handleDirectChannelHistoryPrompt(message, aiPrompt, context)) return true;
               await context.aiChat.handlePrompt(message, aiPrompt);
               return true;
@@ -1361,6 +1404,7 @@ export async function handleMessageCreate(
           return true;
         }
       }
+      if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
       const fallbackRoute = routeNaturalLanguageCommand(message.content, prefix);
       if (fallbackRoute && (await handleNaturalLanguageRoute(message, fallbackRoute, context, commands, confirmations))) {
         return true;

@@ -25,6 +25,7 @@ export type AiCommandPlannerOptions = {
   userVoiceChannel?: { id: string; name?: string | null } | null;
   botVoiceConnected?: boolean;
   maxCompletionTokens?: number;
+  pendingHistory?: { mode: 'summary' | 'qa'; query: string } | null;
   onDiagnostic?: (details: AiPlannerDiagnostic) => Promise<void> | void;
 };
 
@@ -147,6 +148,7 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
       'channel-history의 targetChannelReference는 반드시 아래 참조 가능한 텍스트 채널 목록의 mention 또는 정확한 이름을 그대로 복사해요. 없는 채널명은 만들지 말고 clarify로 어느 채널인지 물어봐요.',
       '사용자가 서버/채널 대화에서 특정 주제, 단어, 언급, 식당명, 사람, 사건을 찾아보라고 하면 일반 chat이 아니라 channel-history를 선택해요.',
       '채널을 지정하지 않은 "이 서버에 ~ 있는지 찾아봐", "최근 무슨 대화 했지", "좀아까 뭐라고 했지"는 targetChannelReference를 "서버 전체"로 두고 channel-history를 선택해요.',
+      '이전 채널 기록 요청이 있으면 후속 발화도 문맥으로 해석해요. 예: "#배달 여기서 봐줘"는 이전 query를 그 채널에서 다시 검색, "왜 없지? 짬뽕지존은?"은 query를 "짬뽕지존"으로 바꿔 서버 전체에서 다시 검색해요.',
       '말해봐/라고 해봐는 무조건 TTS가 아니에요. 음성채널, TTS, 읽어줘처럼 음성 의도가 명확할 때만 말 명령을 선택해요.',
       '음성 명령인데 사용자가 음성 채널에 없으면 command가 아니라 unavailable을 선택해요.',
       '삭제, 프리픽스 변경, 기억 삭제, TTS 채널 변경은 명확해도 query만 만들고 실제 확인은 코드가 처리해요.',
@@ -159,6 +161,7 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
       `사용자 음성 채널: ${userVoice}`,
       `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
       `현재 프리픽스: ${options.prefix}`,
+      options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined
     ]
       .filter(Boolean)

@@ -1,6 +1,6 @@
 import { ChannelType, Collection } from 'discord.js';
-import { describe, expect, it, vi } from 'vitest';
-import { createPrefixCommands, handleMessageCreate } from '../src/bot.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { clearPendingChannelHistoryRequestsForTests, createPrefixCommands, handleMessageCreate } from '../src/bot.js';
 import { ConfirmationManager } from '../src/services/confirmationManager.js';
 import { InMemoryVoiceSettingsStore } from '../src/services/voiceSettingsStore.js';
 
@@ -106,6 +106,9 @@ function makeContext(overrides: Record<string, unknown> = {}) {
 }
 
 describe('handleMessageCreate', () => {
+  beforeEach(() => {
+    clearPendingChannelHistoryRequestsForTests();
+  });
   it('keeps existing prefix commands ahead of the natural-language router', async () => {
     const commands = createPrefixCommands();
     const context = makeContext();
@@ -524,7 +527,7 @@ describe('handleMessageCreate', () => {
         ])
       })
     );
-    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(2);
   });
 
   it('summarizes recent conversations across text channels when no channel is specified', async () => {
@@ -707,16 +710,88 @@ describe('handleMessageCreate', () => {
     }));
   });
 
+  it('treats short planner queries as topics and refines them from follow-up questions', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi
+          .fn()
+          .mockResolvedValueOnce({
+            kind: 'channel-history',
+            mode: 'summary',
+            targetChannelReference: '서버 전체',
+            query: '짬뽕'
+          })
+          .mockResolvedValueOnce({
+            kind: 'channel-history',
+            mode: 'summary',
+            targetChannelReference: '서버 전체',
+            query: '짬뽕지존'
+          })
+      }
+    });
+    const first = makeMessage('!? 대화 대용중에 짬뽕에 관한 내용 있나?');
+    const second = makeMessage('!? 왜 없지? 짬뽕지존은?');
+    const generalMessages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'jjamppong-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '짬뽕지존 얘기가 있었어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+    (first.guild.channels.cache.get('channel-1') as any).messages = generalMessages;
+    (second.guild.channels.cache.get('channel-1') as any).messages = generalMessages;
+
+    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
+    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+
+    expect(context.ai.askMessages).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 짬뽕') }),
+          expect.objectContaining({ content: expect.stringContaining('짬뽕지존 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(context.ai.askMessages).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 짬뽕지존') }),
+          expect.objectContaining({ content: expect.stringContaining('짬뽕지존 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(2);
+  });
+
   it('remembers a successful server topic search for channel-only follow-up searches', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       aiCommandPlanner: {
-        plan: vi.fn(async () => ({
-          kind: 'channel-history',
-          mode: 'summary',
-          targetChannelReference: '서버 전체',
-          query: '치킨 비슷한거'
-        }))
+        plan: vi
+          .fn()
+          .mockResolvedValueOnce({
+            kind: 'channel-history',
+            mode: 'summary',
+            targetChannelReference: '서버 전체',
+            query: '치킨 비슷한거'
+          })
+          .mockResolvedValueOnce({
+            kind: 'channel-history',
+            mode: 'summary',
+            targetChannelReference: '#배달',
+            query: '치킨 비슷한거'
+          })
       }
     });
     const first = makeMessage('!? 치킨 비슷한거에 대한 내용 대화중에 있나 봐줘');
@@ -770,7 +845,7 @@ describe('handleMessageCreate', () => {
         ])
       })
     );
-    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(2);
   });
 
   it('retries the previous missing server topic in a channel named by the next message', async () => {
