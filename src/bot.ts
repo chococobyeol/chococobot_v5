@@ -141,12 +141,16 @@ function resolveTargetGuildTextChannel(message: Message, rawChannel?: string): G
 }
 
 function normalizeChannelReference(value: string): string {
-  return value
+  const normalized = value
     .trim()
     .toLowerCase()
     .replace(/^<#/, '')
     .replace(/^#/, '')
+    .replace(/(?:채널|방|창)$/g, '')
     .replace(/[^0-9a-z가-힣]/gi, '');
+  if (normalized === 'memo') return '메모';
+  if (normalized === 'bot-test' || normalized === 'bottest') return '봇테스트';
+  return normalized;
 }
 
 function requireGuildMember(message: Message): GuildMember {
@@ -843,7 +847,10 @@ async function handleChannelHistoryPlan(
       lookbackHours: assessment.lookbackHours
     });
     if (!history.length) {
-      await message.reply({ content: '대상 채널에서 읽을 기록을 찾지 못했어요...', allowedMentions: { repliedUser: false } });
+      await message.reply({
+        content: `<#${targetChannel.id}>에서 최근 ${assessment.limit}개 또는 ${assessment.lookbackHours}시간 안에 읽을 메시지를 찾지 못했어요... 채널이나 범위를 다시 말해 주세요...`,
+        allowedMentions: { repliedUser: false }
+      });
       return true;
     }
 

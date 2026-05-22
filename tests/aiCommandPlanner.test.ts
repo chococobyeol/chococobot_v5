@@ -151,6 +151,7 @@ describe('AiCommandPlanner', () => {
     const channelLines = system.split('\n').filter((line) => line.startsWith('- <#channel-'));
 
     expect(system.length).toBeLessThanOrEqual(limits.maxSystemPromptChars);
+    expect(system).toContain('없는 채널명은 만들지 말고 clarify');
     expect(user.length).toBeLessThanOrEqual(limits.maxPlannerPromptChars);
     expect(commandLines.length).toBeLessThanOrEqual(limits.maxCommands);
     expect(commandLines.every((line) => line.length <= limits.maxCommandLineChars)).toBe(true);

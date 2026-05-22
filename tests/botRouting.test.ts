@@ -417,19 +417,21 @@ describe('handleMessageCreate', () => {
         plan: vi.fn(async () => ({
           kind: 'channel-history',
           mode: 'summary',
-          targetChannelReference: '#general',
-          query: '요약해줘'
+          targetChannelReference: '#memo',
+          query: '메모 채널 내용 요약해줘'
         }))
       }
     });
     const message = makeMessage('!? 메모 채널의 내용을 요약해줘');
-    const targetChannel = message.guild.channels.cache.get('channel-1') as any;
-    targetChannel.messages = {
+    const memoChannel = {
+      id: 'memo-1',
+      name: '메모채널',
+      type: ChannelType.GuildText,
       fetch: vi.fn(async () =>
         [
           {
             id: '1',
-            channelId: 'channel-1',
+            channelId: 'memo-1',
             createdTimestamp: Date.now(),
             content: '첫 메시지',
             author: { id: 'user-1', username: 'tester', bot: false },
@@ -437,7 +439,7 @@ describe('handleMessageCreate', () => {
           },
           {
             id: '2',
-            channelId: 'channel-1',
+            channelId: 'memo-1',
             createdTimestamp: Date.now(),
             content: '봇 메시지',
             author: { id: 'bot-1', username: 'ChococoBot', bot: true },
@@ -446,6 +448,10 @@ describe('handleMessageCreate', () => {
         ] as any
       )
     };
+    (memoChannel as any).messages = {
+      fetch: memoChannel.fetch
+    };
+    message.guild.channels.cache.set('memo-1', memoChannel);
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
@@ -453,6 +459,13 @@ describe('handleMessageCreate', () => {
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
         content: '채널 기록 답변'
+      })
+    );
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('채널: <#memo-1>') })
+        ])
       })
     );
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
