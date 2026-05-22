@@ -3,7 +3,7 @@ services:
     name: chococobot-v5
     runtime: node
     plan: starter
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && ./scripts/setup-python-tts.sh && npm run build
     startCommand: npm start
     disk:
       name: chococobot-data
@@ -14,6 +14,8 @@ services:
         value: production
       - key: NODE_VERSION
         value: 22.22.0
+      - key: PYTHON_BIN
+        value: /opt/render/project/src/.venv/bin/python
       - key: DISCORD_TOKEN
         sync: false
       - key: DATABASE_PATH

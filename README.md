@@ -69,6 +69,7 @@ Optional v1 settings:
 | `DATABASE_PATH` | `data/chococobot.sqlite3` | SQLite path for bot state. Use a persistent path such as `/var/data/chococobot.sqlite3` on Render. |
 | `LOGGING_GUILD_ID` | `1507058598423826533` | Dedicated Discord server for bot activity logs and test channels. |
 | `VOICE_IDLE_LEAVE_MS` | `600000` | How long the bot stays in voice after the queue becomes idle before auto-leaving. |
+| `PYTHON_BIN` | `python3` | Python executable used for TTS. On Render this should point to the build-created venv, e.g. `/opt/render/project/src/.venv/bin/python`. |
 | `CLEAN_MINE_DEFAULT_TARGET` | `500` | Default target count for `!청소` when no number is provided. |
 | `CLEAN_MINE_MAX_LIMIT` | `500` | Maximum accepted target count for own-message cleanup. |
 | `CLEAN_ALL_DEFAULT_TARGET` | `1000` | Default target count for `!대청소` when no number is provided. |
@@ -116,8 +117,8 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!tts엔진 edge` / `!tts엔진 gtts` stores the TTS engine for that user.
 - Aliases such as `!tts엔진 엣지`, `!tts엔진 구글`, and `!tts엔진 google` are also accepted.
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.
-- TTS synthesis does not fall back to another engine automatically; if the selected engine fails, the bot logs the error and stays silent.
-- The first TTS request auto-installs the Python package for the selected engine if it is missing.
+- TTS synthesis retries with `gtts` when the selected `edge` engine fails and logs the underlying error.
+- Hosted environments that enforce PEP 668 may reject runtime `pip install --user`. On Render, run `./scripts/setup-python-tts.sh` during build and set `PYTHON_BIN=/opt/render/project/src/.venv/bin/python`.
 
 ## AI chat behavior
 
@@ -173,7 +174,7 @@ These commands are intentionally not shown in the public `!도움말` output.
 
 Use a Render **Background Worker** for the Discord gateway process (no public HTTP server is required).
 
-- Build command: `npm install && npm run build`
+- Build command: `npm install && ./scripts/setup-python-tts.sh && npm run build`
 - Start command: `npm start`
 - Instance type: Starter or larger
 - Required secret: `DISCORD_TOKEN`
