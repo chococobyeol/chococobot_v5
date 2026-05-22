@@ -205,7 +205,7 @@ describe('AiChatService', () => {
     const memory = new InMemoryAiMemoryStore();
     const ai = {
       askMessagesDetailed: vi.fn(async () => ({
-        content: '안녕하세요! 어떤 도움이 필요하신가요?',
+        content: '안녕하세요! 어떤 도움이 필요하신가요? 😊',
         model: 'openai/gpt-oss-120b',
         usageScope: 'chat',
         promptTokens: 10,
