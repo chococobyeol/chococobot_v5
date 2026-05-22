@@ -41,18 +41,65 @@ function isCurrentTimeQuestion(prompt: string): boolean {
     /^(?:지금|현재)(?:시간|시각)(?:이)?(?:뭐야|어떻게돼|알려줘|말해줘)?[.。…]*$/u.test(normalized);
 }
 
-function formatCurrentTime(timeZone: string, now = new Date(), source: 'user' | 'fallback' = 'fallback'): string {
+function parseRelativeTimeOffsetMs(prompt: string): number | null {
+  const normalized = prompt.trim().replace(/\s+/g, '');
+  if (!/(?:몇시|몇분|시간|시각)/u.test(normalized) || !/(?:후|뒤|나중)/u.test(normalized)) return null;
+
+  let totalMs = 0;
+  const unitMs: Record<string, number> = {
+    초: 1_000,
+    분: 60_000,
+    시간: 60 * 60_000,
+    일: 24 * 60 * 60_000,
+    날: 24 * 60 * 60_000
+  };
+  for (const match of normalized.matchAll(/(\d+)(초|분|시간|일|날)/gu)) {
+    totalMs += Number.parseInt(match[1], 10) * unitMs[match[2]];
+  }
+  if (totalMs <= 0 || !Number.isFinite(totalMs)) return null;
+  return totalMs;
+}
+
+function resolveRequestedTimeZone(prompt: string): { label: string; timeZone: string } | null {
+  const normalized = prompt.trim().replace(/\s+/g, '').toLowerCase();
+  const aliases: Array<{ pattern: RegExp; label: string; timeZone: string }> = [
+    { pattern: /헝가리|hungary|budapest|부다페스트/u, label: '헝가리', timeZone: 'Europe/Budapest' },
+    { pattern: /한국|대한민국|korea|seoul|서울/u, label: '한국', timeZone: 'Asia/Seoul' },
+    { pattern: /일본|japan|tokyo|도쿄/u, label: '일본', timeZone: 'Asia/Tokyo' },
+    { pattern: /영국|런던|unitedkingdom|uk|london/u, label: '영국', timeZone: 'Europe/London' },
+    { pattern: /뉴욕|newyork/u, label: '뉴욕', timeZone: 'America/New_York' },
+    { pattern: /로스앤젤레스|losangeles/u, label: '로스앤젤레스', timeZone: 'America/Los_Angeles' }
+  ];
+  return aliases.find((alias) => alias.pattern.test(normalized)) ?? null;
+}
+
+function formatTimeInZone(timestampMs: number, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('ko-KR', {
     timeZone,
     hour: 'numeric',
     minute: '2-digit',
     hour12: true
-  }).formatToParts(now);
+  }).formatToParts(new Date(timestampMs));
   const dayPeriod = parts.find((part) => part.type === 'dayPeriod')?.value ?? '';
   const hour = parts.find((part) => part.type === 'hour')?.value ?? '';
   const minute = parts.find((part) => part.type === 'minute')?.value ?? '';
-  const timeText = `${dayPeriod} ${hour}시 ${minute}분이에요...`.trim();
-  return source === 'user' ? timeText : `${timeZone} 기준 ${timeText}`;
+  return `${dayPeriod} ${hour}시 ${minute}분`.trim();
+}
+
+function formatDiscordLocalTime(timestampMs: number): string {
+  return `<t:${Math.floor(timestampMs / 1000)}:t>예요...`;
+}
+
+function buildDeterministicTimeAnswer(prompt: string, baseTimestampMs: number): string | null {
+  const offsetMs = parseRelativeTimeOffsetMs(prompt);
+  const timestampMs = baseTimestampMs + (offsetMs ?? 0);
+  const requestedTimeZone = resolveRequestedTimeZone(prompt);
+  if (requestedTimeZone && /(?:몇시|몇분|시간|시각)/u.test(prompt)) {
+    return `${requestedTimeZone.label} 시간은 ${formatTimeInZone(timestampMs, requestedTimeZone.timeZone)}이에요...`;
+  }
+  if (offsetMs !== null) return formatDiscordLocalTime(timestampMs);
+  if (isCurrentTimeQuestion(prompt)) return formatDiscordLocalTime(timestampMs);
+  return null;
 }
 
 function normalizeAiChatTone(content: string): string {
@@ -170,9 +217,9 @@ export class AiChatService {
           })
           .catch((error) => logger.warn('Failed to log AI command:', error));
 
-        if (isCurrentTimeQuestion(prompt)) {
-          const userTimeZone = this.userSettings?.getUserTimeZone(message.guildId!, message.author.id);
-          const answer = formatCurrentTime(userTimeZone ?? this.settings.botTimeZone, new Date(), userTimeZone ? 'user' : 'fallback');
+        const deterministicTimeAnswer = buildDeterministicTimeAnswer(prompt, message.createdTimestamp);
+        if (deterministicTimeAnswer) {
+          const answer = deterministicTimeAnswer;
           await sendChunkedReply(message, answer);
           await this.activityLog
             .logCommand({
