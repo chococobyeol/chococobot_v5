@@ -385,7 +385,13 @@ describe('handleMessageCreate', () => {
         plan: vi.fn(async () => ({ kind: 'command', query: '대청소 2' }))
       }
     });
-    const message = makeMessage('!? 모든 채팅 지워줘');
+    const message = makeMessage('!? 모든 채팅 지워줘', {
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
@@ -394,6 +400,36 @@ describe('handleMessageCreate', () => {
         content: expect.stringContaining('확인 토큰')
       })
     );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('blocks non-admin AI-planned purge before confirmation or deletion', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '대청소 100' }))
+      }
+    });
+    const confirmations = new ConfirmationManager();
+    const message = makeMessage('!? 전체 채팅 지워줘', {
+      member: {
+        displayName: '일반유저',
+        permissions: { has: vi.fn(() => false) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+    const cleanupChannel = message.channel as any;
+    cleanupChannel.bulkDelete = vi.fn(async () => new Collection());
+    cleanupChannel.messages = { fetch: vi.fn(async () => new Collection()) };
+
+    await handleMessageCreate(message, commands, context as any, confirmations);
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: '이 작업은 관리자 권한이 필요해요...'
+    }));
+    expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
+    expect(context.activityLog.logCleanupResult).not.toHaveBeenCalled();
+    expect(confirmations.get('missing')).toBeUndefined();
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 

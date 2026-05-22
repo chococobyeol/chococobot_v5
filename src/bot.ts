@@ -1034,6 +1034,10 @@ async function dispatchPlannerCommand(
       await message.reply({ content: '이 명령은 확인이 필요해요... 어떤 작업인지 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
       return true;
     }
+    if (safety.intent === 'cleanup' && safety.level === 'destructive' && !hasManageMessages(message.member?.permissions)) {
+      await message.reply({ content: '이 작업은 관리자 권한이 필요해요...', allowedMentions: { repliedUser: false } });
+      return true;
+    }
     await createAndReplyConfirmation(message, confirmations, safety.intent, confirmationPreviewForSafety(safety), safety.args.join(' ').trim());
     return true;
   }
