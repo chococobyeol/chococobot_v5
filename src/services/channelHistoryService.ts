@@ -5,6 +5,8 @@ export const DEFAULT_HISTORY_MESSAGE_LIMIT = 100;
 export const DEFAULT_HISTORY_LOOKBACK_HOURS = 24;
 export const MAX_HISTORY_MESSAGE_LIMIT = 500;
 export const MAX_HISTORY_LOOKBACK_HOURS = 24 * 7;
+const DISCORD_API_BASE_URL = 'https://discord.com/api/v10';
+const DISCORD_SEARCH_PAGE_LIMIT = 25;
 
 export type ChannelHistoryFetchChannel = Pick<GuildTextBasedChannel, 'id' | 'messages'>;
 
@@ -28,6 +30,34 @@ export type ChannelHistoryEntry = {
 export type ChannelHistoryFetchOptions = {
   limit?: number;
   lookbackHours?: number;
+};
+
+export type GuildMessageSearchOptions = {
+  guildId: string;
+  botToken: string;
+  query: string;
+  channelIds?: string[];
+  limit?: number;
+};
+
+type DiscordSearchMessage = {
+  id: string;
+  channel_id: string;
+  content?: string;
+  timestamp: string;
+  author?: {
+    id?: string;
+    username?: string;
+    bot?: boolean;
+  };
+  member?: {
+    nick?: string | null;
+  };
+};
+
+type DiscordSearchResponse = {
+  messages?: DiscordSearchMessage[][];
+  total_results?: number;
 };
 
 export function assessChannelHistoryQuery(query: string): ChannelHistoryAssessment {
@@ -100,6 +130,30 @@ export async function fetchChannelHistory(
   return collected.slice(0, limit).sort((left, right) => left.createdTimestamp - right.createdTimestamp);
 }
 
+export async function searchGuildMessages(options: GuildMessageSearchOptions): Promise<ChannelHistoryEntry[]> {
+  const query = options.query.trim().slice(0, 1024);
+  if (!query) return [];
+
+  const limit = Math.min(Math.max(1, Math.floor(options.limit ?? DISCORD_SEARCH_PAGE_LIMIT)), MAX_HISTORY_MESSAGE_LIMIT);
+  const collected: ChannelHistoryEntry[] = [];
+  let offset = 0;
+
+  while (collected.length < limit) {
+    const pageLimit = Math.min(DISCORD_SEARCH_PAGE_LIMIT, limit - collected.length);
+    const page = await searchGuildMessagesPage({ ...options, query, limit: pageLimit, offset });
+    collected.push(...page.messages.flatMap((thread) => thread).map(toSearchHistoryEntry));
+
+    if (collected.length >= limit || page.messages.length < pageLimit || collected.length >= (page.total_results ?? Number.POSITIVE_INFINITY)) {
+      break;
+    }
+    offset += pageLimit;
+  }
+
+  return dedupeHistoryEntries(collected)
+    .slice(0, limit)
+    .sort((left, right) => left.createdTimestamp - right.createdTimestamp);
+}
+
 export function formatChannelHistoryMessages(
   messages: ChannelHistoryEntry[],
   targetChannelId: string
@@ -117,6 +171,58 @@ export function formatChannelHistoryMessages(
 
 function collectionToArray(messages: Collection<Snowflake, Message> | Message[]): Message[] {
   return Array.isArray(messages) ? messages : Array.from(messages.values());
+}
+
+async function searchGuildMessagesPage(
+  options: GuildMessageSearchOptions & { offset: number; limit: number }
+): Promise<Required<Pick<DiscordSearchResponse, 'messages'>> & Pick<DiscordSearchResponse, 'total_results'>> {
+  const url = new URL(`${DISCORD_API_BASE_URL}/guilds/${options.guildId}/messages/search`);
+  url.searchParams.set('content', options.query);
+  url.searchParams.set('limit', String(Math.min(DISCORD_SEARCH_PAGE_LIMIT, options.limit)));
+  url.searchParams.set('offset', String(options.offset));
+  url.searchParams.set('sort_by', 'timestamp');
+  url.searchParams.set('sort_order', 'desc');
+  for (const channelId of options.channelIds ?? []) url.searchParams.append('channel_id', channelId);
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bot ${options.botToken}`
+    }
+  });
+
+  if (response.status === 202) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(`Discord search index is not ready${typeof body?.retry_after === 'number' ? `; retry_after=${body.retry_after}` : ''}`);
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Discord search failed: ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
+  }
+
+  const body = (await response.json()) as DiscordSearchResponse;
+  return { messages: body.messages ?? [], total_results: body.total_results };
+}
+
+function dedupeHistoryEntries(entries: ChannelHistoryEntry[]): ChannelHistoryEntry[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (seen.has(entry.id)) return false;
+    seen.add(entry.id);
+    return true;
+  });
+}
+
+function toSearchHistoryEntry(message: DiscordSearchMessage): ChannelHistoryEntry {
+  return {
+    id: message.id,
+    channelId: message.channel_id,
+    authorId: message.author?.id ?? 'unknown',
+    authorName: message.member?.nick ?? message.author?.username ?? '알 수 없음',
+    content: message.content ?? '',
+    createdTimestamp: Date.parse(message.timestamp),
+    isBot: Boolean(message.author?.bot)
+  };
 }
 
 function toHistoryEntry(message: Message): ChannelHistoryEntry {

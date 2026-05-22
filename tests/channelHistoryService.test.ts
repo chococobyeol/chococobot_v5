@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { assessChannelHistoryQuery, fetchChannelHistory } from '../src/services/channelHistoryService.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { assessChannelHistoryQuery, fetchChannelHistory, searchGuildMessages } from '../src/services/channelHistoryService.js';
 
 function makeHistoryMessage(id: string, createdTimestamp: number, content: string, bot = false) {
   return {
@@ -69,6 +69,68 @@ describe('fetchChannelHistory', () => {
     expect(history).toEqual([
       expect.objectContaining({ id: '2', content: 'still kept', isBot: true }),
       expect.objectContaining({ id: '3', content: 'oldest kept', isBot: false })
+    ]);
+  });
+});
+
+describe('searchGuildMessages', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses Discord indexed guild search and returns chronological history entries', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        total_results: 2,
+        messages: [
+          [
+            {
+              id: 'newer',
+              channel_id: 'channel-2',
+              content: '짬뽕지존 얘기',
+              timestamp: '2026-05-22T18:00:00.000Z',
+              author: { id: 'user-2', username: 'writer', bot: false },
+              member: { nick: '작성자' }
+            }
+          ],
+          [
+            {
+              id: 'older',
+              channel_id: 'channel-1',
+              content: '예전 짬뽕지존 얘기',
+              timestamp: '2026-05-22T17:00:00.000Z',
+              author: { id: 'user-1', username: 'tester', bot: false }
+            }
+          ]
+        ]
+      })
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const history = await searchGuildMessages({
+      guildId: 'guild-1',
+      botToken: 'token',
+      query: '짬뽕지존',
+      channelIds: ['channel-2'],
+      limit: 2
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        href: expect.stringContaining('/guilds/guild-1/messages/search')
+      }),
+      expect.objectContaining({
+        headers: { Authorization: 'Bot token' }
+      })
+    );
+    const [[requestedUrl]] = fetchMock.mock.calls as unknown as Array<[URL, RequestInit?]>;
+    expect(requestedUrl.searchParams.get('content')).toBe('짬뽕지존');
+    expect(requestedUrl.searchParams.get('channel_id')).toBe('channel-2');
+    expect(history).toEqual([
+      expect.objectContaining({ id: 'older', channelId: 'channel-1', content: '예전 짬뽕지존 얘기' }),
+      expect.objectContaining({ id: 'newer', channelId: 'channel-2', authorName: '작성자' })
     ]);
   });
 });

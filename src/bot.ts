@@ -15,7 +15,8 @@ import {
   MAX_HISTORY_LOOKBACK_HOURS,
   MAX_HISTORY_MESSAGE_LIMIT,
   assessChannelHistoryQuery,
-  fetchChannelHistory
+  fetchChannelHistory,
+  searchGuildMessages
 } from './services/channelHistoryService.js';
 import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
 import { SqliteAiMemoryStore } from './services/aiMemoryStore.js';
@@ -854,6 +855,28 @@ async function fetchRecentGuildTextHistory(
     .sort((left, right) => left.createdTimestamp - right.createdTimestamp);
 }
 
+async function searchIndexedGuildTextHistory(
+  message: Message,
+  context: BotContext,
+  query: string,
+  options: { limit: number; channelIds?: string[] }
+): Promise<Awaited<ReturnType<typeof fetchChannelHistory>>> {
+  const botToken = context.settings.discordToken;
+  if (!message.guildId || typeof botToken !== 'string' || !botToken.trim()) return [];
+  try {
+    return (await searchGuildMessages({
+      guildId: message.guildId,
+      botToken,
+      query,
+      channelIds: options.channelIds,
+      limit: options.limit
+    })).filter((entry) => entry.id !== message.id);
+  } catch (error) {
+    logger.warn('Discord indexed message search failed; falling back to recent fetch:', error);
+    return [];
+  }
+}
+
 
 async function createAndReplyConfirmation(
   message: Message,
@@ -1003,7 +1026,10 @@ async function handleChannelHistoryPlan(
     const queryTopic = route.query.trim() || null;
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
-    const history = (await fetchChannelHistory(targetChannel, {
+    const indexedHistory = queryTopic
+      ? await searchIndexedGuildTextHistory(message, context, route.query, { limit: searchLimit, channelIds: [targetChannel.id] })
+      : [];
+    const history = indexedHistory.length ? indexedHistory : (await fetchChannelHistory(targetChannel, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
     })).filter((entry) => entry.id !== message.id);
@@ -1080,7 +1106,10 @@ async function handleGuildChannelHistoryPlan(
     const queryTopic = query.trim() || null;
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
-    const history = await fetchRecentGuildTextHistory(message, {
+    const indexedHistory = queryTopic
+      ? await searchIndexedGuildTextHistory(message, context, query, { limit: searchLimit })
+      : [];
+    const history = indexedHistory.length ? indexedHistory : await fetchRecentGuildTextHistory(message, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
     });
@@ -1308,6 +1337,7 @@ export async function handleMessageCreate(
                 context
               );
             case 'clarify':
+              if (pendingHistoryRequest && await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
               if (looksLikeChannelHistoryPrompt(aiPrompt)) {
                 const mode = channelHistoryModeFromPrompt(aiPrompt) ?? 'summary';
                 setPendingChannelHistoryRequest(message, { mode, query: aiPrompt });

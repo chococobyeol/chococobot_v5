@@ -996,7 +996,7 @@ describe('handleMessageCreate', () => {
             targetChannelReference: '서버 전체',
             query: '짬뽕지존'
           })
-          .mockResolvedValueOnce({ kind: 'chat' })
+          .mockResolvedValueOnce({ kind: 'clarify', message: '어떤 내용을 검색할까요?' })
       }
     });
     const first = makeMessage('!? 대화내용중에 짬뽕지존에 관한 내용 있나 찾아봐');
