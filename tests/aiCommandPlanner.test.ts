@@ -152,6 +152,8 @@ describe('AiCommandPlanner', () => {
 
     expect(system.length).toBeLessThanOrEqual(limits.maxSystemPromptChars);
     expect(system).toContain('없는 채널명은 만들지 말고 clarify');
+    expect(system).toContain('특정 주제, 단어, 언급');
+    expect(system).toContain('targetChannelReference를 "서버 전체"');
     expect(user.length).toBeLessThanOrEqual(limits.maxPlannerPromptChars);
     expect(commandLines.length).toBeLessThanOrEqual(limits.maxCommands);
     expect(commandLines.every((line) => line.length <= limits.maxCommandLineChars)).toBe(true);

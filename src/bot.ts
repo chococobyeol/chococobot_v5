@@ -184,13 +184,13 @@ function clearPendingChannelHistoryRequest(message: Message): void {
 
 function channelHistoryModeFromPrompt(prompt: string): 'summary' | 'qa' | null {
   const normalized = prompt.toLowerCase();
-  if (/요약|정리|summar/i.test(normalized)) return 'summary';
+  if (/요약|정리|summar|찾아|검색|있는지|있었는지|언급|나왔|내용이 있/i.test(normalized)) return 'summary';
   if (/질문|물어|뭐|무엇|무슨|왜|어떻게|\?|qa|q&a/i.test(normalized)) return 'qa';
   return null;
 }
 
 function looksLikeChannelHistoryPrompt(prompt: string): boolean {
-  return Boolean(channelHistoryModeFromPrompt(prompt)) && /채널|<#\d+>|#[^\s]+|내용|기록|대화|메모|최근/.test(prompt);
+  return Boolean(channelHistoryModeFromPrompt(prompt)) && /서버|채널|<#\d+>|#[^\s]+|내용|기록|대화|메모|최근|찾아|검색|언급|있는지|있었는지|나왔/.test(prompt);
 }
 
 function hasExplicitChannelReference(prompt: string): boolean {

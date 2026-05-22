@@ -141,6 +141,8 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
       '{"kind":"unavailable","message":"음성으로 말하려면 먼저 음성 채널에 들어가 있어야 해요..."}',
       '{"kind":"channel-history","mode":"summary","targetChannelReference":"<#1234567890>","query":"메모 채널 내용 요약해줘"}',
       'channel-history의 targetChannelReference는 반드시 아래 참조 가능한 텍스트 채널 목록의 mention 또는 정확한 이름을 그대로 복사해요. 없는 채널명은 만들지 말고 clarify로 어느 채널인지 물어봐요.',
+      '사용자가 서버/채널 대화에서 특정 주제, 단어, 언급, 식당명, 사람, 사건을 찾아보라고 하면 일반 chat이 아니라 channel-history를 선택해요.',
+      '채널을 지정하지 않은 "이 서버에 ~ 있는지 찾아봐", "최근 무슨 대화 했지", "좀아까 뭐라고 했지"는 targetChannelReference를 "서버 전체"로 두고 channel-history를 선택해요.',
       '말해봐/라고 해봐는 무조건 TTS가 아니에요. 음성채널, TTS, 읽어줘처럼 음성 의도가 명확할 때만 말 명령을 선택해요.',
       '음성 명령인데 사용자가 음성 채널에 없으면 command가 아니라 unavailable을 선택해요.',
       '삭제, 프리픽스 변경, 기억 삭제, TTS 채널 변경은 명확해도 query만 만들고 실제 확인은 코드가 처리해요.',

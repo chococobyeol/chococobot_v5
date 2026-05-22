@@ -586,6 +586,44 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
+  it('searches server text history for topic lookup requests before falling back to chat', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const message = makeMessage('!? 이 서버에 짬뽕지존에 관한 내용이 있는지 찾아봐');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'topic-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '짬뽕지존 얘기를 했어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('짬뽕지존 얘기를 했어요') })
+        ])
+      })
+    );
+    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {
     const commands = createPrefixCommands();
     const context = makeContext();
