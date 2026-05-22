@@ -129,3 +129,54 @@ describe('BotActivityLogService.logCleanupResult', () => {
     expect(firstCall[0].content).toContain('deleted=4');
   });
 });
+
+describe('BotActivityLogService.ensureGuildLogChannel', () => {
+  it('reuses an existing source log channel by name when the local store is empty', async () => {
+    const edit = vi.fn(async () => undefined);
+    const existingLogChannel = {
+      id: 'existing-log',
+      type: ChannelType.GuildText,
+      name: 'LOG-source-guild-1',
+      topic: 'Source guild: source (guild-1)',
+      parentId: 'full-category',
+      edit,
+      send: vi.fn(async () => undefined)
+    };
+    const fullCategory = { id: 'full-category', type: ChannelType.GuildCategory, name: '서버별 로그' };
+    const loggingGuild = {
+      id: 'log-guild',
+      name: 'log',
+      channels: {
+        fetch: vi.fn(async () => null),
+        create: vi.fn(async () => {
+          throw new Error('should not create duplicate log channel');
+        }),
+        cache: new Map([
+          ['full-category', fullCategory],
+          ['existing-log', existingLogChannel]
+        ])
+      }
+    };
+    const sourceGuild = {
+      id: 'guild-1',
+      name: 'source',
+      channels: {
+        fetch: vi.fn(async () => null),
+        cache: new Map()
+      }
+    };
+    const client = {
+      guilds: {
+        fetch: vi.fn(async (id?: string) => (id === 'log-guild' ? loggingGuild : sourceGuild))
+      }
+    } as any;
+    const store = new InMemoryBotActivityLogStore();
+    const service = new BotActivityLogService(client, store, 'log-guild');
+
+    const channel = await service.ensureGuildLogChannel('guild-1');
+
+    expect(channel).toBe(existingLogChannel);
+    expect(loggingGuild.channels.create).not.toHaveBeenCalled();
+    expect(store.getLogChannelId('guild-1')).toBe('existing-log');
+  });
+});

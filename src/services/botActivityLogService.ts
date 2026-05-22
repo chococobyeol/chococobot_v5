@@ -152,6 +152,15 @@ export class BotActivityLogService {
       }
     }
 
+    const existingByMetadata = this.findExistingLogChannel(guild, desiredName, desiredTopic);
+    if (existingByMetadata) {
+      this.store.setLogChannelId(sourceGuildId, existingByMetadata.id);
+      if (parent && existingByMetadata.parentId !== parent.id && this.hasCategoryCapacity(guild, parent)) {
+        await existingByMetadata.edit({ parent: parent.id }).catch((error) => logger.warn('Failed to move existing logging channel:', error));
+      }
+      return existingByMetadata;
+    }
+
     const targetParent = parent && this.hasCategoryCapacity(guild, parent) ? parent : await this.findAvailableLogCategory(guild);
     const channel = await guild.channels.create({
       name: desiredName,
@@ -429,6 +438,14 @@ export class BotActivityLogService {
   private hasCategoryCapacity(guild: Guild, category: CategoryChannel): boolean {
     const childCount = Array.from(guild.channels.cache.values()).filter((channel) => channel.parentId === category.id).length;
     return childCount < DISCORD_CATEGORY_CHANNEL_LIMIT;
+  }
+
+  private findExistingLogChannel(guild: Guild, desiredName: string, desiredTopic: string): TextChannel | undefined {
+    return Array.from(guild.channels.cache.values()).find(
+      (channel): channel is TextChannel =>
+        channel.type === ChannelType.GuildText &&
+        (channel.topic === desiredTopic || channel.name === desiredName)
+    );
   }
 
   private async findAvailableLogCategory(guild: Guild): Promise<CategoryChannel | undefined> {
