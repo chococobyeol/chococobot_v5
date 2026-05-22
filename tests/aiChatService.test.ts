@@ -25,6 +25,7 @@ function makeSettings(): Settings {
     groqModel: 'test-model',
     aiSystemPrompt: 'system',
     aiMaxCompletionTokens: 1000,
+    aiPlannerMaxCompletionTokens: 300,
     aiUserDailyTokenLimit: 1000,
     aiGuildDailyTokenLimit: 1000,
     aiMemoryRecentTurns: 8,

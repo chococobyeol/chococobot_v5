@@ -1,4 +1,4 @@
-import { ChannelType } from 'discord.js';
+import { ChannelType, Collection } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createPrefixCommands, handleMessageCreate } from '../src/bot.js';
 import { ConfirmationManager } from '../src/services/confirmationManager.js';
@@ -68,7 +68,11 @@ function makeContext(overrides: Record<string, unknown> = {}) {
   return {
     settings: {
       ttsReadBotMessages: false,
-      ttsMaxChars: 500
+      ttsMaxChars: 500,
+      cleanMineDefaultTarget: 500,
+      cleanMineMaxLimit: 500,
+      cleanAllDefaultTarget: 1000,
+      cleanAllMaxLimit: 1000
     },
     voiceSettings,
     aiChat: {
@@ -90,9 +94,11 @@ function makeContext(overrides: Record<string, unknown> = {}) {
     },
     activityLog: {
       logCommand: vi.fn(async () => undefined),
+      logCleanupResult: vi.fn(async () => undefined),
       logError: vi.fn(async () => undefined),
       logTtsRequest: vi.fn(async () => undefined),
-      logVoiceConnection: vi.fn(async () => undefined)
+      logVoiceConnection: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
     },
     ...overrides
   } as any;
@@ -131,6 +137,105 @@ describe('handleMessageCreate', () => {
     expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
   });
 
+  it('deletes the cleanup command message plus the requested number of user messages without posting a public success message', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext();
+    const message = makeMessage('!청소 3');
+    const cleanupChannel = message.channel as any;
+    cleanupChannel.messages = {
+      fetch: vi.fn(async () =>
+        new Collection([
+          ['message-1', { id: 'message-1', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['chat-3', { id: 'chat-3', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['chat-2', { id: 'chat-2', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['chat-1', { id: 'chat-1', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }]
+        ])
+      )
+    };
+    cleanupChannel.bulkDelete = vi.fn(async (items: any[]) => new Collection(items.map((item) => [item.id, item])));
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
+    expect(cleanupChannel.bulkDelete.mock.calls[0][0].map((item: { id: string }) => item.id)).toEqual([
+      'message-1',
+      'chat-3',
+      'chat-2',
+      'chat-1'
+    ]);
+    expect(cleanupChannel.send).not.toHaveBeenCalled();
+    expect(message.reply).not.toHaveBeenCalled();
+    expect(context.activityLog.logCleanupResult).toHaveBeenCalledWith({
+      guildId: 'guild-1',
+      guildName: '테스트서버',
+      channelId: 'channel-1',
+      userId: 'user-1',
+      userName: '테스터',
+      commandName: '청소',
+      scope: 'own',
+      requested: 4,
+      deleted: 4,
+      matched: 4,
+      skippedOld: 0,
+      exhausted: true
+    });
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+  });
+
+  it('announces the server nickname that requested purge cleanup', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext();
+    const message = makeMessage('!대청소 3', {
+      member: {
+        displayName: '서버닉',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+    const cleanupChannel = message.channel as any;
+    cleanupChannel.messages = {
+      fetch: vi.fn(async () =>
+        new Collection([
+          ['message-1', { id: 'message-1', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['chat-3', { id: 'chat-3', author: { id: 'user-3' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['chat-2', { id: 'chat-2', author: { id: 'user-2' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['chat-1', { id: 'chat-1', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }]
+        ])
+      )
+    };
+    cleanupChannel.bulkDelete = vi.fn(async (items: any[]) => new Collection(items.map((item) => [item.id, item])));
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
+    expect(cleanupChannel.bulkDelete.mock.calls[0][0].map((item: { id: string }) => item.id)).toEqual([
+      'message-1',
+      'chat-3',
+      'chat-2',
+      'chat-1'
+    ]);
+    expect(cleanupChannel.send).toHaveBeenCalledWith({
+      content: '서버닉님의 요청으로 메시지 4개를 삭제했어요...',
+      allowedMentions: { parse: [], repliedUser: false }
+    });
+    expect(context.activityLog.logCleanupResult).toHaveBeenCalledWith({
+      guildId: 'guild-1',
+      guildName: '테스트서버',
+      channelId: 'channel-1',
+      userId: 'user-1',
+      userName: '서버닉',
+      commandName: '대청소',
+      scope: 'purge',
+      requested: 4,
+      deleted: 4,
+      matched: 4,
+      skippedOld: 0,
+      exhausted: true
+    });
+    expect(message.reply).not.toHaveBeenCalled();
+  });
+
   it('routes supported prefix-question commands to the existing command execution path', async () => {
     const commands = createPrefixCommands();
     const context = makeContext();
@@ -152,6 +257,205 @@ describe('handleMessageCreate', () => {
 
     expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '알려줘');
     expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes AI-planned cleanup requests into the existing cleanup command path', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '청소 2' }))
+      }
+    });
+    const message = makeMessage('!? 내 채팅 2개 지워줘');
+    const cleanupChannel = message.channel as any;
+    cleanupChannel.messages = {
+      fetch: vi.fn(async () =>
+        new Collection([
+          ['1', { id: '1', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['2', { id: '2', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }]
+        ])
+      )
+    };
+    cleanupChannel.bulkDelete = vi.fn(async (items: any[]) => new Collection(items.map((item) => [item.id, item])));
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledWith(
+      message,
+      '내 채팅 2개 지워줘',
+      expect.objectContaining({
+        prefix: '!',
+        commands
+      })
+    );
+    expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('확인 토큰')
+      })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('routes AI-planned voice requests into the existing speak command path', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '말 안녕하세요' }))
+      }
+    });
+    const message = makeMessage('!? 음성채널에서 안녕하세요 라고 말해봐');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.voice.join).toHaveBeenCalledTimes(1);
+    expect(context.voice.speak).toHaveBeenCalledWith('guild-1', '안녕하세요', 'user-1');
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('asks for confirmation when AI selects a purge command', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '대청소 2' }))
+      }
+    });
+    const message = makeMessage('!? 모든 채팅 지워줘');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('확인 토큰')
+      })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+
+  it('replies unavailable for explicit voice AI requests when user is not in voice', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '말 안녕' }))
+      }
+    });
+    const message = makeMessage('!? 음성채널에서 안녕이라고 말해줘', {
+      member: {
+        displayName: '테스터',
+        voice: {
+          channel: null
+        }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('음성 채널에 들어가')
+      })
+    );
+    expect(context.voice.join).not.toHaveBeenCalled();
+    expect(context.voice.speak).not.toHaveBeenCalled();
+  });
+
+  it('asks a concrete clarification for ambiguous AI command intent', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'clarify', message: '채팅으로 답할까요, 음성으로 말할까요?' }))
+      }
+    });
+    const message = makeMessage('!? 안녕이라고 말해봐');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '채팅으로 답할까요, 음성으로 말할까요?'
+      })
+    );
+    expect(context.voice.speak).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('falls back to chat when planner has a non-rate error', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => { throw new Error('planner failed'); })
+      }
+    });
+    const message = makeMessage('!? 알려줘');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '알려줘');
+  });
+
+  it('does not call chat again when planner is rate limited', async () => {
+    const commands = createPrefixCommands();
+    const rateError = Object.assign(new Error('rate limit'), { status: 429 });
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => { throw rateError; })
+      }
+    });
+    const message = makeMessage('!? 알려줘');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('조금 뒤에 다시 시도') }));
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('routes AI-planned channel summary requests into the channel-history path', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '#general',
+          query: '요약해줘'
+        }))
+      }
+    });
+    const message = makeMessage('!? 메모 채널의 내용을 요약해줘');
+    const targetChannel = message.guild.channels.cache.get('channel-1') as any;
+    targetChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: '1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '첫 메시지',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          },
+          {
+            id: '2',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '봇 메시지',
+            author: { id: 'bot-1', username: 'ChococoBot', bot: true },
+            member: { displayName: 'ChococoBot' }
+          }
+        ] as any
+      )
+    };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.ai.askMessages).toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '채널 기록 답변'
+      })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {

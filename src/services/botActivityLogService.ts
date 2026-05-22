@@ -2,6 +2,32 @@ import { ChannelType, type CategoryChannel, type Client, type Guild, type TextCh
 import type { BotActivityLogStore } from './botActivityLogStore.js';
 import { logger } from '../logger.js';
 
+
+export type AiDiagnosticLogDetails = {
+  guildId: string;
+  guildName?: string | null;
+  channelId: string;
+  userId: string;
+  userName?: string | null;
+  stage: 'planner' | 'chat' | 'summary';
+  event: 'request' | 'response' | 'parse_error' | 'retry' | 'decision' | 'error' | 'rate_limit';
+  model?: string;
+  usageScope?: string;
+  decisionKind?: string;
+  commandSafety?: string;
+  retryCount?: number;
+  validationErrors?: readonly string[];
+  promptSnippet?: string;
+  responseSnippet?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  rateLimitHeaders?: Readonly<Record<string, string>>;
+  status?: number;
+  errorName?: string;
+  errorMessage?: string;
+};
+
 type CommandLogDetails = {
   guildId: string;
   guildName?: string | null;
@@ -10,6 +36,21 @@ type CommandLogDetails = {
   userName?: string | null;
   commandName: string;
   summary: string;
+};
+
+type CleanupLogDetails = {
+  guildId: string;
+  guildName?: string | null;
+  channelId: string;
+  userId: string;
+  userName?: string | null;
+  commandName: string;
+  scope: 'own' | 'purge';
+  requested: number;
+  deleted: number;
+  matched: number;
+  skippedOld: number;
+  exhausted: boolean;
 };
 
 function truncate(value: string, limit = 1500): string {
@@ -28,6 +69,15 @@ function sanitizeChannelName(value: string): string {
 
 const TEST_CHANNEL_CATEGORY_NAME = '봇 테스트 채널';
 const LOG_CHANNEL_CATEGORY_NAME = '서버별 로그';
+const AI_RATE_LIMIT_HEADER_WHITELIST = new Set([
+  'retry-after',
+  'x-ratelimit-limit-requests',
+  'x-ratelimit-limit-tokens',
+  'x-ratelimit-remaining-requests',
+  'x-ratelimit-remaining-tokens',
+  'x-ratelimit-reset-requests',
+  'x-ratelimit-reset-tokens'
+]);
 
 export class BotActivityLogService {
   constructor(
@@ -110,6 +160,27 @@ export class BotActivityLogService {
     }).catch((error) => logger.warn('Failed to send command log:', error));
   }
 
+  async logCleanupResult(details: CleanupLogDetails): Promise<void> {
+    const channel = await this.ensureGuildLogChannel(details.guildId);
+    if (!channel) return;
+    const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
+    await channel.send({
+      content: truncate(
+        [
+          `${sourceLabel}-CLEANUP`,
+          `guildName=${details.guildName ?? 'unknown'}`,
+          `userName=${details.userName ?? 'unknown'}`,
+          `command=${details.commandName}`,
+          `scope=${details.scope}`,
+          `requested=${details.requested}`,
+          `matched=${details.matched}`,
+          `deleted=${details.deleted}`,
+          `skippedOld=${details.skippedOld}`,
+          `exhausted=${details.exhausted}`
+        ].join('\n'))
+    }).catch((error) => logger.warn('Failed to send cleanup log:', error));
+  }
+
   async logError(details: {
     guildId: string;
     guildName?: string | null;
@@ -135,6 +206,43 @@ export class BotActivityLogService {
           `error=${errorText}`
         ].join('\n'))
     }).catch((error) => logger.warn('Failed to send error log:', error));
+  }
+
+
+  async logAiDiagnostic(details: AiDiagnosticLogDetails): Promise<void> {
+    const channel = await this.ensureGuildLogChannel(details.guildId);
+    if (!channel) return;
+    const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
+    const headers = details.rateLimitHeaders && Object.keys(details.rateLimitHeaders).length
+      ? Object.entries(details.rateLimitHeaders)
+          .filter(([key]) => AI_RATE_LIMIT_HEADER_WHITELIST.has(key.toLowerCase()))
+          .map(([key, value]) => `${key}=${value}`).join(',')
+      : undefined;
+    await channel.send({
+      content: truncate(
+        [
+          `${sourceLabel}-AI`,
+          `guildName=${details.guildName ?? 'unknown'}`,
+          `userName=${details.userName ?? 'unknown'}`,
+          `stage=${details.stage}`,
+          `event=${details.event}`,
+          details.model ? `model=${details.model}` : undefined,
+          details.usageScope ? `usageScope=${details.usageScope}` : undefined,
+          details.decisionKind ? `decision=${details.decisionKind}` : undefined,
+          details.commandSafety ? `commandSafety=${details.commandSafety}` : undefined,
+          typeof details.retryCount === 'number' ? `retryCount=${details.retryCount}` : undefined,
+          details.validationErrors?.length ? `validationErrors=${truncate(details.validationErrors.join('; '), 500)}` : undefined,
+          details.promptSnippet ? `prompt=${truncate(details.promptSnippet, 500)}` : undefined,
+          details.responseSnippet ? `response=${truncate(details.responseSnippet, 500)}` : undefined,
+          typeof details.promptTokens === 'number' ? `promptTokens=${details.promptTokens}` : undefined,
+          typeof details.completionTokens === 'number' ? `completionTokens=${details.completionTokens}` : undefined,
+          typeof details.totalTokens === 'number' ? `totalTokens=${details.totalTokens}` : undefined,
+          headers ? `rateLimitHeaders=${truncate(headers, 500)}` : undefined,
+          typeof details.status === 'number' ? `status=${details.status}` : undefined,
+          details.errorName ? `errorName=${details.errorName}` : undefined,
+          details.errorMessage ? `errorMessage=${truncate(details.errorMessage, 500)}` : undefined
+        ].filter(Boolean).join('\n'))
+    }).catch((error) => logger.warn('Failed to send AI diagnostic log:', error));
   }
 
   async logVoiceConnection(details: {

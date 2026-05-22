@@ -4,7 +4,8 @@ import type { PrefixCommand } from './types.js';
 import type { Settings } from './config.js';
 import type { UsageStore } from './services/usageStore.js';
 import { AiService } from './services/aiService.js';
-import type { AiChatMessage } from './services/aiService.js';
+import { extractErrorDetails, type AiChatMessage } from './services/aiService.js';
+import { AiCommandPlanner } from './services/aiCommandPlanner.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { ConfirmationManager, type ConfirmationScope } from './services/confirmationManager.js';
@@ -16,12 +17,12 @@ import {
 import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
 import { SqliteAiMemoryStore } from './services/aiMemoryStore.js';
 import { routeNaturalLanguageCommand, type RoutedNaturalLanguageCommand } from './services/nlCommandRouter.js';
+import { buildUnavailableVoiceMessage, classifyCommandQuery, type CommandSafety } from './services/commandSafety.js';
 import { normalizeTtsEngineName, TtsService } from './services/ttsService.js';
 import { VoiceService } from './services/voiceService.js';
 import {
   cleanupChannelMessages,
   cleanupUserMessages,
-  formatCleanupResult,
   hasManageMessages,
   type CleanupFetchableChannel
 } from './services/cleanupService.js';
@@ -30,12 +31,14 @@ import { logger } from './logger.js';
 const DEFAULT_PREFIX = '!';
 const ALLOWED_PREFIXES = ['!', '?', '.', '~'] as const;
 const MAX_TTS_COMMAND_CHARS = 500;
+const CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT = 1;
 
 export type BotContext = {
   settings: Settings;
   usageStore: UsageStore;
   ai: AiService;
   aiChat: AiChatService;
+  aiCommandPlanner?: AiCommandPlanner;
   voice: VoiceService;
   voiceSettings: import('./services/voiceSettingsStore.js').VoiceSettingsStore;
   activityLog: BotActivityLogService;
@@ -71,6 +74,26 @@ function parseOptionalPositiveInt(value: string | undefined): number | undefined
   return parsed;
 }
 
+function includeInvokingCleanupCommandTarget(target: number | undefined): number | undefined {
+  return target === undefined ? undefined : target + CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT;
+}
+
+function includeInvokingCleanupCommandLimit(limit: number): number {
+  return limit + CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT;
+}
+
+function includeInvokingCleanupCommandDefault(defaultTarget: number): number {
+  return defaultTarget + CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT;
+}
+
+function requesterDisplayName(message: Message): string {
+  return (message.member?.displayName ?? message.author.username).replace(/\s+/g, ' ').trim() || message.author.username;
+}
+
+function formatPurgeCleanupResult(message: Message, deleted: number): string {
+  return `${requesterDisplayName(message)}님의 요청으로 메시지 ${deleted}개를 삭제했어요...`;
+}
+
 function requireGuildTextChannel(message: Message): TextChannel {
   const channel = message.channel;
   if (channel.type !== ChannelType.GuildText) throw new Error('서버 텍스트 채널에서만 사용할 수 있어요...');
@@ -85,15 +108,45 @@ function resolveTargetGuildTextChannel(message: Message, rawChannel?: string): G
 
   const channelToken = rawChannel.trim().replace(/^<#/, '').replace(/>$/, '');
   const channelId = channelToken.replace(/^#/, '');
-  const channel = message.guild?.channels.cache.get(channelId);
+  const channelCache = message.guild?.channels.cache;
+  const channel = channelCache?.get?.(channelId);
   if (channel?.type === ChannelType.GuildText) return channel;
 
-  const namedChannel = message.guild?.channels.cache.find(
+  const namedChannel = Array.from(channelCache?.values?.() ?? []).find(
     (candidate) => candidate.type === ChannelType.GuildText && candidate.name === channelId
   );
   if (namedChannel?.type === ChannelType.GuildText) return namedChannel;
 
+  const normalizedQuery = normalizeChannelReference(channelToken);
+  const candidates = Array.from(message.guild?.channels.cache.values() ?? [])
+    .filter((candidate) => candidate.type === ChannelType.GuildText)
+    .filter((candidate) => {
+      const normalizedCandidate = normalizeChannelReference(candidate.name);
+      return normalizedCandidate.includes(normalizedQuery) || normalizedQuery.includes(normalizedCandidate);
+    });
+  if (candidates.length === 1) {
+    const [onlyMatch] = candidates;
+    if (onlyMatch?.type === ChannelType.GuildText) return onlyMatch;
+  }
+
+  if (candidates.length > 1) {
+    const suggestions = candidates
+      .slice(0, 5)
+      .map((candidate) => `<#${candidate.id}>`)
+      .join(', ');
+    throw new Error(`어느 텍스트 채널인지 하나로 못 좁혔어요... ${suggestions} 중에서 하나로 다시 말해 주세요...`);
+  }
+
   throw new Error('설정할 텍스트 채널을 찾을 수 없어요... `!tts채널 #채널`처럼 입력해 주세요...');
+}
+
+function normalizeChannelReference(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^<#/, '')
+    .replace(/^#/, '')
+    .replace(/[^0-9a-z가-힣]/gi, '');
 }
 
 function requireGuildMember(message: Message): GuildMember {
@@ -182,12 +235,29 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         const channel = requireGuildTextChannel(message);
         const amount = parseOptionalPositiveInt(args[0]);
         const result = await cleanupUserMessages(channel as CleanupFetchableChannel, message.author.id, {
-          target: amount,
-          defaultTarget: context.settings.cleanMineDefaultTarget,
-          maxTarget: context.settings.cleanMineMaxLimit,
-          excludedMessageIds: [message.id]
+          target: includeInvokingCleanupCommandTarget(amount),
+          defaultTarget: includeInvokingCleanupCommandDefault(context.settings.cleanMineDefaultTarget),
+          maxTarget: includeInvokingCleanupCommandLimit(context.settings.cleanMineMaxLimit)
         });
-        await channel.send({ content: formatCleanupResult('내 메시지', result), allowedMentions: { repliedUser: false } });
+        if (message.guildId) {
+          await context.activityLog.logCleanupResult({
+            guildId: message.guildId,
+            guildName: message.guild?.name,
+            channelId: message.channelId,
+            userId: message.author.id,
+            userName: requesterDisplayName(message),
+            commandName: '청소',
+            scope: 'own',
+            requested: result.requested,
+            deleted: result.deleted,
+            matched: result.matched,
+            skippedOld: result.skippedOld,
+            exhausted: result.exhausted
+          });
+        }
+        if (result.deleted === 0) {
+          await message.reply({ content: '삭제할 메시지를 찾지 못했어요...', allowedMentions: { repliedUser: false } });
+        }
       }
     },
     {
@@ -197,16 +267,38 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       async execute(message, args, context) {
         const channel = requireGuildTextChannel(message);
         if (!hasManageMessages(message.member?.permissions)) {
-          throw new Error('Manage Messages 권한이 필요해요.');
+          throw new Error('이 작업은 관리자 권한이 필요해요...');
         }
         const amount = parseOptionalPositiveInt(args[0]);
         const result = await cleanupChannelMessages(channel as CleanupFetchableChannel, {
-          target: amount,
-          defaultTarget: context.settings.cleanAllDefaultTarget,
-          maxTarget: context.settings.cleanAllMaxLimit,
-          excludedMessageIds: [message.id]
+          target: includeInvokingCleanupCommandTarget(amount),
+          defaultTarget: includeInvokingCleanupCommandDefault(context.settings.cleanAllDefaultTarget),
+          maxTarget: includeInvokingCleanupCommandLimit(context.settings.cleanAllMaxLimit)
         });
-        await channel.send({ content: formatCleanupResult('최근 메시지', result), allowedMentions: { repliedUser: false } });
+        if (message.guildId) {
+          await context.activityLog.logCleanupResult({
+            guildId: message.guildId,
+            guildName: message.guild?.name,
+            channelId: message.channelId,
+            userId: message.author.id,
+            userName: requesterDisplayName(message),
+            commandName: '대청소',
+            scope: 'purge',
+            requested: result.requested,
+            deleted: result.deleted,
+            matched: result.matched,
+            skippedOld: result.skippedOld,
+            exhausted: result.exhausted
+          });
+        }
+        if (result.deleted === 0) {
+          await message.reply({ content: '삭제할 메시지를 찾지 못했어요...', allowedMentions: { repliedUser: false } });
+        } else {
+          await channel.send({
+            content: formatPurgeCleanupResult(message, result.deleted),
+            allowedMentions: { parse: [], repliedUser: false }
+          });
+        }
       }
     },
     {
@@ -383,10 +475,6 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       description: '서버 명령어 프리픽스를 확인하거나 변경합니다.',
       async execute(message, args, context) {
         if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
-        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
-          throw new Error('서버 관리자만 프리픽스를 바꿀 수 있어요...');
-        }
-
         const current = getGuildPrefix(context, message.guildId);
         const raw = args[0]?.trim();
         if (!raw || ['현재', 'status', 'show', 'info', '조회'].includes(raw.toLowerCase())) {
@@ -400,6 +488,10 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             allowedMentions: { repliedUser: false }
           });
           return;
+        }
+
+        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+          throw new Error('서버 관리자만 프리픽스를 바꿀 수 있어요...');
         }
 
         const normalized = raw.toLowerCase();
@@ -453,8 +545,8 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           content: [
             [`현재 프리픽스는 \`${prefix}\`예요...`, `명령은 프리픽스 뒤에 붙여서 써요...`, `예: \`${prefix}도움말\``].join('\n'),
             `${prefix}도움말 / ${prefix}명령어 / ${prefix}help — 사용 가능한 명령어 목록을 보여줘요...`,
-            `${prefix}청소 [개수] / ${prefix}clean [count] / ${prefix}clear [count] — 내 최근 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...`,
-            `${prefix}대청소 [개수] / ${prefix}purge [count] / ${prefix}clean-all [count] / ${prefix}bulk-clear [count] — 관리자용 채널 메시지 삭제... 명령어를 쓴 글은 제외하고 계산해요...`,
+            `${prefix}청소 [개수] / ${prefix}clean [count] / ${prefix}clear [count] — 명령어 글까지 포함해서 내 최근 메시지를 삭제해요...`,
+            `${prefix}대청소 [개수] / ${prefix}purge [count] / ${prefix}clean-all [count] / ${prefix}bulk-clear [count] — 관리자용 채널 메시지 삭제... 명령어 글까지 포함해요...`,
             `${prefix}들어와 / ${prefix}이리와 / ${prefix}join / ${prefix}come / ${prefix}여기와 / ${prefix}tts-join — 음성 채널 연결...`,
             `${prefix}나가 / ${prefix}꺼져 / ${prefix}저리가 / ${prefix}leave / ${prefix}go / ${prefix}out / ${prefix}퇴장 / ${prefix}tts-leave — 음성 채널 해제...`,
             `${prefix}tts채널 [#채널|해제] / ${prefix}tts-channel / ${prefix}tts-watch / ${prefix}watch / ${prefix}채널tts — 채널 TTS 읽기 설정/해제...`,
@@ -497,7 +589,8 @@ async function dispatchCommandQuery(
 ): Promise<boolean> {
   if (message.author.bot) return false;
   if (!message.guildId) return false;
-  const parsed = parsePrefixCommand(`${DEFAULT_PREFIX}${query.trim()}`, DEFAULT_PREFIX);
+  const normalizedQuery = query.trim().replace(/^[!?.~]\s*/, '');
+  const parsed = parsePrefixCommand(`${DEFAULT_PREFIX}${normalizedQuery}`, DEFAULT_PREFIX);
   if (!parsed) return false;
   return dispatchResolvedCommand(message, commands, context, parsed, DEFAULT_PREFIX);
 }
@@ -599,6 +692,190 @@ function buildChannelHistoryMessages(
   return messages;
 }
 
+
+async function createAndReplyConfirmation(
+  message: Message,
+  confirmations: ConfirmationManager,
+  intent: ConfirmationScope['intent'],
+  preview: string,
+  normalizedArgs: string
+): Promise<void> {
+  if (!message.guildId) return;
+  const scope: ConfirmationScope = {
+    guildId: message.guildId,
+    channelId: message.channelId,
+    userId: message.author.id,
+    intent,
+    targetChannelId: extractLeadingChannelReference(normalizedArgs),
+    normalizedArgs
+  };
+  const confirmation = confirmations.create(scope, preview);
+  await message.reply({
+    content: [preview, `확인 토큰: \`${confirmation.token}\``, '확인을 처리하는 흐름은 다음 작업에서 이어갈 수 있어요...'].join('\n'),
+    allowedMentions: { repliedUser: false }
+  });
+}
+
+function confirmationPreviewForSafety(safety: CommandSafety): string {
+  switch (safety.intent) {
+    case 'cleanup':
+      return safety.level === 'destructive' ? '채널 메시지 삭제를 진행할까요?' : '내 메시지 삭제를 진행할까요?';
+    case 'prefix-change':
+      return '서버 프리픽스를 바꿀까요?';
+    case 'memory-reset':
+      return '서버 AI 기억을 지울까요?';
+    case 'watch-channel':
+      return 'TTS 채널 설정을 바꿀까요?';
+    default:
+      return '이 명령을 실행할까요?';
+  }
+}
+
+async function logPlannerDiagnostic(
+  message: Message,
+  context: BotContext,
+  details: {
+    event: 'request' | 'response' | 'parse_error' | 'retry' | 'decision' | 'error' | 'rate_limit';
+    retryCount?: number;
+    decisionKind?: string;
+    validationErrors?: string[];
+    promptSnippet?: string;
+    responseSnippet?: string;
+    model?: string;
+    usageScope?: string;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    rateLimitHeaders?: Readonly<Record<string, string>>;
+    status?: number;
+    error?: unknown;
+    commandSafety?: string;
+  }
+): Promise<void> {
+  if (!message.guildId) return;
+  const errorDetails = details.error ? extractErrorDetails(details.error) : undefined;
+  if (typeof context.activityLog.logAiDiagnostic !== 'function') return;
+  await context.activityLog.logAiDiagnostic({
+    guildId: message.guildId,
+    guildName: message.guild?.name,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userName: message.member?.displayName ?? message.author.username,
+    stage: 'planner',
+    event: details.event,
+    model: details.model,
+    usageScope: details.usageScope ?? 'planner',
+    decisionKind: details.decisionKind,
+    commandSafety: details.commandSafety,
+    retryCount: details.retryCount,
+    validationErrors: details.validationErrors,
+    promptSnippet: details.promptSnippet,
+    responseSnippet: details.responseSnippet,
+    promptTokens: details.promptTokens,
+    completionTokens: details.completionTokens,
+    totalTokens: details.totalTokens,
+    rateLimitHeaders: details.rateLimitHeaders ?? errorDetails?.rateLimitHeaders,
+    status: details.status ?? errorDetails?.status,
+    errorName: errorDetails?.errorName,
+    errorMessage: errorDetails?.errorMessage
+  }).catch((error) => logger.warn('Failed to log planner diagnostic:', error));
+}
+
+function isRateLimitLike(error: unknown): boolean {
+  return extractErrorDetails(error).status === 429;
+}
+
+async function dispatchPlannerCommand(
+  message: Message,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  confirmations: ConfirmationManager,
+  query: string
+): Promise<boolean> {
+  const safety = classifyCommandQuery(query, commands);
+  await logPlannerDiagnostic(message, context, {
+    event: 'decision',
+    decisionKind: 'command',
+    commandSafety: `${safety.level}:${safety.reason}`
+  });
+
+  if (safety.level === 'unknown') {
+    await message.reply({ content: '어떤 명령을 실행해야 할지 확실하지 않아요... 조금 더 구체적으로 말해 주세요...', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  if (safety.level === 'needs-confirmation' || safety.level === 'destructive') {
+    if (!safety.intent) {
+      await message.reply({ content: '이 명령은 확인이 필요해요... 어떤 작업인지 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    await createAndReplyConfirmation(message, confirmations, safety.intent, confirmationPreviewForSafety(safety), safety.args.join(' ').trim());
+    return true;
+  }
+
+  if (safety.level === 'voice-precondition') {
+    const member = message.member as GuildMember | null;
+    if (!member?.voice?.channel) {
+      await message.reply({ content: buildUnavailableVoiceMessage(), allowedMentions: { repliedUser: false } });
+      return true;
+    }
+  }
+
+  return dispatchCommandQuery(message, commands, context, query);
+}
+
+async function handleChannelHistoryPlan(
+  message: Message,
+  route: Extract<RoutedNaturalLanguageCommand, { kind: 'channel-history' }>,
+  context: BotContext
+): Promise<boolean> {
+  if (!message.guildId) return false;
+  try {
+    const targetChannel = resolveTargetGuildTextChannel(message, route.targetChannelReference);
+    const assessment = assessChannelHistoryQuery(route.query);
+    if (assessment.status !== 'ready') {
+      await message.reply({ content: assessment.prompt, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    const history = await fetchChannelHistory(targetChannel, {
+      limit: assessment.limit,
+      lookbackHours: assessment.lookbackHours
+    });
+    if (!history.length) {
+      await message.reply({ content: '대상 채널에서 읽을 기록을 찾지 못했어요...', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    const answer = await context.ai.askMessages({
+      guildId: message.guildId,
+      userId: message.author.id,
+      usageScope: 'summary',
+      messages: buildChannelHistoryMessages(history, targetChannel.id, route.mode, route.query)
+    });
+    await replyWithChunks(message, answer);
+  } catch (error) {
+    logger.error(error);
+    await context.activityLog.logAiDiagnostic({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.member?.displayName ?? message.author.username,
+      stage: 'summary',
+      event: isRateLimitLike(error) ? 'rate_limit' : 'error',
+      usageScope: 'summary',
+      ...extractErrorDetails(error)
+    }).catch((logError) => logger.warn('Failed to log channel-history diagnostic:', logError));
+    const details = extractErrorDetails(error);
+    const content = details.status === 429
+      ? 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...'
+      : details.errorMessage || '채널 기록을 확인하지 못했어요... 다시 시도해 주세요...';
+    await message.reply({ content, allowedMentions: { repliedUser: false } });
+  }
+  return true;
+}
+
 async function handleNaturalLanguageRoute(
   message: Message,
   route: RoutedNaturalLanguageCommand,
@@ -630,32 +907,8 @@ async function handleNaturalLanguageRoute(
       });
       return true;
     }
-    case 'channel-history': {
-      const targetChannel = resolveTargetGuildTextChannel(message, route.targetChannelReference);
-      const assessment = assessChannelHistoryQuery(route.query);
-      if (assessment.status !== 'ready') {
-        await message.reply({ content: assessment.prompt, allowedMentions: { repliedUser: false } });
-        return true;
-      }
-
-      const history = await fetchChannelHistory(targetChannel, {
-        limit: assessment.limit,
-        lookbackHours: assessment.lookbackHours
-      });
-      if (!history.length) {
-        await message.reply({ content: '대상 채널에서 읽을 기록을 찾지 못했어요...', allowedMentions: { repliedUser: false } });
-        return true;
-      }
-
-      const answer = await context.ai.askMessages({
-        guildId: message.guildId,
-        userId: message.author.id,
-        usageScope: 'summary',
-        messages: buildChannelHistoryMessages(history, targetChannel.id, route.mode, route.query)
-      });
-      await replyWithChunks(message, answer);
-      return true;
-    }
+    case 'channel-history':
+      return handleChannelHistoryPlan(message, route, context);
   }
 }
 
@@ -676,13 +929,66 @@ export async function handleMessageCreate(
   if (!message.author.bot) {
     if (await dispatchPrefixCommand(message, commands, context)) return true;
     const prefix = getGuildPrefix(context, message.guildId);
-    const routed = routeNaturalLanguageCommand(message.content, prefix);
-    if (routed && (await handleNaturalLanguageRoute(message, routed, context, commands, confirmations))) {
+    if (message.content.trim() === `${prefix}?`) {
+      await message.reply({ content: `${prefix}? 뒤에 질문이나 요청을 적어 주세요...`, allowedMentions: { repliedUser: false } });
       return true;
     }
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
+      if (context.aiCommandPlanner) {
+        try {
+          const member = message.member as GuildMember | null;
+          const plan = await context.aiCommandPlanner.plan(message, aiPrompt, {
+            prefix,
+            commands,
+            availableChannels: listTextChannelCandidates(message),
+            userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
+            botVoiceConnected: context.voice.isConnected(message.guildId),
+            maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
+            onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
+          });
+          switch (plan.kind) {
+            case 'chat':
+              await context.aiChat.handlePrompt(message, aiPrompt);
+              return true;
+            case 'command':
+              return dispatchPlannerCommand(message, commands, context, confirmations, plan.query);
+            case 'channel-history':
+              return handleChannelHistoryPlan(
+                message,
+                {
+                  kind: 'channel-history',
+                  mode: plan.mode,
+                  targetChannelReference: plan.targetChannelReference,
+                  query: plan.query
+                },
+                context
+              );
+            case 'clarify':
+            case 'unavailable':
+              await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+              return true;
+          }
+        } catch (error) {
+          if (isRateLimitLike(error)) {
+            await logPlannerDiagnostic(message, context, { event: 'rate_limit', error });
+            await message.reply({ content: 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
+            return true;
+          }
+          await logPlannerDiagnostic(message, context, { event: 'error', error });
+          await context.aiChat.handlePrompt(message, aiPrompt);
+          return true;
+        }
+      }
+      const fallbackRoute = routeNaturalLanguageCommand(message.content, prefix);
+      if (fallbackRoute && (await handleNaturalLanguageRoute(message, fallbackRoute, context, commands, confirmations))) {
+        return true;
+      }
       await context.aiChat.handlePrompt(message, aiPrompt);
+      return true;
+    }
+    const routed = routeNaturalLanguageCommand(message.content, prefix);
+    if (routed && (await handleNaturalLanguageRoute(message, routed, context, commands, confirmations))) {
       return true;
     }
   }
@@ -702,6 +1008,14 @@ export async function handleMessageCreate(
     });
   }
   return Boolean(queued);
+}
+
+function listTextChannelCandidates(message: Message): Array<{ id: string; name: string; mention: string }> {
+  const channels = Array.from(message.guild?.channels.cache?.values?.() ?? [])
+    .filter((candidate) => candidate.type === ChannelType.GuildText)
+    .map((candidate) => ({ id: candidate.id, name: candidate.name, mention: `<#${candidate.id}>` }))
+    .sort((left, right) => left.name.localeCompare(right.name, 'ko'));
+  return (channels ?? []).slice(0, 40);
 }
 
 export async function createBot(
@@ -724,12 +1038,14 @@ export async function createBot(
   const voiceSettings = new SqliteVoiceSettingsStore(settings.databasePath);
   const activityLog = new BotActivityLogService(client, new SqliteBotActivityLogStore(settings.databasePath), settings.loggingGuildId);
   const ai = new AiService(settings, usageStore);
+  const aiCommandPlanner = new AiCommandPlanner(ai);
   const confirmations = new ConfirmationManager();
   const context: BotContext = {
     settings,
     usageStore,
     ai,
     aiChat: new AiChatService(settings, ai, memoryStore, activityLog),
+    aiCommandPlanner,
     activityLog,
     voiceSettings,
     voice: new VoiceService(

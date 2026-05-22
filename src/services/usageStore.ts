@@ -16,7 +16,7 @@ export type UsageRecord = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  usageScope?: 'chat' | 'summary';
+  usageScope?: 'chat' | 'summary' | 'planner';
   at?: Date;
 };
 

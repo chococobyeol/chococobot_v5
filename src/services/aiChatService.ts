@@ -1,6 +1,6 @@
 import type { GuildTextBasedChannel, Message } from 'discord.js';
 import type { Settings } from '../config.js';
-import { AiLimitError, type AiChatMessage, type AiService } from './aiService.js';
+import { AiLimitError, extractErrorDetails, type AiChatMessage, type AiDetailedResponse, type AiService } from './aiService.js';
 import type { AiMemoryStore, AiMemoryTurn } from './aiMemoryStore.js';
 import type { BotActivityLogService } from './botActivityLogService.js';
 import { logger } from '../logger.js';
@@ -139,11 +139,26 @@ export class AiChatService {
         }
         messages.push(formatCurrentUserTurn(message, prompt));
 
-        const answer = await this.ai.askMessages({
+        const detailed = await this.askDetailedOrText({
           guildId: message.guildId!,
           userId: message.author.id,
           messages
         });
+        const answer = typeof detailed === 'string' ? detailed : detailed.content;
+        if (typeof detailed !== 'string') {
+          await this.logAiDiagnostic(message, {
+            stage: 'chat',
+            event: 'response',
+            model: detailed.model,
+            usageScope: detailed.usageScope,
+            promptTokens: detailed.promptTokens,
+            completionTokens: detailed.completionTokens,
+            totalTokens: detailed.totalTokens,
+            rateLimitHeaders: detailed.rateLimitHeaders,
+            status: detailed.status,
+            responseSnippet: answer.slice(0, 500)
+          });
+        }
 
         await sendChunkedReply(message, answer);
 
@@ -203,8 +218,53 @@ export class AiChatService {
     });
   }
 
+
+  private async askDetailedOrText(params: Parameters<AiService['askMessages']>[0]): Promise<string | AiDetailedResponse> {
+    if ('askMessagesDetailed' in this.ai && typeof this.ai.askMessagesDetailed === 'function') {
+      return this.ai.askMessagesDetailed(params);
+    }
+    return this.ai.askMessages(params);
+  }
+
+  private async logAiDiagnostic(message: Message, details: {
+    stage: 'chat' | 'summary';
+    event: 'response' | 'error' | 'rate_limit';
+    model?: string;
+    usageScope?: string;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    rateLimitHeaders?: Readonly<Record<string, string>>;
+    status?: number;
+    responseSnippet?: string;
+    error?: unknown;
+  }): Promise<void> {
+    if (!message.guildId) return;
+    const errorDetails = details.error ? extractErrorDetails(details.error) : undefined;
+    await this.activityLog.logAiDiagnostic({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.member?.displayName ?? message.author.username,
+      stage: details.stage,
+      event: details.event,
+      model: details.model,
+      usageScope: details.usageScope,
+      promptTokens: details.promptTokens,
+      completionTokens: details.completionTokens,
+      totalTokens: details.totalTokens,
+      rateLimitHeaders: details.rateLimitHeaders ?? errorDetails?.rateLimitHeaders,
+      status: details.status ?? errorDetails?.status,
+      responseSnippet: details.responseSnippet,
+      errorName: errorDetails?.errorName,
+      errorMessage: errorDetails?.errorMessage
+    }).catch((error) => logger.warn('Failed to log AI diagnostic:', error));
+  }
+
   private async handleError(message: Message, prompt: string, error: unknown): Promise<void> {
     logger.error(error);
+    await this.logAiDiagnostic(message, { stage: 'chat', event: extractErrorDetails(error).status === 429 ? 'rate_limit' : 'error', error });
     await this.activityLog.logError({
       guildId: message.guildId!,
       guildName: message.guild?.name,
@@ -234,12 +294,32 @@ export class AiChatService {
         { role: 'system', content: '당신은 Discord 서버 대화 메모리를 압축하는 요약기예요.' },
         { role: 'user', content: buildMemorySummaryPrompt(snapshot.summary, snapshot.recentTurns) }
       ];
-      const summary = await this.ai.askMessages({
+      const detailed = await this.askDetailedOrText({
         guildId,
         userId,
         messages,
         usageScope: 'summary'
       });
+      const summary = typeof detailed === 'string' ? detailed : detailed.content;
+      if (typeof detailed !== 'string') {
+        await this.activityLog.logAiDiagnostic({
+          guildId,
+          guildName: null,
+          channelId: 'memory-compaction',
+          userId,
+          userName: 'ChococoBot',
+          stage: 'summary',
+          event: 'response',
+          model: detailed.model,
+          usageScope: detailed.usageScope,
+          promptTokens: detailed.promptTokens,
+          completionTokens: detailed.completionTokens,
+          totalTokens: detailed.totalTokens,
+          rateLimitHeaders: detailed.rateLimitHeaders,
+          status: detailed.status,
+          responseSnippet: summary.slice(0, 500)
+        }).catch((logError) => logger.warn('Failed to log AI summary diagnostic:', logError));
+      }
       const compacted = summary.slice(0, this.settings.aiMemoryMaxSummaryChars).trim();
       this.memory.replaceSummaryAndMarkCompacted(guildId, compacted);
     } catch (error) {

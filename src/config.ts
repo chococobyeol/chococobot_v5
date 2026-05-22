@@ -6,6 +6,7 @@ export type Settings = {
   groqModel: string;
   aiSystemPrompt: string;
   aiMaxCompletionTokens: number;
+  aiPlannerMaxCompletionTokens: number;
   aiUserDailyTokenLimit: number;
   aiGuildDailyTokenLimit: number;
   aiMemoryRecentTurns: number;
@@ -60,13 +61,19 @@ export function loadSettings(): Settings {
     groqModel: process.env.GROQ_MODEL ?? 'llama-3.1-8b-instant',
     aiSystemPrompt:
       process.env.AI_SYSTEM_PROMPT ??
-      'You are ChococoBot, a concise and friendly Korean Discord assistant.',
+      [
+        '당신은 ChococoBot이에요. 짧고 다정한 한국어로 답해요.',
+        '명령어 응답처럼 자연스럽게 말해요: ~해요, ~할 수 있어요, ~해야 해요, ~해 주세요.',
+        '필요할 때만 ...를 쓰고, 이모지나 장식 문자는 쓰지 않아요.',
+        '상황에 맞는 자연스러운 답을 만들고, 확실하지 않으면 구체적으로 물어봐요.'
+      ].join(' '),
     aiMaxCompletionTokens: intFromEnv('AI_MAX_COMPLETION_TOKENS', 800),
+    aiPlannerMaxCompletionTokens: intFromEnv('AI_PLANNER_MAX_COMPLETION_TOKENS', 300),
     aiUserDailyTokenLimit: intFromEnv('AI_USER_DAILY_TOKEN_LIMIT', 20_000),
     aiGuildDailyTokenLimit: intFromEnv('AI_GUILD_DAILY_TOKEN_LIMIT', 100_000),
-    aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 8),
+    aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 6),
     aiMemoryCompactAfterTurns: positiveIntFromEnv('AI_MEMORY_COMPACT_AFTER_TURNS', 12),
-    aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 2000),
+    aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 1200),
     cleanMineDefaultTarget: positiveIntFromEnv('CLEAN_MINE_DEFAULT_TARGET', 500),
     cleanMineMaxLimit: positiveIntFromEnv('CLEAN_MINE_MAX_LIMIT', 500),
     cleanAllDefaultTarget: positiveIntFromEnv('CLEAN_ALL_DEFAULT_TARGET', 1000),
