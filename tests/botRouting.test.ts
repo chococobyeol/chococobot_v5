@@ -669,12 +669,8 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
-    expect(context.ai.askMessages).toHaveBeenCalledWith(expect.objectContaining({
-      messages: expect.arrayContaining([
-        expect.objectContaining({ content: expect.stringContaining('검색 주제: 정성카츠') })
-      ])
-    }));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠에 관한 내용은 서버에서 찾지 못했어요...' }));
+    expect(context.ai.askMessages).not.toHaveBeenCalled();
     expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
       topic: '정성카츠',
       matchedMessages: 0
@@ -690,7 +686,7 @@ describe('handleMessageCreate', () => {
           kind: 'channel-history',
           mode: 'summary',
           targetChannelReference: '서버 전체',
-          query: '파스타'
+          query: '파스타 비슷한거'
         }))
       }
     });
@@ -717,13 +713,13 @@ describe('handleMessageCreate', () => {
     expect(context.ai.askMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining('검색 주제: 파스타') }),
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 파스타 비슷한거') }),
           expect.objectContaining({ content: expect.stringContaining('스파게티 먹자는 얘기가 있었어요') })
         ])
       })
     );
     expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
-      topic: '파스타',
+      topic: '파스타 비슷한거',
       matchedMessages: 0,
       usedMessages: 1
     }));
@@ -858,7 +854,7 @@ describe('handleMessageCreate', () => {
     expect(context.ai.askMessages).toHaveBeenLastCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining('검색 주제: 치킨') }),
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 치킨 비슷한거') }),
           expect.objectContaining({ content: expect.stringContaining('채널: #배달') }),
           expect.objectContaining({ content: expect.stringContaining('닭강정 시키자는 얘기가 있었어요') })
         ])
@@ -922,7 +918,7 @@ describe('handleMessageCreate', () => {
     second.guild.channels.cache.set('delivery-1', deliveryChannel);
     await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
 
-    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '초밥에 관한 내용은 서버에서 찾지 못했어요...' }));
     expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
     expect(context.ai.askMessages).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -944,7 +940,7 @@ describe('handleMessageCreate', () => {
           kind: 'channel-history',
           mode: 'summary',
           targetChannelReference: '서버 전체',
-          query: '햄버거'
+            query: '햄버거 비슷한거'
         }))
       }
     });
@@ -971,14 +967,14 @@ describe('handleMessageCreate', () => {
     expect(context.ai.askMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining('검색 주제: 햄버거') }),
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 햄버거 비슷한거') }),
           expect.objectContaining({ content: expect.stringContaining('치킨버거 먹고 싶다는 얘기가 있었어요') })
         ])
       })
     );
     expect(generalChannel.messages.fetch).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }));
     expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
-      topic: '햄버거',
+      topic: '햄버거 비슷한거',
       scannedChannels: 1,
       usedMessages: 1
     }));

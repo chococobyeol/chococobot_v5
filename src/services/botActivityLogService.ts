@@ -66,6 +66,8 @@ type ChannelHistoryLogDetails = {
   usedMessages: number;
   topic?: string | null;
   targetChannelId?: string | null;
+  searchSource?: string;
+  searchError?: string | null;
 };
 
 function truncate(value: string, limit = 1500): string {
@@ -210,6 +212,8 @@ export class BotActivityLogService {
           details.topic ? `topic=${details.topic}` : undefined,
           details.targetChannelId ? `targetChannel=${await this.resolveSourceChannelLabel(details.guildId, details.targetChannelId)}` : undefined,
           `query=${truncate(details.query, 500)}`,
+          details.searchSource ? `searchSource=${details.searchSource}` : undefined,
+          details.searchError ? `searchError=${truncate(details.searchError, 500)}` : undefined,
           `scannedChannels=${details.scannedChannels}`,
           `matchedMessages=${details.matchedMessages}`,
           `usedMessages=${details.usedMessages}`

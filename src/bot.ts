@@ -727,6 +727,12 @@ async function dispatchResolvedCommand(
 
 const DISCORD_SAFE_CHUNK_LIMIT = 1900;
 
+type HistorySearchResult = {
+  history: Awaited<ReturnType<typeof fetchChannelHistory>>;
+  source: 'discord-search' | 'recent-fetch' | 'disabled';
+  error?: string;
+};
+
 function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT): string[] {
   const normalized = content.trim();
   if (!normalized) return [];
@@ -829,6 +835,15 @@ function filterHistoryByQuery(
   return history.filter((entry) => normalizeSearchText(entry.content).includes(normalizedQuery));
 }
 
+function isSummaryOnlyHistoryQuery(query: string): boolean {
+  return /요약|정리|최근.*(?:대화|내용)|무슨\s*대화|뭐.*말했|내용\s*요약/i.test(query)
+    && !/찾|검색|있나|있는지|있었는지|나왔|언급|비슷|관련|대한|관한/i.test(query);
+}
+
+function isFuzzyTopicLookupQuery(query: string): boolean {
+  return /비슷|관련|그런\s*거|뭐\s*그런|같은\s*거/i.test(query);
+}
+
 async function fetchRecentGuildTextHistory(
   message: Message,
   options: { limit: number; lookbackHours: number }
@@ -860,20 +875,24 @@ async function searchIndexedGuildTextHistory(
   context: BotContext,
   query: string,
   options: { limit: number; channelIds?: string[] }
-): Promise<Awaited<ReturnType<typeof fetchChannelHistory>>> {
+): Promise<HistorySearchResult> {
   const botToken = context.settings.discordToken;
-  if (!message.guildId || typeof botToken !== 'string' || !botToken.trim()) return [];
+  if (!message.guildId || typeof botToken !== 'string' || !botToken.trim()) {
+    return { history: [], source: 'disabled' };
+  }
   try {
-    return (await searchGuildMessages({
+    const history = (await searchGuildMessages({
       guildId: message.guildId,
       botToken,
       query,
       channelIds: options.channelIds,
       limit: options.limit
     })).filter((entry) => entry.id !== message.id);
+    return { history, source: 'discord-search' };
   } catch (error) {
     logger.warn('Discord indexed message search failed; falling back to recent fetch:', error);
-    return [];
+    const details = extractErrorDetails(error);
+    return { history: [], source: 'recent-fetch', error: details.errorMessage ?? String(error) };
   }
 }
 
@@ -1024,17 +1043,20 @@ async function handleChannelHistoryPlan(
     }
 
     const queryTopic = route.query.trim() || null;
+    const isTopicLookup = Boolean(queryTopic && !isSummaryOnlyHistoryQuery(route.query));
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
-    const indexedHistory = queryTopic
+    const indexedSearch = queryTopic
       ? await searchIndexedGuildTextHistory(message, context, route.query, { limit: searchLimit, channelIds: [targetChannel.id] })
-      : [];
-    const history = indexedHistory.length ? indexedHistory : (await fetchChannelHistory(targetChannel, {
+      : { history: [], source: 'disabled' as const };
+    const history = indexedSearch.history.length ? indexedSearch.history : (await fetchChannelHistory(targetChannel, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
     })).filter((entry) => entry.id !== message.id);
-    const filteredHistory = queryTopic ? filterHistoryByQuery(history, route.query) : history;
-    const usedHistory = filteredHistory.length ? filteredHistory : history;
+    const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, route.query) : history;
+    const usedHistory = isTopicLookup
+      ? (filteredHistory.length || !isFuzzyTopicLookupQuery(route.query) ? filteredHistory : history)
+      : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
       guildName: message.guild?.name,
@@ -1045,10 +1067,21 @@ async function handleChannelHistoryPlan(
       query: route.query,
       topic: queryTopic,
       targetChannelId: targetChannel.id,
+      searchSource: indexedSearch.history.length ? indexedSearch.source : 'recent-fetch',
+      searchError: indexedSearch.error,
       scannedChannels: 1,
-      matchedMessages: queryTopic ? filteredHistory.length : history.length,
+      matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
       usedMessages: usedHistory.length
     }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
+
+    if (isTopicLookup && !usedHistory.length) {
+      setPendingChannelHistoryRequest(message, { mode: route.mode, query: route.query });
+      await message.reply({
+        content: `${route.query}에 관한 내용은 <#${targetChannel.id}>에서 찾지 못했어요...`,
+        allowedMentions: { repliedUser: false }
+      });
+      return true;
+    }
 
     if (!history.length) {
       setPendingChannelHistoryRequest(message, { mode: route.mode, query: route.query });
@@ -1104,17 +1137,20 @@ async function handleGuildChannelHistoryPlan(
     }
 
     const queryTopic = query.trim() || null;
+    const isTopicLookup = Boolean(queryTopic && !isSummaryOnlyHistoryQuery(query));
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
-    const indexedHistory = queryTopic
+    const indexedSearch = queryTopic
       ? await searchIndexedGuildTextHistory(message, context, query, { limit: searchLimit })
-      : [];
-    const history = indexedHistory.length ? indexedHistory : await fetchRecentGuildTextHistory(message, {
+      : { history: [], source: 'disabled' as const };
+    const history = indexedSearch.history.length ? indexedSearch.history : await fetchRecentGuildTextHistory(message, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
     });
-    const filteredHistory = queryTopic ? filterHistoryByQuery(history, query) : history;
-    const usedHistory = filteredHistory.length ? filteredHistory : history;
+    const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, query) : history;
+    const usedHistory = isTopicLookup
+      ? (filteredHistory.length || !isFuzzyTopicLookupQuery(query) ? filteredHistory : history)
+      : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
       guildName: message.guild?.name,
@@ -1124,13 +1160,24 @@ async function handleGuildChannelHistoryPlan(
       mode,
       query,
       topic: queryTopic,
+      searchSource: indexedSearch.history.length ? indexedSearch.source : 'recent-fetch',
+      searchError: indexedSearch.error,
       scannedChannels: Math.min(
         MAX_AUTO_HISTORY_CHANNELS,
         Array.from(message.guild?.channels.cache.values() ?? []).filter((candidate) => candidate.type === ChannelType.GuildText).length
       ),
-      matchedMessages: filteredHistory.length,
+      matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
       usedMessages: usedHistory.length
     }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
+
+    if (isTopicLookup && !usedHistory.length) {
+      setPendingChannelHistoryRequest(message, { mode, query });
+      await message.reply({
+        content: `${query}에 관한 내용은 서버에서 찾지 못했어요...`,
+        allowedMentions: { repliedUser: false }
+      });
+      return true;
+    }
 
     if (!history.length) {
       setPendingChannelHistoryRequest(message, { mode, query });
