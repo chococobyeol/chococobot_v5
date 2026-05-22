@@ -498,7 +498,7 @@ describe('handleMessageCreate', () => {
         )
       }
     };
-    const first = makeMessage('!? 내용 요약해줘');
+    const first = makeMessage('!? 없는채널 내용 요약해줘');
     const second = makeMessage('!? 메모 채널');
     first.guild.channels.cache.set('memo-2', memoChannel);
     second.guild.channels.cache.set('memo-2', memoChannel);
@@ -524,6 +524,65 @@ describe('handleMessageCreate', () => {
       })
     );
     expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+  });
+
+  it('summarizes recent conversations across text channels when no channel is specified', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const now = Date.now();
+    const message = makeMessage('!? 최근에 무슨 대화 했지?');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'general-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: now - 1_000,
+            content: '일반 채널 대화',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+    message.guild.channels.cache.set('memo-3', {
+      id: 'memo-3',
+      name: '메모채널',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: vi.fn(async () =>
+          [
+            {
+              id: 'memo-message-3',
+              channelId: 'memo-3',
+              createdTimestamp: now - 500,
+              content: '메모 채널 대화',
+              author: { id: 'user-2', username: 'writer', bot: false },
+              member: { displayName: '작성자' }
+            }
+          ] as any
+        )
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('채널: <#channel-1>') }),
+          expect.objectContaining({ content: expect.stringContaining('채널: <#memo-3>') })
+        ])
+      })
+    );
+    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {

@@ -33,6 +33,7 @@ const ALLOWED_PREFIXES = ['!', '?', '.', '~'] as const;
 const MAX_TTS_COMMAND_CHARS = 500;
 const CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT = 1;
 const PENDING_CHANNEL_HISTORY_TTL_MS = 5 * 60 * 1000;
+const MAX_AUTO_HISTORY_CHANNELS = 20;
 
 type PendingChannelHistoryRequest = {
   mode: 'summary' | 'qa';
@@ -193,7 +194,11 @@ function channelHistoryModeFromPrompt(prompt: string): 'summary' | 'qa' | null {
 }
 
 function looksLikeChannelHistoryPrompt(prompt: string): boolean {
-  return Boolean(channelHistoryModeFromPrompt(prompt)) && /채널|<#\d+>|#[^\s]+|내용|기록|대화|메모/.test(prompt);
+  return Boolean(channelHistoryModeFromPrompt(prompt)) && /채널|<#\d+>|#[^\s]+|내용|기록|대화|메모|최근/.test(prompt);
+}
+
+function hasExplicitChannelReference(prompt: string): boolean {
+  return /채널|<#\d+>|#[^\s]+|메모|로그|봇테스트|테스트창/.test(prompt);
 }
 
 function findTextChannelFromNaturalReference(message: Message, prompt: string): GuildTextBasedChannel | 'ambiguous' | null {
@@ -755,6 +760,30 @@ function buildChannelHistoryMessages(
   return messages;
 }
 
+async function fetchRecentGuildTextHistory(
+  message: Message,
+  options: { limit: number; lookbackHours: number }
+): Promise<Awaited<ReturnType<typeof fetchChannelHistory>>> {
+  const channels = Array.from(message.guild?.channels.cache.values() ?? [])
+    .filter((candidate): candidate is GuildTextBasedChannel => candidate.type === ChannelType.GuildText && 'messages' in candidate)
+    .slice(0, MAX_AUTO_HISTORY_CHANNELS);
+  const perChannelLimit = Math.max(1, Math.min(options.limit, Math.ceil(options.limit / Math.max(1, Math.min(channels.length, 5)))));
+  const settled = await Promise.allSettled(
+    channels.map((channel) =>
+      fetchChannelHistory(channel, {
+        limit: perChannelLimit,
+        lookbackHours: options.lookbackHours
+      })
+    )
+  );
+
+  const combined = settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
+  return combined
+    .sort((left, right) => right.createdTimestamp - left.createdTimestamp)
+    .slice(0, options.limit)
+    .sort((left, right) => left.createdTimestamp - right.createdTimestamp);
+}
+
 
 async function createAndReplyConfirmation(
   message: Message,
@@ -942,6 +971,61 @@ async function handleChannelHistoryPlan(
   return true;
 }
 
+async function handleGuildChannelHistoryPlan(
+  message: Message,
+  mode: 'summary' | 'qa',
+  query: string,
+  context: BotContext
+): Promise<boolean> {
+  if (!message.guildId) return false;
+  try {
+    const assessment = assessChannelHistoryQuery(query);
+    if (assessment.status !== 'ready') {
+      await message.reply({ content: assessment.prompt, allowedMentions: { repliedUser: false } });
+      return true;
+    }
+
+    const history = await fetchRecentGuildTextHistory(message, {
+      limit: assessment.limit,
+      lookbackHours: assessment.lookbackHours
+    });
+    if (!history.length) {
+      await message.reply({
+        content: `최근 ${assessment.limit}개 또는 ${assessment.lookbackHours}시간 안에 읽을 대화를 찾지 못했어요...`,
+        allowedMentions: { repliedUser: false }
+      });
+      return true;
+    }
+
+    const answer = await context.ai.askMessages({
+      guildId: message.guildId,
+      userId: message.author.id,
+      usageScope: 'summary',
+      messages: buildChannelHistoryMessages(history, message.channelId, mode, query)
+    });
+    await replyWithChunks(message, answer);
+  } catch (error) {
+    logger.error(error);
+    await context.activityLog.logAiDiagnostic({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.member?.displayName ?? message.author.username,
+      stage: 'summary',
+      event: isRateLimitLike(error) ? 'rate_limit' : 'error',
+      usageScope: 'summary',
+      ...extractErrorDetails(error)
+    }).catch((logError) => logger.warn('Failed to log guild channel-history diagnostic:', logError));
+    const details = extractErrorDetails(error);
+    const content = details.status === 429
+      ? 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...'
+      : details.errorMessage || '최근 대화를 확인하지 못했어요... 다시 시도해 주세요...';
+    await message.reply({ content, allowedMentions: { repliedUser: false } });
+  }
+  return true;
+}
+
 async function handleNaturalLanguageRoute(
   message: Message,
   route: RoutedNaturalLanguageCommand,
@@ -1036,6 +1120,11 @@ async function handleDirectChannelHistoryPrompt(
     setPendingChannelHistoryRequest(message, { mode, query: prompt });
     await message.reply({ content: '비슷한 채널이 여러 개 있어요... 어느 채널을 요약할지 채널 멘션으로 말해 주세요...', allowedMentions: { repliedUser: false } });
     return true;
+  }
+
+  if (!hasExplicitChannelReference(prompt)) {
+    clearPendingChannelHistoryRequest(message);
+    return handleGuildChannelHistoryPlan(message, mode, prompt, context);
   }
 
   setPendingChannelHistoryRequest(message, { mode, query: prompt });

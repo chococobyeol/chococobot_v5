@@ -108,7 +108,7 @@ export function formatChannelHistoryMessages(
     role: message.isBot ? 'assistant' : 'user',
     content: [
       `작성자: ${message.authorName} (${message.authorId})`,
-      `채널: <#${targetChannelId}>`,
+      `채널: <#${message.channelId || targetChannelId}>`,
       `시각: ${new Date(message.createdTimestamp).toISOString()}`,
       message.content
     ].join('\n')
