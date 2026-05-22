@@ -707,6 +707,72 @@ describe('handleMessageCreate', () => {
     }));
   });
 
+  it('remembers a successful server topic search for channel-only follow-up searches', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '서버 전체',
+          query: '치킨 비슷한거'
+        }))
+      }
+    });
+    const first = makeMessage('!? 치킨 비슷한거에 대한 내용 대화중에 있나 봐줘');
+    const second = makeMessage('!? 배달 이 채널에서 봐줘');
+    const generalChannel = first.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'chicken-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '치킨 얘기가 있었어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+    const deliveryChannel = {
+      id: 'delivery-2',
+      name: '배달',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: vi.fn(async () =>
+          [
+            {
+              id: 'delivery-chicken-1',
+              channelId: 'delivery-2',
+              createdTimestamp: Date.now(),
+              content: '닭강정 시키자는 얘기가 있었어요',
+              author: { id: 'user-2', username: 'writer', bot: false },
+              member: { displayName: '작성자' }
+            }
+          ] as any
+        )
+      }
+    };
+    first.guild.channels.cache.set('delivery-2', deliveryChannel);
+    second.guild.channels.cache.set('delivery-2', deliveryChannel);
+
+    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
+    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+
+    expect(context.ai.askMessages).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 치킨') }),
+          expect.objectContaining({ content: expect.stringContaining('채널: #배달') }),
+          expect.objectContaining({ content: expect.stringContaining('닭강정 시키자는 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
+  });
+
   it('retries the previous missing server topic in a channel named by the next message', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({

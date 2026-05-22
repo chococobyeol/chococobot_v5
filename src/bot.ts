@@ -813,6 +813,7 @@ function buildChannelHistoryMessages(
 
 function extractHistorySearchTopic(query: string): string | null {
   const patterns = [
+    /^\s*[\"“”'‘’]?(.+?)[\"“”'‘’]?\s*(?:와|과|랑|이랑|이나|나)?\s*(?:뭐\s*)?(?:그런\s*)?비슷한\s*거/i,
     /(?:대화내용|대화\s*내용|서버|채널|기록)?\s*(?:중에|에서)?\s*["“”'‘’]?(.+?)["“”'‘’]?(?:에\s*대한|에\s*관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|찾아봐|찾아줘|찾아|검색해|검색해줘|검색)/i,
     /["“”'‘’]?(.+?)["“”'‘’]?(?:에\s*대한|에\s*관한|관련)\s*(?:내용|얘기|언급)/i
   ];
@@ -822,7 +823,8 @@ function extractHistorySearchTopic(query: string): string | null {
     const topic = rawTopic
       ?.replace(/^(?:대화내용|대화 내용|서버|채널|기록)\s*(?:중에|에서|에)?\s*/, '')
       .replace(/에\s*(?:대한|관한)$/i, '')
-      .replace(/\s*(?:나|이나|이랑|랑)?\s*(?:뭐\s*)?(?:그런\s*)?(?:비슷한\s*)?거$/i, '')
+      .replace(/\s*(?:나|이나|이랑|랑)\s*(?:뭐\s*)?(?:그런\s*)?(?:비슷한\s*)?거$/i, '')
+      .replace(/\s*(?:뭐\s*)?(?:그런\s*)?비슷한\s*거$/i, '')
       .trim();
     if (topic && topic.length >= 2 && !/^(대화내용|대화 내용|서버|채널|기록)$/.test(topic)) return topic;
   }
@@ -1143,13 +1145,14 @@ async function handleGuildChannelHistoryPlan(
       return true;
     }
 
-    clearPendingChannelHistoryRequest(message);
     const answer = await context.ai.askMessages({
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
       messages: buildChannelHistoryMessages(message, usedHistory, mode, query, topic)
     });
+    if (topic) setPendingChannelHistoryRequest(message, { mode, query });
+    else clearPendingChannelHistoryRequest(message);
     await replyWithChunks(message, answer);
   } catch (error) {
     logger.error(error);
