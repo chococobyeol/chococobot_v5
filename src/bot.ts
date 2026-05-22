@@ -9,11 +9,7 @@ import { AiCommandPlanner } from './services/aiCommandPlanner.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { ConfirmationManager, type ConfirmationScope } from './services/confirmationManager.js';
-import {
-  assessChannelHistoryQuery,
-  fetchChannelHistory,
-  formatChannelHistoryMessages
-} from './services/channelHistoryService.js';
+import { assessChannelHistoryQuery, fetchChannelHistory } from './services/channelHistoryService.js';
 import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
 import { SqliteAiMemoryStore } from './services/aiMemoryStore.js';
 import { routeNaturalLanguageCommand, type RoutedNaturalLanguageCommand } from './services/nlCommandRouter.js';
@@ -739,23 +735,57 @@ async function replyWithChunks(message: Message, content: string): Promise<void>
   }
 }
 
+function formatDiscordDisplayTime(timestamp: number): string {
+  return `<t:${Math.floor(timestamp / 1000)}:t>`;
+}
+
+function channelDisplayName(message: Message, channelId: string): string {
+  const channel = message.guild?.channels.cache.get(channelId);
+  return channel?.name ? `#${channel.name}` : `#${channelId}`;
+}
+
+function buildChannelHistoryLines(
+  message: Message,
+  history: Awaited<ReturnType<typeof fetchChannelHistory>>
+): string {
+  return history
+    .map((entry) => [
+      `시간: ${formatDiscordDisplayTime(entry.createdTimestamp)}`,
+      `채널: ${channelDisplayName(message, entry.channelId)}`,
+      `작성자: ${entry.authorName}`,
+      `내용: ${entry.content}`
+    ].join('\n'))
+    .join('\n\n');
+}
+
 function buildChannelHistoryMessages(
+  message: Message,
   history: Awaited<ReturnType<typeof fetchChannelHistory>>,
-  targetChannelId: string,
   mode: 'summary' | 'qa',
   query: string
 ): AiChatMessage[] {
+  const channelNames = Array.from(new Set(history.map((entry) => channelDisplayName(message, entry.channelId)))).join(', ');
   const messages: AiChatMessage[] = [
-    { role: 'system', content: `당신은 Discord 채널 기록을 바탕으로 답하는 도우미예요.` },
-    { role: 'system', content: `대상 채널: <#${targetChannelId}>` },
-    ...formatChannelHistoryMessages(history, targetChannelId)
+    {
+      role: 'system',
+      content: [
+        '당신은 Discord 서버 대화 기록을 요약하는 도우미예요.',
+        '출력에는 "(한국어)" 같은 언어 라벨을 붙이지 않아요.',
+        '채널은 ID나 멘션 대신 제공된 #채널이름 그대로 써요.',
+        '시간은 제공된 Discord timestamp를 그대로 써요. UTC, ISO, 한국시간 같은 고정 시간대로 바꾸지 않아요.',
+        '답변은 중간에 끊기지 않게 6줄 이내로 짧게 써요.',
+        '불필요한 제목이나 장식 없이 핵심만 말해요.'
+      ].join('\n')
+    },
+    { role: 'system', content: `읽은 채널: ${channelNames || '알 수 없음'}` },
+    { role: 'user', content: `대화 기록:\n${buildChannelHistoryLines(message, history)}` }
   ];
   messages.push({
     role: 'user',
     content:
       mode === 'summary'
-        ? `이 채널 대화를 한국어로 간결하게 요약해 주세요...\n${query}`
-        : `다음 채널 기록을 바탕으로 질문에 답해 주세요...\n${query}`
+        ? `최근 대화를 짧게 요약해 주세요...\n${query}`
+        : `다음 대화 기록을 바탕으로 질문에 답해 주세요...\n${query}`
   });
   return messages;
 }
@@ -946,7 +976,7 @@ async function handleChannelHistoryPlan(
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
-      messages: buildChannelHistoryMessages(history, targetChannel.id, route.mode, route.query)
+      messages: buildChannelHistoryMessages(message, history, route.mode, route.query)
     });
     await replyWithChunks(message, answer);
   } catch (error) {
@@ -1001,7 +1031,7 @@ async function handleGuildChannelHistoryPlan(
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
-      messages: buildChannelHistoryMessages(history, message.channelId, mode, query)
+      messages: buildChannelHistoryMessages(message, history, mode, query)
     });
     await replyWithChunks(message, answer);
   } catch (error) {

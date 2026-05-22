@@ -464,7 +464,7 @@ describe('handleMessageCreate', () => {
     expect(context.ai.askMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining('채널: <#memo-1>') })
+          expect.objectContaining({ content: expect.stringContaining('채널: #메모채널') })
         ])
       })
     );
@@ -519,7 +519,7 @@ describe('handleMessageCreate', () => {
     expect(context.ai.askMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining('채널: <#memo-2>') })
+          expect.objectContaining({ content: expect.stringContaining('채널: #메모채널') })
         ])
       })
     );
@@ -576,8 +576,9 @@ describe('handleMessageCreate', () => {
     expect(context.ai.askMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining('채널: <#channel-1>') }),
-          expect.objectContaining({ content: expect.stringContaining('채널: <#memo-3>') })
+          expect.objectContaining({ content: expect.stringContaining('채널: #general') }),
+          expect.objectContaining({ content: expect.stringContaining('채널: #메모채널') }),
+          expect.objectContaining({ content: expect.stringContaining('<t:') })
         ])
       })
     );
