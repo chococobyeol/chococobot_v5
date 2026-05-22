@@ -32,6 +32,26 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
   return chunks.filter(Boolean).map((chunk) => (chunk.length > DISCORD_MESSAGE_LIMIT ? chunk.slice(0, DISCORD_SAFE_CHUNK_LIMIT) : chunk));
 }
 
+function normalizeAiChatTone(content: string): string {
+  const normalized = content
+    .trim()
+    .replace(/[!！]+/g, '...')
+    .replace(/[?？]+/g, '...')
+    .replace(/…+/g, '...')
+    .replace(/\s+\.\.\./g, '...')
+    .replace(/\.{4,}/g, '...')
+    .replace(/안녕하세요\.\.\.\s*어떤 도움이 필요하신가요\.{0,3}/g, '안녕하세요...')
+    .replace(/안녕하세요\.\.\.\s*무엇을 도와드릴까요\.{0,3}/g, '안녕하세요...')
+    .replace(/안녕하세요\s*어떤 도움이 필요하신가요\.{0,3}/g, '안녕하세요...')
+    .replace(/안녕하세요\s*무엇을 도와드릴까요\.{0,3}/g, '안녕하세요...')
+    .replace(/무엇을 도와드릴까요\.{0,3}/g, '무엇을 도와드릴까요...')
+    .replace(/어떤 도움이 필요하신가요\.{0,3}/g, '무엇을 도와드릴까요...')
+    .replace(/[🙂-🙿😀-🫿☀-⛿✀-➿]/gu, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  return normalized || '응답이 비어 있어요...';
+}
+
 function formatUserTurn(turn: AiMemoryTurn): AiChatMessage {
   if (turn.role === 'assistant') {
     return { role: 'assistant', content: turn.content };
@@ -144,7 +164,8 @@ export class AiChatService {
           userId: message.author.id,
           messages
         });
-        const answer = typeof detailed === 'string' ? detailed : detailed.content;
+        const rawAnswer = typeof detailed === 'string' ? detailed : detailed.content;
+        const answer = normalizeAiChatTone(rawAnswer);
         if (typeof detailed !== 'string') {
           await this.logAiDiagnostic(message, {
             stage: 'chat',

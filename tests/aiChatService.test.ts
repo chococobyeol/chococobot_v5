@@ -199,4 +199,44 @@ describe('AiChatService', () => {
       })
     );
   });
+
+  it('normalizes generic assistant punctuation into the bot command-response tone', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = {
+      askMessagesDetailed: vi.fn(async () => ({
+        content: '안녕하세요! 어떤 도움이 필요하신가요?',
+        model: 'openai/gpt-oss-120b',
+        usageScope: 'chat',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        rateLimitHeaders: {},
+        status: 200
+      }))
+    } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(settings, ai, memory, activityLog);
+    const message = makeMessage('channel-1', '!? 안녕');
+
+    await service.handlePrompt(message, '안녕');
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '안녕하세요...' })
+    );
+    expect(activityLog.logCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: 'ai-chat-response',
+        summary: 'answer=안녕하세요...'
+      })
+    );
+    expect(memory.getGuildSnapshot('guild-1', 8).recentTurns.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: '안녕하세요...'
+    });
+  });
 });
