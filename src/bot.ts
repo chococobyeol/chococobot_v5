@@ -47,6 +47,10 @@ export function parsePrefixCommand(content: string, prefix = DEFAULT_PREFIX): Pa
   return { name: rawName.toLowerCase(), args };
 }
 
+function isBareAiChatTrigger(content: string, prefix: string): boolean {
+  return content.trim() === `${prefix}?`;
+}
+
 function getGuildPrefix(context: BotContext, guildId?: string): string {
   if (!guildId) return DEFAULT_PREFIX;
   return context.voiceSettings.getCommandPrefix(guildId) ?? DEFAULT_PREFIX;
@@ -474,6 +478,7 @@ async function dispatchPrefixCommand(
   if (!parsed) return false;
   const command = commands.get(parsed.name);
   if (!command) {
+    if (parsed.name === '?') return false;
     await message.reply({ content: `${prefix}도움말로 사용 가능한 명령어를 확인해 주세요...`, allowedMentions: { repliedUser: false } });
     return true;
   }
