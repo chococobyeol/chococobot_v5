@@ -18,6 +18,28 @@ services:
         value: /opt/render/project/src/.venv/bin/python
       - key: DISCORD_TOKEN
         sync: false
+      - key: LOGGING_GUILD_ID
+        value: 1507058598423826533
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: AI_SYSTEM_PROMPT
+        value: 당신은 ChococoBot이에요. 짧고 다정한 한국어로 답해요. 명령어 응답처럼 자연스럽게 말해요. 느낌표, 물음표, 이모지, 장식 문자는 쓰지 않아요. 인사만 받으면 안녕하세요...처럼 짧게 답해요. 상황에 맞는 자연스러운 답을 만들고, 확실하지 않으면 구체적으로 물어봐요.
+      - key: AI_MAX_COMPLETION_TOKENS
+        value: 500
+      - key: AI_PLANNER_MAX_COMPLETION_TOKENS
+        value: 800
+      - key: AI_USER_DAILY_TOKEN_LIMIT
+        value: 0
+      - key: AI_GUILD_DAILY_TOKEN_LIMIT
+        value: 180000
+      - key: AI_MEMORY_RECENT_TURNS
+        value: 4
+      - key: AI_MEMORY_COMPACT_AFTER_TURNS
+        value: 12
+      - key: AI_MEMORY_MAX_SUMMARY_CHARS
+        value: 900
       - key: DATABASE_PATH
         value: /var/data/chococobot.sqlite3
       - key: CLEAN_MINE_DEFAULT_TARGET
@@ -28,6 +50,10 @@ services:
         value: 1000
       - key: CLEAN_ALL_MAX_LIMIT
         value: 1000
+      - key: VOICE_IDLE_LEAVE_MS
+        value: 600000
+      - key: TTS_ENGINE
+        value: edge
       - key: TTS_VOICE
         value: ko-KR-SunHiNeural
       - key: TTS_MAX_CHARS
