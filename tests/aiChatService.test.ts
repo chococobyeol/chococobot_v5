@@ -246,6 +246,25 @@ describe('AiChatService', () => {
     );
   });
 
+  it('handles casual current-time phrasings without asking AI', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = { askMessagesDetailed: vi.fn() } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(settings, ai, memory, activityLog, new InMemoryVoiceSettingsStore());
+
+    for (const prompt of ['몇시지', '내시간', '내 시간', '지금 시간 뭐야']) {
+      const message = makeMessage('channel-1', `!? ${prompt}`);
+      await service.handlePrompt(message, prompt);
+      expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<t:1779473700:t>예요...' }));
+    }
+    expect(ai.askMessagesDetailed).not.toHaveBeenCalled();
+  });
+
   it('answers named-location time questions in that location time zone', async () => {
     const settings = makeSettings();
     const memory = new InMemoryAiMemoryStore();
@@ -264,6 +283,41 @@ describe('AiChatService', () => {
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: '헝가리 시간은 오후 8시 15분이에요...' })
     );
+  });
+
+  it('passes the message timestamp context to AI for non-deterministic chat fallback', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = {
+      askMessagesDetailed: vi.fn(async () => ({
+        content: '그냥 있어요...',
+        model: 'openai/gpt-oss-120b',
+        usageScope: 'chat',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        rateLimitHeaders: {},
+        status: 200
+      }))
+    } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(settings, ai, memory, activityLog, new InMemoryVoiceSettingsStore());
+    const message = makeMessage('channel-1', '!? 뭐해');
+
+    await service.handlePrompt(message, '뭐해');
+
+    expect(ai.askMessagesDetailed).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: 'system',
+          content: expect.stringContaining('<t:1779473700:t>')
+        })
+      ])
+    }));
   });
 
   it('normalizes generic assistant punctuation into the bot command-response tone', async () => {

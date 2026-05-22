@@ -37,8 +37,9 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
 function isCurrentTimeQuestion(prompt: string): boolean {
   const normalized = prompt.trim().replace(/\s+/g, '');
   if (!normalized) return false;
-  return /^(?:지금|현재|이제)?(?:몇시|몇분|시간)(?:야|이야|인가|알려줘|말해줘|좀알려줘|좀말해줘)?[.。…]*$/u.test(normalized) ||
-    /^(?:지금|현재)(?:시간|시각)(?:이)?(?:뭐야|어떻게돼|알려줘|말해줘)?[.。…]*$/u.test(normalized);
+  return /^(?:지금|현재|이제|내|내가보는|내쪽|내기준)?(?:몇시|몇분)(?:야|이야|인가|지|죠|임|알려줘|말해줘|좀알려줘|좀말해줘)?[.。…]*$/u.test(normalized) ||
+    /^(?:지금|현재|이제|내|내가보는|내쪽|내기준)?(?:시간|시각)(?:은|는|이|가)?(?:뭐야|어떻게돼|몇시야|몇시지|알려줘|말해줘|궁금해)?[.。…]*$/u.test(normalized) ||
+    /^(?:내시간|내시각|내쪽시간|내기준시간)(?:은|는|이|가)?[.。…]*$/u.test(normalized);
 }
 
 function parseRelativeTimeOffsetMs(prompt: string): number | null {
@@ -272,6 +273,14 @@ export class AiChatService {
         for (const turn of snapshot.recentTurns) {
           messages.push(formatUserTurn(turn));
         }
+        messages.push({
+          role: 'system',
+          content: [
+            `현재 사용자 메시지 작성 시각 timestamp: <t:${Math.floor(message.createdTimestamp / 1000)}:t>`,
+            '현재 시간이나 상대 시간 질문에는 시간을 추측하지 말고 이 Discord timestamp 기준으로 답해요.',
+            '보는 사람의 로컬 시간이 필요한 경우 <t:...:t> 형식을 그대로 사용해요.'
+          ].join('\n')
+        });
         messages.push(formatCurrentUserTurn(message, prompt));
 
         const detailed = await this.askDetailedOrText({
