@@ -815,72 +815,17 @@ function buildChannelHistoryMessages(
   return messages;
 }
 
-function cleanHistoryTopic(rawTopic: string | undefined): string | null {
-  const topic = rawTopic
-    ?.trim()
-    .replace(/^(이|그|저)\s+/, '')
-    .replace(/\s+/g, ' ')
-    .replace(/^(?:대화내용|대화 내용|대화|서버|채널|기록)\s*(?:중에|에서|에|대용중에)?\s*/, '')
-    .replace(/에\s*(?:대한|관한)$/i, '')
-    .replace(/\s*(?:나|이나|이랑|랑)\s*(?:뭐\s*)?(?:그런\s*)?(?:비슷한\s*)?거$/i, '')
-    .replace(/\s*(?:뭐\s*)?(?:그런\s*)?비슷한\s*거$/i, '')
-    .replace(/(?:은|는|이|가|을|를|도|만)$/u, '')
-    .trim();
-  if (topic && topic.length >= 2 && !/^(대화내용|대화 내용|대화|서버|채널|기록|내용)$/.test(topic)) return topic;
-  return null;
-}
-
-function extractHistorySearchTopic(query: string): string | null {
-  if (/요약|정리|최근.*(?:대화|내용)|무슨\s*대화|뭐.*말했/i.test(query) && !/찾아|검색|있나|있는지|있었는지|나왔|언급|비슷|관련/i.test(query)) {
-    return null;
-  }
-
-  const patterns = [
-    /^\s*[\"“”'‘’]?(.+?)[\"“”'‘’]?\s*(?:와|과|랑|이랑|이나|나)?\s*(?:뭐\s*)?(?:그런\s*)?비슷한\s*거/i,
-    /(?:대화내용|대화\s*내용|대화|서버|채널|기록)?\s*(?:중에|에서|대용중에)?\s*[\"“”'‘’]?(.+?)[\"“”'‘’]?(?:에\s*대한|에\s*관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|봐줘|찾아봐|찾아줘|찾아|검색해|검색해줘|검색)/i,
-    /[\"“”'‘’]?(.+?)[\"“”'‘’]?(?:에\s*대한|에\s*관한|관련)\s*(?:내용|얘기|언급)/i
-  ];
-  for (const pattern of patterns) {
-    const topic = cleanHistoryTopic(query.match(pattern)?.[1]);
-    if (topic) return topic;
-  }
-
-  if (/^[0-9A-Za-z가-힣]+$/.test(query) && !/^(최근|요약|정리|내용|대화|채널|서버)$/i.test(query.trim())) {
-    return cleanHistoryTopic(query);
-  }
-  return null;
-}
-
-function extractPendingHistoryRefinementTopic(prompt: string): string | null {
-  const normalized = prompt.trim();
-  const patterns = [
-    /([0-9A-Za-z가-힣]{2,30})(?:은|는|이|가|도)?\s*\??$/u,
-    /(?:왜\s*없지|없어|그럼|그러면|혹시|아니)?[\s?!.…]*(.+?)(?:은|는|이|가|도)?\s*\??$/u,
-    /(.+?)(?:도|은|는)\s*\??$/u
-  ];
-  for (const pattern of patterns) {
-    const topic = cleanHistoryTopic(normalized.match(pattern)?.[1]);
-    if (topic && !isBotBehaviorComplaint(topic)) return topic;
-  }
-  return null;
-}
-
-function isFuzzyHistorySearch(query: string): boolean {
-  return /비슷|관련|그런\s*거|뭐\s*그런/i.test(query);
-}
-
 function normalizeSearchText(value: string): string {
   return value.toLowerCase().replace(/[\s"'“”'‘’.,!?！？…~\-_/\\()[\]{}:;]+/g, '');
 }
 
-function filterHistoryByTopic(
+function filterHistoryByQuery(
   history: Awaited<ReturnType<typeof fetchChannelHistory>>,
-  topic: string | null
+  query: string
 ): Awaited<ReturnType<typeof fetchChannelHistory>> {
-  if (!topic) return history;
-  const normalizedTopic = normalizeSearchText(topic);
-  if (!normalizedTopic) return history;
-  return history.filter((entry) => normalizeSearchText(entry.content).includes(normalizedTopic));
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return history;
+  return history.filter((entry) => normalizeSearchText(entry.content).includes(normalizedQuery));
 }
 
 async function fetchRecentGuildTextHistory(
@@ -1055,16 +1000,15 @@ async function handleChannelHistoryPlan(
       return true;
     }
 
-    const topic = extractHistorySearchTopic(route.query);
-    const searchLimit = topic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
-    const searchLookbackHours = topic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
+    const queryTopic = route.query.trim() || null;
+    const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
+    const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
     const history = (await fetchChannelHistory(targetChannel, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
     })).filter((entry) => entry.id !== message.id);
-    const filteredHistory = filterHistoryByTopic(history, topic);
-    const useFuzzySearch = Boolean(topic && isFuzzyHistorySearch(route.query) && filteredHistory.length === 0);
-    const usedHistory = filteredHistory.length ? filteredHistory : useFuzzySearch ? history : history;
+    const filteredHistory = queryTopic ? filterHistoryByQuery(history, route.query) : history;
+    const usedHistory = filteredHistory.length ? filteredHistory : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
       guildName: message.guild?.name,
@@ -1073,11 +1017,11 @@ async function handleChannelHistoryPlan(
       userName: message.member?.displayName ?? message.author.username,
       mode: route.mode,
       query: route.query,
-      topic,
+      topic: queryTopic,
       targetChannelId: targetChannel.id,
       scannedChannels: 1,
-      matchedMessages: filteredHistory.length,
-      usedMessages: topic && !useFuzzySearch ? filteredHistory.length : usedHistory.length
+      matchedMessages: queryTopic ? filteredHistory.length : history.length,
+      usedMessages: usedHistory.length
     }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
 
     if (!history.length) {
@@ -1088,18 +1032,13 @@ async function handleChannelHistoryPlan(
       });
       return true;
     }
-    if (topic && !filteredHistory.length && !useFuzzySearch) {
-      setPendingChannelHistoryRequest(message, { mode: route.mode, query: route.query });
-      await message.reply({ content: `${channelDisplayName(message, targetChannel.id)}에서 ${topic}에 관한 내용은 ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 찾지 못했어요... 다른 채널을 말하면 같은 내용으로 다시 찾아볼게요...`, allowedMentions: { repliedUser: false } });
-      return true;
-    }
 
     clearPendingChannelHistoryRequest(message);
     const answer = await context.ai.askMessages({
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
-      messages: buildChannelHistoryMessages(message, usedHistory, route.mode, route.query, topic)
+      messages: buildChannelHistoryMessages(message, usedHistory, route.mode, route.query, queryTopic)
     });
     await replyWithChunks(message, answer);
   } catch (error) {
@@ -1138,16 +1077,15 @@ async function handleGuildChannelHistoryPlan(
       return true;
     }
 
-    const topic = extractHistorySearchTopic(query);
-    const searchLimit = topic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
-    const searchLookbackHours = topic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
+    const queryTopic = query.trim() || null;
+    const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
+    const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
     const history = await fetchRecentGuildTextHistory(message, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
     });
-    const filteredHistory = filterHistoryByTopic(history, topic);
-    const useFuzzySearch = Boolean(topic && isFuzzyHistorySearch(query) && filteredHistory.length === 0);
-    const usedHistory = filteredHistory.length ? filteredHistory : useFuzzySearch ? history : history;
+    const filteredHistory = queryTopic ? filterHistoryByQuery(history, query) : history;
+    const usedHistory = filteredHistory.length ? filteredHistory : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
       guildName: message.guild?.name,
@@ -1156,36 +1094,30 @@ async function handleGuildChannelHistoryPlan(
       userName: message.member?.displayName ?? message.author.username,
       mode,
       query,
-      topic,
+      topic: queryTopic,
       scannedChannels: Math.min(
         MAX_AUTO_HISTORY_CHANNELS,
         Array.from(message.guild?.channels.cache.values() ?? []).filter((candidate) => candidate.type === ChannelType.GuildText).length
       ),
       matchedMessages: filteredHistory.length,
-      usedMessages: topic && !useFuzzySearch ? filteredHistory.length : usedHistory.length
+      usedMessages: usedHistory.length
     }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
 
     if (!history.length) {
       setPendingChannelHistoryRequest(message, { mode, query });
       await message.reply({
-        content: `${topic ? '서버에서' : '최근'} ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 읽을 대화를 찾지 못했어요... 채널을 말하면 같은 내용으로 다시 찾아볼게요...`,
+        content: `${queryTopic ? '서버에서' : '최근'} ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 읽을 대화를 찾지 못했어요... 채널을 말하면 같은 내용으로 다시 찾아볼게요...`,
         allowedMentions: { repliedUser: false }
       });
       return true;
     }
-    if (topic && !filteredHistory.length && !useFuzzySearch) {
-      setPendingChannelHistoryRequest(message, { mode, query });
-      await message.reply({ content: `${topic}에 관한 내용은 서버에서 ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 찾지 못했어요... 채널을 말하면 같은 내용으로 다시 찾아볼게요...`, allowedMentions: { repliedUser: false } });
-      return true;
-    }
-
     const answer = await context.ai.askMessages({
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
-      messages: buildChannelHistoryMessages(message, usedHistory, mode, query, topic)
+      messages: buildChannelHistoryMessages(message, usedHistory, mode, query, queryTopic)
     });
-    if (topic) setPendingChannelHistoryRequest(message, { mode, query });
+    if (queryTopic) setPendingChannelHistoryRequest(message, { mode, query });
     else clearPendingChannelHistoryRequest(message);
     await replyWithChunks(message, answer);
   } catch (error) {
@@ -1272,13 +1204,6 @@ async function handlePendingChannelHistoryReply(
   if (targetChannel === 'ambiguous') {
     await message.reply({ content: '비슷한 채널이 여러 개 있어요... 정확한 채널 멘션으로 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
     return true;
-  }
-
-  if (looksLikeChannelHistoryPrompt(prompt) && extractHistorySearchTopic(prompt)) return false;
-
-  const refinedTopic = extractPendingHistoryRefinementTopic(prompt);
-  if (refinedTopic) {
-    return handleGuildChannelHistoryPlan(message, pending.mode, refinedTopic, context);
   }
 
   return false;
