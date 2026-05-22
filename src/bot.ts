@@ -813,14 +813,15 @@ function buildChannelHistoryMessages(
 
 function extractHistorySearchTopic(query: string): string | null {
   const patterns = [
-    /(?:대화내용|대화\s*내용|서버|채널|기록)?\s*(?:중에|에서)?\s*["“”'‘’]?(.+?)["“”'‘’]?(?:에 대한|에 관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|찾아봐|찾아줘|찾아|검색해|검색해줘|검색)/i,
-    /["“”'‘’]?(.+?)["“”'‘’]?(?:에 대한|에 관한|관련)\s*(?:내용|얘기|언급)/i
+    /(?:대화내용|대화\s*내용|서버|채널|기록)?\s*(?:중에|에서)?\s*["“”'‘’]?(.+?)["“”'‘’]?(?:에\s*대한|에\s*관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|찾아봐|찾아줘|찾아|검색해|검색해줘|검색)/i,
+    /["“”'‘’]?(.+?)["“”'‘’]?(?:에\s*대한|에\s*관한|관련)\s*(?:내용|얘기|언급)/i
   ];
   for (const pattern of patterns) {
     const match = query.match(pattern);
     const rawTopic = match?.[1]?.trim().replace(/^(이|그|저)\s+/, '').replace(/\s+/g, ' ');
     const topic = rawTopic
       ?.replace(/^(?:대화내용|대화 내용|서버|채널|기록)\s*(?:중에|에서|에)?\s*/, '')
+      .replace(/에\s*(?:대한|관한)$/i, '')
       .replace(/\s*(?:나|이나|이랑|랑)?\s*(?:뭐\s*)?(?:그런\s*)?(?:비슷한\s*)?거$/i, '')
       .trim();
     if (topic && topic.length >= 2 && !/^(대화내용|대화 내용|서버|채널|기록)$/.test(topic)) return topic;
@@ -1018,23 +1019,51 @@ async function handleChannelHistoryPlan(
       return true;
     }
 
-    const history = await fetchChannelHistory(targetChannel, {
-      limit: assessment.limit,
-      lookbackHours: assessment.lookbackHours
-    });
+    const topic = extractHistorySearchTopic(route.query);
+    const searchLimit = topic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
+    const searchLookbackHours = topic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
+    const history = (await fetchChannelHistory(targetChannel, {
+      limit: searchLimit,
+      lookbackHours: searchLookbackHours
+    })).filter((entry) => entry.id !== message.id);
+    const filteredHistory = filterHistoryByTopic(history, topic);
+    const useFuzzySearch = Boolean(topic && isFuzzyHistorySearch(route.query) && filteredHistory.length === 0);
+    const usedHistory = filteredHistory.length ? filteredHistory : useFuzzySearch ? history : history;
+    await context.activityLog.logChannelHistory({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.member?.displayName ?? message.author.username,
+      mode: route.mode,
+      query: route.query,
+      topic,
+      targetChannelId: targetChannel.id,
+      scannedChannels: 1,
+      matchedMessages: filteredHistory.length,
+      usedMessages: topic && !useFuzzySearch ? filteredHistory.length : usedHistory.length
+    }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
+
     if (!history.length) {
+      setPendingChannelHistoryRequest(message, { mode: route.mode, query: route.query });
       await message.reply({
-        content: `<#${targetChannel.id}>에서 최근 ${assessment.limit}개 또는 ${assessment.lookbackHours}시간 안에 읽을 메시지를 찾지 못했어요... 채널이나 범위를 다시 말해 주세요...`,
+        content: `<#${targetChannel.id}>에서 ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 읽을 메시지를 찾지 못했어요... 다른 채널을 말하면 같은 내용으로 다시 찾아볼게요...`,
         allowedMentions: { repliedUser: false }
       });
       return true;
     }
+    if (topic && !filteredHistory.length && !useFuzzySearch) {
+      setPendingChannelHistoryRequest(message, { mode: route.mode, query: route.query });
+      await message.reply({ content: `${channelDisplayName(message, targetChannel.id)}에서 ${topic}에 관한 내용은 ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 찾지 못했어요... 다른 채널을 말하면 같은 내용으로 다시 찾아볼게요...`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
 
+    clearPendingChannelHistoryRequest(message);
     const answer = await context.ai.askMessages({
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
-      messages: buildChannelHistoryMessages(message, history, route.mode, route.query)
+      messages: buildChannelHistoryMessages(message, usedHistory, route.mode, route.query, topic)
     });
     await replyWithChunks(message, answer);
   } catch (error) {
@@ -1101,17 +1130,20 @@ async function handleGuildChannelHistoryPlan(
     }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
 
     if (!history.length) {
+      setPendingChannelHistoryRequest(message, { mode, query });
       await message.reply({
-        content: `${topic ? '서버에서' : '최근'} ${searchLimit}개 또는 ${searchLookbackHours}시간 안에 읽을 대화를 찾지 못했어요...`,
+        content: `${topic ? '서버에서' : '최근'} ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 읽을 대화를 찾지 못했어요... 채널을 말하면 같은 내용으로 다시 찾아볼게요...`,
         allowedMentions: { repliedUser: false }
       });
       return true;
     }
     if (topic && !filteredHistory.length && !useFuzzySearch) {
-      await message.reply({ content: `${topic}에 관한 내용은 서버에서 ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 찾지 못했어요...`, allowedMentions: { repliedUser: false } });
+      setPendingChannelHistoryRequest(message, { mode, query });
+      await message.reply({ content: `${topic}에 관한 내용은 서버에서 ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 찾지 못했어요... 채널을 말하면 같은 내용으로 다시 찾아볼게요...`, allowedMentions: { repliedUser: false } });
       return true;
     }
 
+    clearPendingChannelHistoryRequest(message);
     const answer = await context.ai.askMessages({
       guildId: message.guildId,
       userId: message.author.id,

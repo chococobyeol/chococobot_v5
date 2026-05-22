@@ -656,7 +656,7 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠에 관한 내용은 서버에서 500개 또는 7일 범위 안에 찾지 못했어요...' }));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠에 관한 내용은 서버에서 500개 또는 7일 범위 안에 찾지 못했어요... 채널을 말하면 같은 내용으로 다시 찾아볼게요...' }));
     expect(context.ai.askMessages).not.toHaveBeenCalled();
     expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
       topic: '정성카츠',
@@ -705,6 +705,69 @@ describe('handleMessageCreate', () => {
       matchedMessages: 0,
       usedMessages: 1
     }));
+  });
+
+  it('retries the previous missing server topic in a channel named by the next message', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const first = makeMessage('!? 대화내용중에 초밥에관한 내용 있나?');
+    const second = makeMessage('!? 배달 여기서 찾아봐');
+    const generalChannel = first.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'general-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '다른 얘기만 있어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+    const deliveryChannel = {
+      id: 'delivery-1',
+      name: '배달',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: vi.fn(async ({ limit }: { limit: number }) =>
+          [
+            {
+              id: 'delivery-message-1',
+              channelId: 'delivery-1',
+              createdTimestamp: Date.now(),
+              content: '초밥 주문하자는 얘기가 있었어요',
+              author: { id: 'user-2', username: 'writer', bot: false },
+              member: { displayName: '작성자' }
+            }
+          ].slice(0, limit) as any
+        )
+      }
+    };
+    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
+    second.guild.channels.cache.set('delivery-1', deliveryChannel);
+    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: '초밥에 관한 내용은 서버에서 500개 또는 7일 범위 안에 찾지 못했어요... 채널을 말하면 같은 내용으로 다시 찾아볼게요...'
+    }));
+    expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 초밥') }),
+          expect.objectContaining({ content: expect.stringContaining('채널: #배달') }),
+          expect.objectContaining({ content: expect.stringContaining('초밥 주문하자는 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(deliveryChannel.messages.fetch).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }));
   });
 
   it('routes planner server-wide history targets to guild search instead of resolving them as a channel', async () => {
