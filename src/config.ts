@@ -75,7 +75,7 @@ export function loadSettings(): Settings {
         '상황에 맞는 자연스러운 답을 만들고, 확실하지 않으면 구체적으로 물어봐요.'
       ].join(' '),
     aiMaxCompletionTokens: positiveIntFromEnv('AI_MAX_COMPLETION_TOKENS', 500),
-    aiPlannerMaxCompletionTokens: positiveIntFromEnv('AI_PLANNER_MAX_COMPLETION_TOKENS', 300),
+    aiPlannerMaxCompletionTokens: positiveIntFromEnv('AI_PLANNER_MAX_COMPLETION_TOKENS', 800),
     aiUserDailyTokenLimit: nonNegativeIntFromEnv('AI_USER_DAILY_TOKEN_LIMIT', 0),
     aiGuildDailyTokenLimit: positiveIntFromEnv('AI_GUILD_DAILY_TOKEN_LIMIT', 180_000),
     aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 4),

@@ -984,6 +984,75 @@ describe('handleMessageCreate', () => {
     }));
   });
 
+  it('falls back to pending channel retry when planner fails to return JSON and then chat', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi
+          .fn()
+          .mockResolvedValueOnce({
+            kind: 'channel-history',
+            mode: 'summary',
+            targetChannelReference: '서버 전체',
+            query: '짬뽕지존'
+          })
+          .mockResolvedValueOnce({ kind: 'chat' })
+      }
+    });
+    const first = makeMessage('!? 대화내용중에 짬뽕지존에 관한 내용 있나 찾아봐');
+    const second = makeMessage('!? 아니 그거 말고 힘내야지 배달 여기서 찾아');
+    const generalChannel = first.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'general-jjamppong-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '짬뽕지존 얘기가 있었어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+    const deliveryChannel = {
+      id: 'delivery-3',
+      name: '배달',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: vi.fn(async () =>
+          [
+            {
+              id: 'delivery-jjamppong-1',
+              channelId: 'delivery-3',
+              createdTimestamp: Date.now(),
+              content: '배달 채널에서 짬뽕지존 얘기가 있었어요',
+              author: { id: 'user-2', username: 'writer', bot: false },
+              member: { displayName: '작성자' }
+            }
+          ] as any
+        )
+      }
+    };
+    first.guild.channels.cache.set('delivery-3', deliveryChannel);
+    second.guild.channels.cache.set('delivery-3', deliveryChannel);
+
+    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
+    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+
+    expect(context.ai.askMessages).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 짬뽕지존') }),
+          expect.objectContaining({ content: expect.stringContaining('채널: #배달') }),
+          expect.objectContaining({ content: expect.stringContaining('배달 채널에서 짬뽕지존 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
   it('does not reinterpret bot-behavior complaints as history topic searches', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
