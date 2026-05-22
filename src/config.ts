@@ -48,6 +48,12 @@ function positiveIntFromEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function nonNegativeIntFromEnv(name: string, fallback: number): number {
+  const parsed = intFromEnv(name, fallback);
+  if (parsed < 0) throw new Error(`${name} must be zero or a positive integer`);
+  return parsed;
+}
+
 function boolFromEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -58,7 +64,7 @@ export function loadSettings(): Settings {
   return {
     discordToken: process.env.DISCORD_TOKEN ?? '',
     groqApiKey: process.env.GROQ_API_KEY ?? '',
-    groqModel: process.env.GROQ_MODEL ?? 'llama-3.1-8b-instant',
+    groqModel: process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b',
     aiSystemPrompt:
       process.env.AI_SYSTEM_PROMPT ??
       [
@@ -67,13 +73,13 @@ export function loadSettings(): Settings {
         '필요할 때만 ...를 쓰고, 이모지나 장식 문자는 쓰지 않아요.',
         '상황에 맞는 자연스러운 답을 만들고, 확실하지 않으면 구체적으로 물어봐요.'
       ].join(' '),
-    aiMaxCompletionTokens: intFromEnv('AI_MAX_COMPLETION_TOKENS', 800),
-    aiPlannerMaxCompletionTokens: intFromEnv('AI_PLANNER_MAX_COMPLETION_TOKENS', 300),
-    aiUserDailyTokenLimit: intFromEnv('AI_USER_DAILY_TOKEN_LIMIT', 20_000),
-    aiGuildDailyTokenLimit: intFromEnv('AI_GUILD_DAILY_TOKEN_LIMIT', 100_000),
-    aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 6),
+    aiMaxCompletionTokens: positiveIntFromEnv('AI_MAX_COMPLETION_TOKENS', 500),
+    aiPlannerMaxCompletionTokens: positiveIntFromEnv('AI_PLANNER_MAX_COMPLETION_TOKENS', 300),
+    aiUserDailyTokenLimit: nonNegativeIntFromEnv('AI_USER_DAILY_TOKEN_LIMIT', 0),
+    aiGuildDailyTokenLimit: positiveIntFromEnv('AI_GUILD_DAILY_TOKEN_LIMIT', 180_000),
+    aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 4),
     aiMemoryCompactAfterTurns: positiveIntFromEnv('AI_MEMORY_COMPACT_AFTER_TURNS', 12),
-    aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 1200),
+    aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 900),
     cleanMineDefaultTarget: positiveIntFromEnv('CLEAN_MINE_DEFAULT_TARGET', 500),
     cleanMineMaxLimit: positiveIntFromEnv('CLEAN_MINE_MAX_LIMIT', 500),
     cleanAllDefaultTarget: positiveIntFromEnv('CLEAN_ALL_DEFAULT_TARGET', 1000),

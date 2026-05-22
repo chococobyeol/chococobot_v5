@@ -35,6 +35,13 @@ const RATE_LIMIT_HEADER_NAMES = [
   'x-ratelimit-reset-tokens'
 ] as const;
 
+function formatTokenLimitMessage(scope: 'user' | 'guild'): string {
+  if (scope === 'user') {
+    return '이 서버에서 오늘 사용할 수 있는 사용자별 AI 사용량을 다 썼어요... 잠시 뒤에 다시 시도해 주세요.';
+  }
+  return '오늘 봇 AI 토큰 한도를 거의 다 썼어요... 내일 다시 시도하거나 한도를 조정해 주세요.';
+}
+
 export class AiService {
   private readonly groq: Groq;
 
@@ -76,14 +83,14 @@ export class AiService {
   }): Promise<AiDetailedResponse> {
     const scope = params.usageScope ?? 'chat';
     const guildUsage = this.usageStore.summarizeGuild(params.guildId, 1);
-    if (scope === 'chat') {
+    if (scope === 'chat' && this.settings.aiUserDailyTokenLimit > 0) {
       const userUsage = this.usageStore.summarizeUser(params.guildId, params.userId, 1);
       if (userUsage.totalTokens >= this.settings.aiUserDailyTokenLimit) {
-        throw new AiLimitError('오늘 개인 AI 토큰 한도를 이미 사용했어요...');
+        throw new AiLimitError(formatTokenLimitMessage('user'));
       }
     }
     if (guildUsage.totalTokens >= this.settings.aiGuildDailyTokenLimit) {
-      throw new AiLimitError('오늘 서버 AI 토큰 한도를 이미 사용했어요...');
+      throw new AiLimitError(formatTokenLimitMessage('guild'));
     }
 
     const { data: completion, response } = await this.groq.chat.completions.create({
