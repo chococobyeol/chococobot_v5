@@ -2,6 +2,7 @@ import { ChannelType } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 import { AiChatService, parseAiChatTrigger } from '../src/services/aiChatService.js';
 import { InMemoryAiMemoryStore } from '../src/services/aiMemoryStore.js';
+import { InMemoryVoiceSettingsStore } from '../src/services/voiceSettingsStore.js';
 import type { Settings } from '../src/config.js';
 
 function deferred<T>() {
@@ -31,6 +32,7 @@ function makeSettings(): Settings {
     aiMemoryRecentTurns: 8,
     aiMemoryCompactAfterTurns: 99,
     aiMemoryMaxSummaryChars: 2000,
+    botTimeZone: 'Asia/Seoul',
     cleanMineDefaultTarget: 500,
     cleanMineMaxLimit: 500,
     cleanAllDefaultTarget: 1000,
@@ -198,6 +200,63 @@ describe('AiChatService', () => {
         allowedMentions: { parse: [], repliedUser: false }
       })
     );
+  });
+
+
+  it('answers current time using the stored user time zone without asking AI', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T18:15:00.000Z'));
+    try {
+      const settings = makeSettings();
+      const memory = new InMemoryAiMemoryStore();
+      const userSettings = new InMemoryVoiceSettingsStore();
+      userSettings.setUserTimeZone('guild-1', 'user-1', 'America/Los_Angeles');
+      const ai = {
+        askMessagesDetailed: vi.fn(async () => ({ content: '틀린 시간', model: 'test', usageScope: 'chat', promptTokens: 1, completionTokens: 1, totalTokens: 2, rateLimitHeaders: {}, status: 200 }))
+      } as any;
+      const activityLog = {
+        logCommand: vi.fn(async () => undefined),
+        logError: vi.fn(async () => undefined),
+        logAiDiagnostic: vi.fn(async () => undefined)
+      } as any;
+      const service = new AiChatService(settings, ai, memory, activityLog, userSettings);
+      const message = makeMessage('channel-1', '!? 지금 몇시야');
+
+      await service.handlePrompt(message, '지금 몇시야');
+
+      expect(ai.askMessagesDetailed).not.toHaveBeenCalled();
+      expect(message.reply).toHaveBeenCalledWith(
+        expect.objectContaining({ content: '오전 11시 15분이에요...' })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('labels current-time answers with the fallback time zone when the user has no stored time zone', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-22T18:15:00.000Z'));
+    try {
+      const settings = makeSettings();
+      const memory = new InMemoryAiMemoryStore();
+      const ai = { askMessagesDetailed: vi.fn() } as any;
+      const activityLog = {
+        logCommand: vi.fn(async () => undefined),
+        logError: vi.fn(async () => undefined),
+        logAiDiagnostic: vi.fn(async () => undefined)
+      } as any;
+      const service = new AiChatService(settings, ai, memory, activityLog, new InMemoryVoiceSettingsStore());
+      const message = makeMessage('channel-1', '!? 지금 몇시야');
+
+      await service.handlePrompt(message, '지금 몇시야');
+
+      expect(ai.askMessagesDetailed).not.toHaveBeenCalled();
+      expect(message.reply).toHaveBeenCalledWith(
+        expect.objectContaining({ content: 'Asia/Seoul 기준 오전 3시 15분이에요...' })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('normalizes generic assistant punctuation into the bot command-response tone', async () => {

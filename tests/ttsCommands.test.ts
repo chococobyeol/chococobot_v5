@@ -8,6 +8,7 @@ import { VoiceService } from '../src/services/voiceService.js';
 function makeContext() {
   const store = new InMemoryVoiceSettingsStore();
   return {
+    settings: { botTimeZone: 'Asia/Seoul' },
     voiceSettings: store,
     voice: new VoiceService(new TtsService('ko-KR-SunHiNeural', 500), store, {
       sunhi: 'ko-KR-SunHiNeural',
@@ -95,6 +96,31 @@ describe('tts엔진 prefix command', () => {
     await command!.execute(resetMessage, ['해제'], context as any);
     expect(context.voice.getUserTtsEngine('guild-1', 'user-1')).toBe('edge');
     expect(resetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'TTS 엔진 설정을 기본값으로 되돌렸어요...' }));
+  });
+});
+
+
+describe('시간대 prefix command', () => {
+  it('sets, shows, and clears the stored user time zone', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('시간대');
+    expect(command).toBeDefined();
+
+    const context = makeContext();
+    const message = makeMessage('channel-1');
+
+    await command!.execute(message, [], context as any);
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '내 시간대가 아직 없어요... 지금 시간 질문은 Asia/Seoul 기준으로 답해요...' }));
+
+    const setMessage = makeMessage('channel-1');
+    await command!.execute(setMessage, ['America/Los_Angeles'], context as any);
+    expect(context.voiceSettings.getUserTimeZone('guild-1', 'user-1')).toBe('America/Los_Angeles');
+    expect(setMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '내 시간대를 America/Los_Angeles로 저장했어요...' }));
+
+    const resetMessage = makeMessage('channel-1');
+    await command!.execute(resetMessage, ['해제'], context as any);
+    expect(context.voiceSettings.getUserTimeZone('guild-1', 'user-1')).toBeUndefined();
+    expect(resetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '시간대 설정을 지웠어요... 이제 Asia/Seoul 기준으로 답해요...' }));
   });
 });
 

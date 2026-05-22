@@ -15,6 +15,7 @@ function makeSettings(overrides: Partial<Settings> = {}): Settings {
     aiMemoryRecentTurns: 4,
     aiMemoryCompactAfterTurns: 12,
     aiMemoryMaxSummaryChars: 900,
+    botTimeZone: 'Asia/Seoul',
     cleanMineDefaultTarget: 500,
     cleanMineMaxLimit: 500,
     cleanAllDefaultTarget: 1000,

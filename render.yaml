@@ -40,6 +40,8 @@ services:
         value: 12
       - key: AI_MEMORY_MAX_SUMMARY_CHARS
         value: 900
+      - key: BOT_TIME_ZONE
+        value: Asia/Seoul
       - key: DATABASE_PATH
         value: /var/data/chococobot.sqlite3
       - key: CLEAN_MINE_DEFAULT_TARGET

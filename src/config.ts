@@ -12,6 +12,7 @@ export type Settings = {
   aiMemoryRecentTurns: number;
   aiMemoryCompactAfterTurns: number;
   aiMemoryMaxSummaryChars: number;
+  botTimeZone: string;
   cleanMineDefaultTarget: number;
   cleanMineMaxLimit: number;
   cleanAllDefaultTarget: number;
@@ -81,6 +82,7 @@ export function loadSettings(): Settings {
     aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 4),
     aiMemoryCompactAfterTurns: positiveIntFromEnv('AI_MEMORY_COMPACT_AFTER_TURNS', 12),
     aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 900),
+    botTimeZone: process.env.BOT_TIME_ZONE ?? 'Asia/Seoul',
     cleanMineDefaultTarget: positiveIntFromEnv('CLEAN_MINE_DEFAULT_TARGET', 500),
     cleanMineMaxLimit: positiveIntFromEnv('CLEAN_MINE_MAX_LIMIT', 500),
     cleanAllDefaultTarget: positiveIntFromEnv('CLEAN_ALL_DEFAULT_TARGET', 1000),
@@ -102,6 +104,11 @@ export function assertRuntimeSettings(settings: Settings): void {
   if (!settings.discordToken) missing.push('DISCORD_TOKEN');
   if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   if (!settings.loggingGuildId) throw new Error('LOGGING_GUILD_ID is required');
+  try {
+    new Intl.DateTimeFormat('ko-KR', { timeZone: settings.botTimeZone }).format(new Date());
+  } catch {
+    throw new Error('BOT_TIME_ZONE must be a valid IANA time zone, for example Asia/Seoul');
+  }
   if (!['edge', 'gtts'].includes(settings.ttsEngine.toLowerCase())) {
     throw new Error('TTS_ENGINE must be one of: edge, gtts');
   }

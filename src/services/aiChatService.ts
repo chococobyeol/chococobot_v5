@@ -3,6 +3,7 @@ import type { Settings } from '../config.js';
 import { AiLimitError, extractErrorDetails, type AiChatMessage, type AiDetailedResponse, type AiService } from './aiService.js';
 import type { AiMemoryStore, AiMemoryTurn } from './aiMemoryStore.js';
 import type { BotActivityLogService } from './botActivityLogService.js';
+import type { VoiceSettingsStore } from './voiceSettingsStore.js';
 import { logger } from '../logger.js';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -30,6 +31,28 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
   }
   if (remaining) chunks.push(remaining);
   return chunks.filter(Boolean).map((chunk) => (chunk.length > DISCORD_MESSAGE_LIMIT ? chunk.slice(0, DISCORD_SAFE_CHUNK_LIMIT) : chunk));
+}
+
+
+function isCurrentTimeQuestion(prompt: string): boolean {
+  const normalized = prompt.trim().replace(/\s+/g, '');
+  if (!normalized) return false;
+  return /^(?:지금|현재|이제)?(?:몇시|몇분|시간)(?:야|이야|인가|알려줘|말해줘|좀알려줘|좀말해줘)?[.。…]*$/u.test(normalized) ||
+    /^(?:지금|현재)(?:시간|시각)(?:이)?(?:뭐야|어떻게돼|알려줘|말해줘)?[.。…]*$/u.test(normalized);
+}
+
+function formatCurrentTime(timeZone: string, now = new Date(), source: 'user' | 'fallback' = 'fallback'): string {
+  const parts = new Intl.DateTimeFormat('ko-KR', {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).formatToParts(now);
+  const dayPeriod = parts.find((part) => part.type === 'dayPeriod')?.value ?? '';
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '';
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '';
+  const timeText = `${dayPeriod} ${hour}시 ${minute}분이에요...`.trim();
+  return source === 'user' ? timeText : `${timeZone} 기준 ${timeText}`;
 }
 
 function normalizeAiChatTone(content: string): string {
@@ -126,7 +149,8 @@ export class AiChatService {
     private readonly settings: Settings,
     private readonly ai: AiService,
     private readonly memory: AiMemoryStore,
-    private readonly activityLog: BotActivityLogService
+    private readonly activityLog: BotActivityLogService,
+    private readonly userSettings?: Pick<VoiceSettingsStore, 'getUserTimeZone'>
   ) {}
 
   handlePrompt(message: Message, prompt: string): Promise<boolean> {
@@ -145,6 +169,50 @@ export class AiChatService {
             summary: `prompt=${prompt.slice(0, 500)}`
           })
           .catch((error) => logger.warn('Failed to log AI command:', error));
+
+        if (isCurrentTimeQuestion(prompt)) {
+          const userTimeZone = this.userSettings?.getUserTimeZone(message.guildId!, message.author.id);
+          const answer = formatCurrentTime(userTimeZone ?? this.settings.botTimeZone, new Date(), userTimeZone ? 'user' : 'fallback');
+          await sendChunkedReply(message, answer);
+          await this.activityLog
+            .logCommand({
+              guildId: message.guildId!,
+              guildName: message.guild?.name,
+              channelId: message.channelId,
+              userId: message.author.id,
+              userName: message.member?.displayName ?? message.author.username,
+              commandName: 'ai-chat-response',
+              summary: `answer=${answer}`
+            })
+            .catch((error) => logger.warn('Failed to log AI response:', error));
+          await this.withGuildLock(message.guildId!, async () => {
+            const at = new Date();
+            const userName = message.member?.displayName ?? message.author.username;
+            this.memory.appendTurn({
+              guildId: message.guildId!,
+              channelId: message.channelId,
+              userId: message.author.id,
+              userName,
+              messageId: message.id,
+              role: 'user',
+              content: prompt,
+              importance: 0,
+              createdAt: at
+            });
+            this.memory.appendTurn({
+              guildId: message.guildId!,
+              channelId: message.channelId,
+              userId: message.client.user?.id ?? '__bot__',
+              userName: message.client.user?.username ?? 'ChococoBot',
+              messageId: null,
+              role: 'assistant',
+              content: answer,
+              importance: 0,
+              createdAt: at
+            });
+          });
+          return true;
+        }
 
         const snapshot = this.memory.getGuildSnapshot(message.guildId!, this.settings.aiMemoryRecentTurns);
         const messages: AiChatMessage[] = [{ role: 'system', content: this.settings.aiSystemPrompt }];

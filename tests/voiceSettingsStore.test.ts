@@ -70,6 +70,22 @@ describe('VoiceSettingsStore', () => {
     expect(reopened.getCommandPrefix('guild-1')).toBeUndefined();
     reopened.close();
   });
+
+  it('persists per-guild per-user time zones in sqlite', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'chococo-voice-')), 'voice.sqlite3');
+    const store = new SqliteVoiceSettingsStore(dbPath);
+    store.setUserTimeZone('guild-1', 'user-1', 'America/Los_Angeles');
+    store.setUserTimeZone('guild-2', 'user-1', 'Asia/Seoul');
+    store.close();
+
+    const reopened = new SqliteVoiceSettingsStore(dbPath);
+    expect(reopened.getUserTimeZone('guild-1', 'user-1')).toBe('America/Los_Angeles');
+    expect(reopened.getUserTimeZone('guild-2', 'user-1')).toBe('Asia/Seoul');
+    reopened.setUserTimeZone('guild-1', 'user-1', undefined);
+    expect(reopened.getUserTimeZone('guild-1', 'user-1')).toBeUndefined();
+    reopened.close();
+  });
+
 });
 
 describe('VoiceService voice presets', () => {

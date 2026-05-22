@@ -28,6 +28,8 @@ export interface VoiceSettingsStore {
   setWatchedChannelId(guildId: string, channelId: string | undefined): void;
   getCommandPrefix(guildId: string): string | undefined;
   setCommandPrefix(guildId: string, prefix: string | undefined): void;
+  getUserTimeZone(guildId: string, userId: string): string | undefined;
+  setUserTimeZone(guildId: string, userId: string, timeZone: string | undefined): void;
   close?(): void;
 }
 
@@ -65,6 +67,14 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
         guild_id TEXT NOT NULL PRIMARY KEY,
         prefix TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS user_time_zone_settings (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        time_zone TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (guild_id, user_id)
       );
     `);
   }
@@ -154,6 +164,28 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
       .run(guildId, prefix, new Date().toISOString());
   }
 
+  getUserTimeZone(guildId: string, userId: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT time_zone FROM user_time_zone_settings WHERE guild_id = ? AND user_id = ?')
+      .get(guildId, userId) as { time_zone: string } | undefined;
+    return row?.time_zone;
+  }
+
+  setUserTimeZone(guildId: string, userId: string, timeZone: string | undefined): void {
+    if (!timeZone) {
+      this.db.prepare('DELETE FROM user_time_zone_settings WHERE guild_id = ? AND user_id = ?').run(guildId, userId);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO user_time_zone_settings (guild_id, user_id, time_zone, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(guild_id, user_id)
+         DO UPDATE SET time_zone = excluded.time_zone, updated_at = excluded.updated_at`
+      )
+      .run(guildId, userId, timeZone, new Date().toISOString());
+  }
+
   close(): void {
     this.db.close();
   }
@@ -164,6 +196,7 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
   private readonly engines = new Map<string, string>();
   private readonly watchedChannels = new Map<string, string>();
   private readonly prefixes = new Map<string, string>();
+  private readonly timeZones = new Map<string, string>();
 
   getUserVoicePreset(guildId: string, userId: string): string | undefined {
     return this.presets.get(keyFor(guildId, userId));
@@ -207,6 +240,18 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
       return;
     }
     this.prefixes.set(guildId, prefix);
+  }
+
+  getUserTimeZone(guildId: string, userId: string): string | undefined {
+    return this.timeZones.get(keyFor(guildId, userId));
+  }
+
+  setUserTimeZone(guildId: string, userId: string, timeZone: string | undefined): void {
+    if (!timeZone) {
+      this.timeZones.delete(keyFor(guildId, userId));
+      return;
+    }
+    this.timeZones.set(keyFor(guildId, userId), timeZone);
   }
 }
 

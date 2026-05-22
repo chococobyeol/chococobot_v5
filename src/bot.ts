@@ -104,6 +104,16 @@ function includeInvokingCleanupCommandDefault(defaultTarget: number): number {
   return defaultTarget + CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT;
 }
 
+
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('ko-KR', { timeZone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function requesterDisplayName(message: Message): string {
   return (message.member?.displayName ?? message.author.username).replace(/\s+/g, ' ').trim() || message.author.username;
 }
@@ -555,6 +565,39 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         await message.reply({ content: `내 TTS 엔진을 ${engine}로 저장했어요...`, allowedMentions: { repliedUser: false } });
       }
     },
+
+    {
+      name: '시간대',
+      aliases: ['timezone', 'tz', '타임존', '시간설정'],
+      description: '내 시간대를 확인하거나 설정합니다.',
+      async execute(message, args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        const raw = args[0]?.trim();
+        const current = context.voiceSettings.getUserTimeZone(message.guildId, message.author.id);
+        if (!raw || ['현재', 'status', 'show', 'info', '조회'].includes(raw.toLowerCase())) {
+          await message.reply({
+            content: current
+              ? `내 시간대는 ${current}예요...`
+              : `내 시간대가 아직 없어요... 지금 시간 질문은 ${context.settings.botTimeZone} 기준으로 답해요...`,
+            allowedMentions: { repliedUser: false }
+          });
+          return;
+        }
+
+        const normalized = raw.toLowerCase();
+        if (['해제', '기본', 'default', 'reset', 'clear', 'none', '초기화'].includes(normalized)) {
+          context.voiceSettings.setUserTimeZone(message.guildId, message.author.id, undefined);
+          await message.reply({ content: `시간대 설정을 지웠어요... 이제 ${context.settings.botTimeZone} 기준으로 답해요...`, allowedMentions: { repliedUser: false } });
+          return;
+        }
+
+        if (!isValidTimeZone(raw)) {
+          throw new Error('알 수 없는 시간대예요... 예: Asia/Seoul, America/Los_Angeles, America/New_York');
+        }
+        context.voiceSettings.setUserTimeZone(message.guildId, message.author.id, raw);
+        await message.reply({ content: `내 시간대를 ${raw}로 저장했어요...`, allowedMentions: { repliedUser: false } });
+      }
+    },
     {
       name: '프리픽스',
       aliases: ['prefix', 'command-prefix', 'prefixes'],
@@ -661,6 +704,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             `${prefix}멈춰 / ${prefix}stop / ${prefix}halt / ${prefix}cancel / ${prefix}pause / ${prefix}정지 / ${prefix}그만 / ${prefix}멈춤 / ${prefix}스톱 — TTS 재생 멈추기...`,
             `${prefix}음색 [프리셋] / ${prefix}voice [preset] / ${prefix}voice-style [preset] / ${prefix}voicepreset [preset] / ${prefix}tts-voice [preset] / ${prefix}목소리 [프리셋] — 내 TTS 음색 확인/설정...`,
             `${prefix}tts엔진 [edge|gtts] / ${prefix}engine [edge|gtts] / ${prefix}tts-engine [edge|gtts] / ${prefix}ttsengine [edge|gtts] / ${prefix}엔진 [edge|gtts] — 내 TTS 엔진 확인/설정...`,
+            `${prefix}시간대 [Asia/Seoul|America/Los_Angeles|해제] / ${prefix}timezone [time zone] / ${prefix}tz [time zone] — AI 시간 답변 기준 설정...`,
             `현재 프리픽스 뒤에 ?를 붙이고 공백을 넣어 AI 채팅해요... 예: \`${prefix}? 안녕\``,
             `${prefix}기억삭제 / ${prefix}ai-memory / ${prefix}ai-reset-memory / ${prefix}memory-reset / ${prefix}memory-clear / ${prefix}메모리삭제 / ${prefix}기억초기화 — 서버 AI 기억 초기화... (서버 관리자만 가능해요...)`,
             `${prefix}프리픽스 / ${prefix}prefix / ${prefix}command-prefix — 서버 프리픽스 확인/변경... (서버 관리자만 가능해요...)`
@@ -1525,7 +1569,7 @@ export async function createBot(
     settings,
     usageStore,
     ai,
-    aiChat: new AiChatService(settings, ai, memoryStore, activityLog),
+    aiChat: new AiChatService(settings, ai, memoryStore, activityLog, voiceSettings),
     aiCommandPlanner,
     activityLog,
     voiceSettings,

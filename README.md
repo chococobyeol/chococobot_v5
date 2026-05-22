@@ -81,6 +81,7 @@ Optional v1 settings:
 | `AI_MEMORY_RECENT_TURNS` | `8` | How many recent unsummarized AI turns are kept in the live prompt. |
 | `AI_MEMORY_COMPACT_AFTER_TURNS` | `12` | When the bot compacts guild AI memory into a summary. |
 | `AI_MEMORY_MAX_SUMMARY_CHARS` | `2000` | Maximum stored summary length after compaction. |
+| `BOT_TIME_ZONE` | `Asia/Seoul` | Time zone used for deterministic current-time answers because Discord message events do not expose each user's local time zone. |
 | `LOG_LEVEL` | `info` | Logging verbosity label. |
 
 Deferred AI/Groq variables (`GROQ_API_KEY`, `GROQ_MODEL`, `AI_*`) remain in `.env.example` for compatibility, but they are not required for the cleanup/TTS v1 startup path.
@@ -117,6 +118,7 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!tts엔진 edge` / `!tts엔진 gtts` stores the TTS engine for that user.
 - Aliases such as `!tts엔진 엣지`, `!tts엔진 구글`, and `!tts엔진 google` are also accepted.
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.
+- `!시간대 America/Los_Angeles` stores the user's time zone for deterministic AI time answers; `!시간대 해제` clears it.
 - TTS synthesis retries with `gtts` when the selected `edge` engine fails and logs the underlying error.
 - Hosted environments that enforce PEP 668 may reject runtime `pip install --user`. `npm install` runs `scripts/setup-python-tts.sh` automatically and creates `.venv`; on Render, set `PYTHON_BIN=/opt/render/project/src/.venv/bin/python` or let the bot auto-detect `.venv/bin/python`.
 
