@@ -17,10 +17,11 @@ export function normalizeTtsEngineName(value: string): TtsEngine | undefined {
 
 const execFileAsync = promisify(execFile);
 function resolvePythonBinary(): string {
-  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  const configuredPython = process.env.PYTHON_BIN?.trim();
   const localVenvPython = resolve(process.cwd(), '.venv/bin/python');
+  if (configuredPython && configuredPython !== 'python3') return configuredPython;
   if (existsSync(localVenvPython)) return localVenvPython;
-  return 'python3';
+  return configuredPython || 'python3';
 }
 
 const pythonBinary = resolvePythonBinary();
