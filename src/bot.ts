@@ -1422,6 +1422,46 @@ async function handleDirectChannelHistoryPrompt(
   return true;
 }
 
+
+function formatDiscordLocalTime(timestampMs: number): string {
+  return `<t:${Math.floor(timestampMs / 1000)}:t>예요...`;
+}
+
+function formatTimeInZone(timestampMs: number, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('ko-KR', {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).formatToParts(new Date(timestampMs));
+  const dayPeriod = parts.find((part) => part.type === 'dayPeriod')?.value ?? '';
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '';
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '';
+  return `${dayPeriod} ${hour}시 ${minute}분`.trim();
+}
+
+function buildTimePlanReply(message: Message, plan: Extract<import('./services/aiCommandPlanner.js').AiCommandPlan, { kind: 'time' }>): string {
+  const timestampMs = message.createdTimestamp + (plan.offsetSeconds ?? 0) * 1_000;
+  if (plan.target === 'viewer') return formatDiscordLocalTime(timestampMs);
+  const label = plan.label || plan.timeZone || '해당 지역';
+  return `${label} 시간은 ${formatTimeInZone(timestampMs, plan.timeZone!)}이에요...`;
+}
+
+async function handleTimePlan(message: Message, plan: Extract<import('./services/aiCommandPlanner.js').AiCommandPlan, { kind: 'time' }>, context: BotContext): Promise<boolean> {
+  const answer = buildTimePlanReply(message, plan);
+  await message.reply({ content: answer, allowedMentions: { parse: [], repliedUser: false } });
+  await context.activityLog.logCommand({
+    guildId: message.guildId!,
+    guildName: message.guild?.name,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userName: requesterDisplayName(message),
+    commandName: 'ai-time-response',
+    summary: `answer=${answer}`
+  }).catch((error) => logger.warn('Failed to log AI time response:', error));
+  return true;
+}
+
 function extractLeadingChannelReference(text: string): string | undefined {
   const [first] = text.trim().split(/\s+/);
   if (!first) return undefined;
@@ -1481,6 +1521,8 @@ export async function handleMessageCreate(
                 },
                 context
               );
+            case 'time':
+              return handleTimePlan(message, plan, context);
             case 'clarify':
               if (pendingHistoryRequest && await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
               if (looksLikeChannelHistoryPrompt(aiPrompt)) {

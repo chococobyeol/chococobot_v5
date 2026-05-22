@@ -1207,6 +1207,39 @@ describe('handleMessageCreate', () => {
     }));
   });
 
+
+  it('handles planner time plans with Discord viewer timestamps', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'time', target: 'viewer', offsetSeconds: 18_000 }))
+      }
+    });
+    const message = makeMessage('!? 지금부터 5시간 후는 몇시야') as any;
+    message.createdTimestamp = Date.parse('2026-05-22T18:15:00.000Z');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<t:1779491700:t>예요...' }));
+    expect(context.ai.askMessages).not.toHaveBeenCalled();
+  });
+
+  it('handles planner time plans for named zones', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'time', target: 'zone', timeZone: 'Europe/Budapest', label: '헝가리', offsetSeconds: 0 }))
+      }
+    });
+    const message = makeMessage('!? 지금 헝가리 시간이 몇시야') as any;
+    message.createdTimestamp = Date.parse('2026-05-22T18:15:00.000Z');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '헝가리 시간은 오후 8시 15분이에요...' }));
+    expect(context.ai.askMessages).not.toHaveBeenCalled();
+  });
+
   it('falls back to pending channel retry when planner fails to return JSON and then chat', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({

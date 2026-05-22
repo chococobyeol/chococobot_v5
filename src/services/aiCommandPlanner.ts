@@ -15,6 +15,7 @@ export type AiCommandPlan =
   | { kind: 'chat' }
   | { kind: 'command'; query: string }
   | { kind: 'channel-history'; mode: 'summary' | 'qa'; targetChannelReference: string; query: string }
+  | { kind: 'time'; target: 'viewer' | 'zone'; offsetSeconds?: number; timeZone?: string; label?: string }
   | { kind: 'clarify'; message: string }
   | { kind: 'unavailable'; message: string };
 
@@ -145,6 +146,13 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
       '{"kind":"clarify","message":"채팅으로 답할까요, 음성으로 말할까요?"}',
       '{"kind":"unavailable","message":"음성으로 말하려면 먼저 음성 채널에 들어가 있어야 해요..."}',
       '{"kind":"channel-history","mode":"summary","targetChannelReference":"<#1234567890>","query":"메모 채널 내용 요약해줘"}',
+      '{"kind":"time","target":"viewer","offsetSeconds":0}',
+      '{"kind":"time","target":"viewer","offsetSeconds":18000}',
+      '{"kind":"time","target":"zone","timeZone":"Europe/Budapest","label":"헝가리","offsetSeconds":0}',
+      '현재 시간, 내 시간, 몇시, 몇분, 몇 시간 뒤/후, 특정 지역 시간 질문은 chat이 아니라 time을 선택해요.',
+      'target=viewer는 Discord가 보는 사람 로컬 시간으로 보여줘야 할 때 사용해요. target=zone은 헝가리/뉴욕처럼 특정 지역 시간이 명시된 경우 IANA timeZone을 넣어요.',
+      'offsetSeconds는 현재 사용자 메시지 작성 시각으로부터 더할 초 단위 정수예요. 예: 5시간 후=18000, 30분 뒤=1800, 지금=0.',
+      '지역명은 IANA time zone으로 바꿔요. 예: 헝가리/부다페스트=Europe/Budapest, 뉴욕=America/New_York, LA=America/Los_Angeles, 한국=Asia/Seoul.',
       'channel-history의 targetChannelReference는 반드시 아래 참조 가능한 텍스트 채널 목록의 mention 또는 정확한 이름을 그대로 복사해요. 없는 채널명은 만들지 말고 clarify로 어느 채널인지 물어봐요.',
       '사용자가 서버/채널 대화에서 특정 주제, 단어, 언급, 식당명, 사람, 사건을 찾아보라고 하면 일반 chat이 아니라 channel-history를 선택해요.',
       '채널을 지정하지 않은 "이 서버에 ~ 있는지 찾아봐", "최근 무슨 대화 했지", "좀아까 뭐라고 했지"는 targetChannelReference를 "서버 전체"로 두고 channel-history를 선택해요.',
@@ -161,6 +169,7 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
       `사용자 음성 채널: ${userVoice}`,
       `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
       `현재 프리픽스: ${options.prefix}`,
+      `현재 사용자 메시지 작성 시각: <t:${Math.floor(message.createdTimestamp / 1000)}:t>`,
       options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined
     ]
@@ -239,6 +248,25 @@ export function parseAiCommandPlan(response: string): ParseResult {
       if (errors.length || !mode) return { ok: false, errors };
       return { ok: true, plan: { kind: 'channel-history', mode, query, targetChannelReference } };
     }
+    case 'time': {
+      const target = parsed.target === 'viewer' || parsed.target === 'zone' ? parsed.target : null;
+      const offsetSeconds = parsed.offsetSeconds === undefined ? 0 : Number(parsed.offsetSeconds);
+      const timeZone = typeof parsed.timeZone === 'string' ? parsed.timeZone.trim() : undefined;
+      const label = typeof parsed.label === 'string' ? parsed.label.trim() : undefined;
+      const errors = [];
+      if (!target) errors.push('time.target must be viewer or zone');
+      if (!Number.isInteger(offsetSeconds)) errors.push('time.offsetSeconds must be an integer');
+      if (Number.isFinite(offsetSeconds) && Math.abs(offsetSeconds) > 366 * 24 * 60 * 60) errors.push('time.offsetSeconds is too large');
+      if (target === 'zone') {
+        if (!timeZone) {
+          errors.push('time.timeZone is required when target is zone');
+        } else if (!isValidTimeZone(timeZone)) {
+          errors.push('time.timeZone must be a valid IANA time zone');
+        }
+      }
+      if (errors.length || !target || !Number.isInteger(offsetSeconds)) return { ok: false, errors };
+      return { ok: true, plan: { kind: 'time', target, offsetSeconds, timeZone, label } };
+    }
     case 'clarify':
     case 'unavailable': {
       const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
@@ -264,6 +292,15 @@ function extractJsonPayload(response: string): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('ko-KR', { timeZone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function truncate(value: string, limit: number): string {

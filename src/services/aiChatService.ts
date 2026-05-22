@@ -34,75 +34,6 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
 }
 
 
-function isCurrentTimeQuestion(prompt: string): boolean {
-  const normalized = prompt.trim().replace(/\s+/g, '');
-  if (!normalized) return false;
-  return /^(?:지금|현재|이제|내|내가보는|내쪽|내기준)?(?:몇시|몇분)(?:야|이야|인가|지|죠|임|알려줘|말해줘|좀알려줘|좀말해줘)?[.。…]*$/u.test(normalized) ||
-    /^(?:지금|현재|이제|내|내가보는|내쪽|내기준)?(?:시간|시각)(?:은|는|이|가)?(?:뭐야|어떻게돼|몇시야|몇시지|알려줘|말해줘|궁금해)?[.。…]*$/u.test(normalized) ||
-    /^(?:내시간|내시각|내쪽시간|내기준시간)(?:은|는|이|가)?[.。…]*$/u.test(normalized);
-}
-
-function parseRelativeTimeOffsetMs(prompt: string): number | null {
-  const normalized = prompt.trim().replace(/\s+/g, '');
-  if (!/(?:몇시|몇분|시간|시각)/u.test(normalized) || !/(?:후|뒤|나중)/u.test(normalized)) return null;
-
-  let totalMs = 0;
-  const unitMs: Record<string, number> = {
-    초: 1_000,
-    분: 60_000,
-    시간: 60 * 60_000,
-    일: 24 * 60 * 60_000,
-    날: 24 * 60 * 60_000
-  };
-  for (const match of normalized.matchAll(/(\d+)(초|분|시간|일|날)/gu)) {
-    totalMs += Number.parseInt(match[1], 10) * unitMs[match[2]];
-  }
-  if (totalMs <= 0 || !Number.isFinite(totalMs)) return null;
-  return totalMs;
-}
-
-function resolveRequestedTimeZone(prompt: string): { label: string; timeZone: string } | null {
-  const normalized = prompt.trim().replace(/\s+/g, '').toLowerCase();
-  const aliases: Array<{ pattern: RegExp; label: string; timeZone: string }> = [
-    { pattern: /헝가리|hungary|budapest|부다페스트/u, label: '헝가리', timeZone: 'Europe/Budapest' },
-    { pattern: /한국|대한민국|korea|seoul|서울/u, label: '한국', timeZone: 'Asia/Seoul' },
-    { pattern: /일본|japan|tokyo|도쿄/u, label: '일본', timeZone: 'Asia/Tokyo' },
-    { pattern: /영국|런던|unitedkingdom|uk|london/u, label: '영국', timeZone: 'Europe/London' },
-    { pattern: /뉴욕|newyork/u, label: '뉴욕', timeZone: 'America/New_York' },
-    { pattern: /로스앤젤레스|losangeles/u, label: '로스앤젤레스', timeZone: 'America/Los_Angeles' }
-  ];
-  return aliases.find((alias) => alias.pattern.test(normalized)) ?? null;
-}
-
-function formatTimeInZone(timestampMs: number, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('ko-KR', {
-    timeZone,
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  }).formatToParts(new Date(timestampMs));
-  const dayPeriod = parts.find((part) => part.type === 'dayPeriod')?.value ?? '';
-  const hour = parts.find((part) => part.type === 'hour')?.value ?? '';
-  const minute = parts.find((part) => part.type === 'minute')?.value ?? '';
-  return `${dayPeriod} ${hour}시 ${minute}분`.trim();
-}
-
-function formatDiscordLocalTime(timestampMs: number): string {
-  return `<t:${Math.floor(timestampMs / 1000)}:t>예요...`;
-}
-
-function buildDeterministicTimeAnswer(prompt: string, baseTimestampMs: number): string | null {
-  const offsetMs = parseRelativeTimeOffsetMs(prompt);
-  const timestampMs = baseTimestampMs + (offsetMs ?? 0);
-  const requestedTimeZone = resolveRequestedTimeZone(prompt);
-  if (requestedTimeZone && /(?:몇시|몇분|시간|시각)/u.test(prompt)) {
-    return `${requestedTimeZone.label} 시간은 ${formatTimeInZone(timestampMs, requestedTimeZone.timeZone)}이에요...`;
-  }
-  if (offsetMs !== null) return formatDiscordLocalTime(timestampMs);
-  if (isCurrentTimeQuestion(prompt)) return formatDiscordLocalTime(timestampMs);
-  return null;
-}
-
 function normalizeAiChatTone(content: string): string {
   const normalized = content
     .trim()
@@ -217,50 +148,6 @@ export class AiChatService {
             summary: `prompt=${prompt.slice(0, 500)}`
           })
           .catch((error) => logger.warn('Failed to log AI command:', error));
-
-        const deterministicTimeAnswer = buildDeterministicTimeAnswer(prompt, message.createdTimestamp);
-        if (deterministicTimeAnswer) {
-          const answer = deterministicTimeAnswer;
-          await sendChunkedReply(message, answer);
-          await this.activityLog
-            .logCommand({
-              guildId: message.guildId!,
-              guildName: message.guild?.name,
-              channelId: message.channelId,
-              userId: message.author.id,
-              userName: message.member?.displayName ?? message.author.username,
-              commandName: 'ai-chat-response',
-              summary: `answer=${answer}`
-            })
-            .catch((error) => logger.warn('Failed to log AI response:', error));
-          await this.withGuildLock(message.guildId!, async () => {
-            const at = new Date();
-            const userName = message.member?.displayName ?? message.author.username;
-            this.memory.appendTurn({
-              guildId: message.guildId!,
-              channelId: message.channelId,
-              userId: message.author.id,
-              userName,
-              messageId: message.id,
-              role: 'user',
-              content: prompt,
-              importance: 0,
-              createdAt: at
-            });
-            this.memory.appendTurn({
-              guildId: message.guildId!,
-              channelId: message.channelId,
-              userId: message.client.user?.id ?? '__bot__',
-              userName: message.client.user?.username ?? 'ChococoBot',
-              messageId: null,
-              role: 'assistant',
-              content: answer,
-              importance: 0,
-              createdAt: at
-            });
-          });
-          return true;
-        }
 
         const snapshot = this.memory.getGuildSnapshot(message.guildId!, this.settings.aiMemoryRecentTurns);
         const messages: AiChatMessage[] = [{ role: 'system', content: this.settings.aiSystemPrompt }];

@@ -55,6 +55,40 @@ describe('AiCommandPlanner', () => {
     expect(ai.askMessages).toHaveBeenCalledTimes(1);
   });
 
+
+  it('parses time plans returned by the model', async () => {
+    const ai = {
+      askMessages: vi.fn(async () => '{"kind":"time","target":"viewer","offsetSeconds":18000}')
+    };
+    const planner = new AiCommandPlanner(ai as any);
+
+    const plan = await planner.plan(makeMessage(), '지금부터 5시간 후는 몇시야', {
+      prefix: '!',
+      commands: new Collection(),
+      availableChannels: []
+    });
+
+    expect(plan).toEqual({ kind: 'time', target: 'viewer', offsetSeconds: 18000, timeZone: undefined, label: undefined });
+  });
+
+  it('retries invalid time zones from model output', async () => {
+    const ai = {
+      askMessages: vi.fn()
+        .mockResolvedValueOnce('{"kind":"time","target":"zone","timeZone":"Hungary","label":"헝가리"}')
+        .mockResolvedValueOnce('{"kind":"time","target":"zone","timeZone":"Europe/Budapest","label":"헝가리","offsetSeconds":0}')
+    };
+    const planner = new AiCommandPlanner(ai as any);
+
+    const plan = await planner.plan(makeMessage(), '헝가리 몇시야', {
+      prefix: '!',
+      commands: new Collection(),
+      availableChannels: []
+    });
+
+    expect(plan).toEqual({ kind: 'time', target: 'zone', offsetSeconds: 0, timeZone: 'Europe/Budapest', label: '헝가리' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+  });
+
   it('returns chat when the model says the request is ordinary chat', async () => {
     const ai = {
       askMessages: vi.fn(async () => '{"kind":"chat"}')
