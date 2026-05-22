@@ -180,3 +180,60 @@ describe('BotActivityLogService.ensureGuildLogChannel', () => {
     expect(store.getLogChannelId('guild-1')).toBe('existing-log');
   });
 });
+
+describe('BotActivityLogService.deleteManagedLogChannels', () => {
+  it('deletes only managed source log text channels and clears the stored mapping', async () => {
+    const deleteLogByName = vi.fn(async () => undefined);
+    const deleteLogByTopic = vi.fn(async () => undefined);
+    const unmanagedDelete = vi.fn(async () => undefined);
+    const managedByName = {
+      id: 'log-by-name',
+      type: ChannelType.GuildText,
+      name: 'LOG-source-guild-1',
+      topic: null,
+      delete: deleteLogByName
+    };
+    const managedByTopic = {
+      id: 'log-by-topic',
+      type: ChannelType.GuildText,
+      name: 'custom',
+      topic: 'Source guild: source (guild-2)',
+      delete: deleteLogByTopic
+    };
+    const unmanaged = {
+      id: 'general',
+      type: ChannelType.GuildText,
+      name: 'general',
+      topic: null,
+      delete: unmanagedDelete
+    };
+    const loggingGuild = {
+      id: 'log-guild',
+      name: 'log',
+      channels: {
+        fetch: vi.fn(async () => new Map([
+          ['log-by-name', managedByName],
+          ['log-by-topic', managedByTopic],
+          ['general', unmanaged]
+        ] as Array<[string, any]>)),
+        cache: new Map()
+      }
+    };
+    const client = {
+      guilds: {
+        fetch: vi.fn(async () => loggingGuild)
+      }
+    } as any;
+    const store = new InMemoryBotActivityLogStore();
+    store.setLogChannelId('guild-1', 'log-by-name');
+    const service = new BotActivityLogService(client, store, 'log-guild');
+
+    const result = await service.deleteManagedLogChannels();
+
+    expect(result).toEqual({ deleted: 2, failed: 0 });
+    expect(deleteLogByName).toHaveBeenCalledTimes(1);
+    expect(deleteLogByTopic).toHaveBeenCalledTimes(1);
+    expect(unmanagedDelete).not.toHaveBeenCalled();
+    expect(store.getLogChannelId('guild-1')).toBeUndefined();
+  });
+});

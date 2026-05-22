@@ -621,6 +621,27 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       }
     },
     {
+      name: '로그채널삭제',
+      aliases: ['로그정리', '로그삭제', 'clear-log-channels', 'delete-log-channels', 'log-clear'],
+      description: '로그 서버에서 봇 로그 채널을 삭제합니다.',
+      async execute(message, _args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        if (message.guildId !== context.settings.loggingGuildId) {
+          throw new Error('로그 서버에서만 사용할 수 있어요...');
+        }
+        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+          throw new Error('서버 관리자만 로그 채널을 삭제할 수 있어요...');
+        }
+        const result = await context.activityLog.deleteManagedLogChannels();
+        await message.reply({
+          content: result.failed > 0
+            ? `로그 채널 ${result.deleted}개를 삭제했고 ${result.failed}개는 실패했어요...`
+            : `로그 채널 ${result.deleted}개를 삭제했어요...`,
+          allowedMentions: { repliedUser: false }
+        });
+      }
+    },
+    {
       name: '도움말',
       aliases: ['help', 'commands', '명령어', 'command', 'cmd'],
       description: '사용 가능한 명령어를 보여줍니다.',
@@ -641,6 +662,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             `${prefix}tts엔진 [edge|gtts] / ${prefix}engine [edge|gtts] / ${prefix}tts-engine [edge|gtts] / ${prefix}ttsengine [edge|gtts] / ${prefix}엔진 [edge|gtts] — 내 TTS 엔진 확인/설정...`,
             `현재 프리픽스 뒤에 ?를 붙이고 공백을 넣어 AI 채팅해요... 예: \`${prefix}? 안녕\``,
             `${prefix}기억삭제 / ${prefix}ai-memory / ${prefix}ai-reset-memory / ${prefix}memory-reset / ${prefix}memory-clear / ${prefix}메모리삭제 / ${prefix}기억초기화 — 서버 AI 기억 초기화... (서버 관리자만 가능해요...)`,
+            `${prefix}로그채널삭제 / ${prefix}로그정리 / ${prefix}로그삭제 — 로그 서버에서 봇 로그 채널을 삭제해요... (로그 서버 관리자만 가능해요...)`,
             `${prefix}프리픽스 / ${prefix}prefix / ${prefix}command-prefix — 서버 프리픽스 확인/변경... (서버 관리자만 가능해요...)`
           ].join('\n'),
           allowedMentions: { repliedUser: false }

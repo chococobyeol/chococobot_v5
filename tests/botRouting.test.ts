@@ -96,6 +96,7 @@ function makeContext(overrides: Record<string, unknown> = {}) {
       logCommand: vi.fn(async () => undefined),
       logCleanupResult: vi.fn(async () => undefined),
       logChannelHistory: vi.fn(async () => undefined),
+      deleteManagedLogChannels: vi.fn(async () => ({ deleted: 2, failed: 0 })),
       logError: vi.fn(async () => undefined),
       logTtsRequest: vi.fn(async () => undefined),
       logVoiceConnection: vi.fn(async () => undefined),
@@ -238,6 +239,66 @@ describe('handleMessageCreate', () => {
       exhausted: true
     });
     expect(message.reply).not.toHaveBeenCalled();
+  });
+
+  it('deletes managed log channels only inside the logging guild', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      settings: {
+        ttsReadBotMessages: false,
+        ttsMaxChars: 500,
+        cleanMineDefaultTarget: 500,
+        cleanMineMaxLimit: 500,
+        cleanAllDefaultTarget: 1000,
+        cleanAllMaxLimit: 1000,
+        loggingGuildId: 'log-guild'
+      }
+    });
+    const message = makeMessage('!로그채널삭제', {
+      guildId: 'log-guild',
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.activityLog.deleteManagedLogChannels).toHaveBeenCalledTimes(1);
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: '로그 채널 2개를 삭제했어요...'
+    }));
+  });
+
+  it('rejects log channel deletion outside the logging guild', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      settings: {
+        ttsReadBotMessages: false,
+        ttsMaxChars: 500,
+        cleanMineDefaultTarget: 500,
+        cleanMineMaxLimit: 500,
+        cleanAllDefaultTarget: 1000,
+        cleanAllMaxLimit: 1000,
+        loggingGuildId: 'log-guild'
+      }
+    });
+    const message = makeMessage('!로그채널삭제', {
+      guildId: 'guild-1',
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.activityLog.deleteManagedLogChannels).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: '로그 서버에서만 사용할 수 있어요...'
+    }));
   });
 
   it('routes supported prefix-question commands to the existing command execution path', async () => {

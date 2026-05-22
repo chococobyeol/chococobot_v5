@@ -131,6 +131,35 @@ export class BotActivityLogService {
     await this.ensureAllSourceGuildLogChannels(guild);
   }
 
+  async deleteManagedLogChannels(): Promise<{ deleted: number; failed: number }> {
+    const guild = await this.resolveLoggingGuild();
+    if (!guild) return { deleted: 0, failed: 0 };
+
+    const channels = await guild.channels.fetch();
+    const logChannels = [...channels.values()].filter(
+      (channel): channel is TextChannel => {
+        if (!channel || channel.type !== ChannelType.GuildText) return false;
+        return channel.name.startsWith('LOG-') || Boolean(channel.topic?.startsWith('Source guild: '));
+      }
+    );
+
+    let deleted = 0;
+    let failed = 0;
+    for (const channel of logChannels) {
+      const removed = await channel.delete('Delete managed ChococoBot log channel').then(
+        () => true,
+        (error) => {
+          logger.warn(`Failed to delete log channel ${channel.id}:`, error);
+          return false;
+        }
+      );
+      if (removed) deleted += 1;
+      else failed += 1;
+    }
+    this.store.clearLogChannels?.();
+    return { deleted, failed };
+  }
+
   async ensureGuildLogChannel(sourceGuildId: string, parent?: CategoryChannel): Promise<TextChannel | undefined> {
     const guild = await this.resolveLoggingGuild();
     if (!guild) return undefined;

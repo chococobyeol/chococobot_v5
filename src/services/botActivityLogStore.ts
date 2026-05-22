@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 export interface BotActivityLogStore {
   getLogChannelId(sourceGuildId: string): string | undefined;
   setLogChannelId(sourceGuildId: string, channelId: string | undefined): void;
+  clearLogChannels?(): void;
   close?(): void;
 }
 
@@ -46,6 +47,10 @@ export class SqliteBotActivityLogStore implements BotActivityLogStore {
       .run(sourceGuildId, channelId, new Date().toISOString());
   }
 
+  clearLogChannels(): void {
+    this.db.prepare('DELETE FROM bot_log_channels').run();
+  }
+
   close(): void {
     this.db.close();
   }
@@ -64,5 +69,9 @@ export class InMemoryBotActivityLogStore implements BotActivityLogStore {
       return;
     }
     this.channels.set(sourceGuildId, channelId);
+  }
+
+  clearLogChannels(): void {
+    this.channels.clear();
   }
 }
