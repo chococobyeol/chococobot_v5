@@ -762,7 +762,8 @@ function buildChannelHistoryMessages(
   message: Message,
   history: Awaited<ReturnType<typeof fetchChannelHistory>>,
   mode: 'summary' | 'qa',
-  query: string
+  query: string,
+  topic: string | null = null
 ): AiChatMessage[] {
   const channelNames = Array.from(new Set(history.map((entry) => channelDisplayName(message, entry.channelId)))).join(', ');
   const messages: AiChatMessage[] = [
@@ -780,8 +781,9 @@ function buildChannelHistoryMessages(
       ].join('\n')
     },
     { role: 'system', content: `읽은 채널: ${channelNames || '알 수 없음'}` },
+    topic ? { role: 'system' as const, content: `검색 주제: ${topic}` } : undefined,
     { role: 'user', content: `대화 기록:\n${buildChannelHistoryLines(message, history)}` }
-  ];
+  ].filter((item): item is AiChatMessage => Boolean(item));
   messages.push({
     role: 'user',
     content:
@@ -794,16 +796,23 @@ function buildChannelHistoryMessages(
 
 function extractHistorySearchTopic(query: string): string | null {
   const patterns = [
-    /(?:대화내용|대화\s*내용|서버|채널|기록)?\s*(?:중에|에서)?\s*["“”'‘’]?(.+?)["“”'‘’]?(?:에 대한|에 관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|찾아봐|검색해)/i,
+    /(?:대화내용|대화\s*내용|서버|채널|기록)?\s*(?:중에|에서)?\s*["“”'‘’]?(.+?)["“”'‘’]?(?:에 대한|에 관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|찾아봐|찾아줘|찾아|검색해|검색해줘|검색)/i,
     /["“”'‘’]?(.+?)["“”'‘’]?(?:에 대한|에 관한|관련)\s*(?:내용|얘기|언급)/i
   ];
   for (const pattern of patterns) {
     const match = query.match(pattern);
     const rawTopic = match?.[1]?.trim().replace(/^(이|그|저)\s+/, '').replace(/\s+/g, ' ');
-    const topic = rawTopic?.replace(/^(?:대화내용|대화 내용|서버|채널|기록)\s*(?:중에|에서|에)?\s*/, '').trim();
+    const topic = rawTopic
+      ?.replace(/^(?:대화내용|대화 내용|서버|채널|기록)\s*(?:중에|에서|에)?\s*/, '')
+      .replace(/\s*(?:나|이나|이랑|랑)?\s*(?:뭐\s*)?(?:그런\s*)?(?:비슷한\s*)?거$/i, '')
+      .trim();
     if (topic && topic.length >= 2 && !/^(대화내용|대화 내용|서버|채널|기록)$/.test(topic)) return topic;
   }
   return null;
+}
+
+function isFuzzyHistorySearch(query: string): boolean {
+  return /비슷|관련|그런\s*거|뭐\s*그런/i.test(query);
 }
 
 function normalizeSearchText(value: string): string {
@@ -1051,6 +1060,8 @@ async function handleGuildChannelHistoryPlan(
     });
     const topic = extractHistorySearchTopic(query);
     const filteredHistory = filterHistoryByTopic(history, topic);
+    const useFuzzySearch = Boolean(topic && isFuzzyHistorySearch(query) && filteredHistory.length === 0);
+    const usedHistory = filteredHistory.length ? filteredHistory : useFuzzySearch ? history : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
       guildName: message.guild?.name,
@@ -1065,7 +1076,7 @@ async function handleGuildChannelHistoryPlan(
         Array.from(message.guild?.channels.cache.values() ?? []).filter((candidate) => candidate.type === ChannelType.GuildText).length
       ),
       matchedMessages: filteredHistory.length,
-      usedMessages: filteredHistory.length || history.length
+      usedMessages: topic && !useFuzzySearch ? filteredHistory.length : usedHistory.length
     }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
 
     if (!history.length) {
@@ -1075,7 +1086,7 @@ async function handleGuildChannelHistoryPlan(
       });
       return true;
     }
-    if (topic && !filteredHistory.length) {
+    if (topic && !filteredHistory.length && !useFuzzySearch) {
       await message.reply({ content: `${topic}에 관한 내용은 최근 대화에서 찾지 못했어요...`, allowedMentions: { repliedUser: false } });
       return true;
     }
@@ -1084,7 +1095,7 @@ async function handleGuildChannelHistoryPlan(
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
-      messages: buildChannelHistoryMessages(message, filteredHistory.length ? filteredHistory : history, mode, query)
+      messages: buildChannelHistoryMessages(message, usedHistory, mode, query, topic)
     });
     await replyWithChunks(message, answer);
   } catch (error) {
@@ -1239,7 +1250,6 @@ export async function handleMessageCreate(
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
       if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
-      if (await handleDirectChannelHistoryPrompt(message, aiPrompt, context)) return true;
       if (context.aiCommandPlanner) {
         try {
           const member = message.member as GuildMember | null;
@@ -1254,6 +1264,7 @@ export async function handleMessageCreate(
           });
           switch (plan.kind) {
             case 'chat':
+              if (await handleDirectChannelHistoryPrompt(message, aiPrompt, context)) return true;
               await context.aiChat.handlePrompt(message, aiPrompt);
               return true;
             case 'command':

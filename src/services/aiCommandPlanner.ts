@@ -57,7 +57,11 @@ export class AiCommandPlanner {
     let lastErrors: string[] = [];
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
       const messages = buildPlannerMessages(message, prompt, options, validationFeedback);
-      await options.onDiagnostic?.({ event: attempt === 0 ? 'request' : 'retry', retryCount: attempt, promptSnippet: messages.map((item) => item.content).join('\n').slice(0, 500) });
+      await options.onDiagnostic?.({
+        event: attempt === 0 ? 'request' : 'retry',
+        retryCount: attempt,
+        promptSnippet: [`사용자 요청: ${prompt}`, ...messages.map((item) => item.content)].join('\n').slice(0, 500)
+      });
       let detailed: string | AiDetailedResponse;
       try {
         detailed = await this.askDetailedOrText({

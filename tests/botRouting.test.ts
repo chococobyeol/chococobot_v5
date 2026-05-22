@@ -469,7 +469,7 @@ describe('handleMessageCreate', () => {
         ])
       })
     );
-    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
@@ -524,7 +524,7 @@ describe('handleMessageCreate', () => {
         ])
       })
     );
-    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
   });
 
   it('summarizes recent conversations across text channels when no channel is specified', async () => {
@@ -583,7 +583,7 @@ describe('handleMessageCreate', () => {
         ])
       })
     );
-    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
@@ -626,7 +626,7 @@ describe('handleMessageCreate', () => {
       matchedMessages: 1,
       usedMessages: 1
     }));
-    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
@@ -663,6 +663,48 @@ describe('handleMessageCreate', () => {
       matchedMessages: 0
     }));
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('lets AI judge fuzzy topic searches using recent history instead of exact-match rejecting them', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const message = makeMessage('!? 대화내용중에 파스타나 뭐 그런 비슷한거에 대한 내용 찾아줘');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'fuzzy-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '스파게티 먹자는 얘기가 있었어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 파스타') }),
+          expect.objectContaining({ content: expect.stringContaining('스파게티 먹자는 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
+      topic: '파스타',
+      matchedMessages: 0,
+      usedMessages: 1
+    }));
   });
 
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {

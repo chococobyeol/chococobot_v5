@@ -99,6 +99,10 @@ describe('AiCommandPlanner', () => {
     expect(ai.askMessages).not.toHaveBeenCalled();
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        event: 'request',
+        promptSnippet: expect.stringContaining('사용자 요청: 그냥 안녕')
+      }),
+      expect.objectContaining({
         event: 'response',
         model: 'openai/gpt-oss-20b',
         usageScope: 'planner',
