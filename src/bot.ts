@@ -865,12 +865,30 @@ function isFuzzyTopicLookupQuery(query: string): boolean {
   return /비슷|관련|그런\s*거|뭐\s*그런|같은\s*거/i.test(query);
 }
 
+function isLoggingGuild(message: Message, context: BotContext): boolean {
+  return Boolean(message.guildId && message.guildId === context.settings.loggingGuildId);
+}
+
+function canAccessLoggingHistory(message: Message): boolean {
+  return Boolean(message.member?.permissions?.has(PermissionFlagsBits.Administrator));
+}
+
+function isManagedLogTextChannel(channel: { type: ChannelType; name?: string; topic?: string | null }): boolean {
+  return channel.type === ChannelType.GuildText && (channel.name?.startsWith('LOG-') || Boolean(channel.topic?.startsWith('Source guild: ')));
+}
+
+function searchableHistoryChannels(message: Message, context: BotContext): GuildTextBasedChannel[] {
+  return Array.from(message.guild?.channels.cache.values() ?? [])
+    .filter((candidate): candidate is GuildTextBasedChannel => candidate.type === ChannelType.GuildText && 'messages' in candidate)
+    .filter((candidate) => !isLoggingGuild(message, context) || !isManagedLogTextChannel(candidate));
+}
+
 async function fetchRecentGuildTextHistory(
   message: Message,
+  context: BotContext,
   options: { limit: number; lookbackHours: number }
 ): Promise<Awaited<ReturnType<typeof fetchChannelHistory>>> {
-  const channels = Array.from(message.guild?.channels.cache.values() ?? [])
-    .filter((candidate): candidate is GuildTextBasedChannel => candidate.type === ChannelType.GuildText && 'messages' in candidate)
+  const channels = searchableHistoryChannels(message, context)
     .slice(0, MAX_AUTO_HISTORY_CHANNELS);
   const perChannelLimit = Math.max(1, Math.min(options.limit, Math.ceil(options.limit / Math.max(1, Math.min(channels.length, 5)))));
   const settled = await Promise.allSettled(
@@ -1061,6 +1079,10 @@ async function handleChannelHistoryPlan(
   if (!message.guildId) return false;
   try {
     const targetChannel = resolveTargetGuildTextChannel(message, route.targetChannelReference);
+    if (isLoggingGuild(message, context) && isManagedLogTextChannel(targetChannel) && !canAccessLoggingHistory(message)) {
+      await message.reply({ content: '로그 채널 내용은 관리자만 확인할 수 있어요...', allowedMentions: { repliedUser: false } });
+      return true;
+    }
     const assessment = assessChannelHistoryQuery(route.query);
     if (assessment.status !== 'ready') {
       await message.reply({ content: assessment.prompt, allowedMentions: { repliedUser: false } });
@@ -1155,6 +1177,10 @@ async function handleGuildChannelHistoryPlan(
 ): Promise<boolean> {
   if (!message.guildId) return false;
   try {
+    if (isLoggingGuild(message, context) && !canAccessLoggingHistory(message)) {
+      await message.reply({ content: '로그 서버의 전체 대화 검색은 관리자만 사용할 수 있어요...', allowedMentions: { repliedUser: false } });
+      return true;
+    }
     const assessment = assessChannelHistoryQuery(query);
     if (assessment.status !== 'ready') {
       await message.reply({ content: assessment.prompt, allowedMentions: { repliedUser: false } });
@@ -1165,10 +1191,12 @@ async function handleGuildChannelHistoryPlan(
     const isTopicLookup = Boolean(queryTopic && !isSummaryOnlyHistoryQuery(query));
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
+    const searchableChannels = searchableHistoryChannels(message, context);
+    const searchableChannelIds = isLoggingGuild(message, context) ? searchableChannels.map((channel) => channel.id) : undefined;
     const indexedSearch = queryTopic
-      ? await searchIndexedGuildTextHistory(message, context, query, { limit: searchLimit })
+      ? await searchIndexedGuildTextHistory(message, context, query, { limit: searchLimit, channelIds: searchableChannelIds })
       : { history: [], source: 'disabled' as const };
-    const history = indexedSearch.history.length ? indexedSearch.history : await fetchRecentGuildTextHistory(message, {
+    const history = indexedSearch.history.length ? indexedSearch.history : await fetchRecentGuildTextHistory(message, context, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
     });
@@ -1189,7 +1217,7 @@ async function handleGuildChannelHistoryPlan(
       searchError: indexedSearch.error,
       scannedChannels: Math.min(
         MAX_AUTO_HISTORY_CHANNELS,
-        Array.from(message.guild?.channels.cache.values() ?? []).filter((candidate) => candidate.type === ChannelType.GuildText).length
+        searchableChannels.length
       ),
       matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
       usedMessages: usedHistory.length

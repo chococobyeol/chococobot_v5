@@ -1077,6 +1077,136 @@ describe('handleMessageCreate', () => {
     }));
   });
 
+  it('blocks non-admin server-wide history searches inside the logging guild', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      settings: {
+        ttsReadBotMessages: false,
+        ttsMaxChars: 500,
+        cleanMineDefaultTarget: 500,
+        cleanMineMaxLimit: 500,
+        cleanAllDefaultTarget: 1000,
+        cleanAllMaxLimit: 1000,
+        loggingGuildId: 'log-guild'
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '서버 전체',
+          query: '토큰'
+        }))
+      }
+    });
+    const message = makeMessage('!? 서버 전체에서 토큰 찾아봐', {
+      guildId: 'log-guild',
+      member: {
+        displayName: '일반유저',
+        permissions: { has: vi.fn(() => false) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: '로그 서버의 전체 대화 검색은 관리자만 사용할 수 있어요...'
+    }));
+    expect(context.ai.askMessages).not.toHaveBeenCalled();
+    expect(context.activityLog.logChannelHistory).not.toHaveBeenCalled();
+  });
+
+  it('excludes managed log channels from logging-guild server-wide history context', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      settings: {
+        ttsReadBotMessages: false,
+        ttsMaxChars: 500,
+        cleanMineDefaultTarget: 500,
+        cleanMineMaxLimit: 500,
+        cleanAllDefaultTarget: 1000,
+        cleanAllMaxLimit: 1000,
+        loggingGuildId: 'log-guild'
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '서버 전체',
+          query: '최근 내용 요약'
+        }))
+      }
+    });
+    const generalChannel = {
+      id: 'general-log-guild',
+      name: 'general',
+      type: ChannelType.GuildText,
+      topic: null,
+      messages: {
+        fetch: vi.fn(async () => new Collection([
+          ['safe-1', {
+            id: 'safe-1',
+            channelId: 'general-log-guild',
+            createdTimestamp: Date.now(),
+            content: '일반 공지 내용',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }]
+        ]))
+      }
+    };
+    const managedLogChannel = {
+      id: 'managed-log',
+      name: 'LOG-source-guild',
+      type: ChannelType.GuildText,
+      topic: 'Source guild: source (guild-1)',
+      messages: {
+        fetch: vi.fn(async () => new Collection([
+          ['secret-1', {
+            id: 'secret-1',
+            channelId: 'managed-log',
+            createdTimestamp: Date.now(),
+            content: '비밀 토큰 로그',
+            author: { id: 'bot-1', username: 'ChococoBot', bot: true },
+            member: { displayName: 'ChococoBot' }
+          }]
+        ]))
+      }
+    };
+    const message = makeMessage('!? 최근 내용 요약해줘', {
+      guildId: 'log-guild',
+      guild: {
+        name: '로그서버',
+        channels: {
+          cache: new Map([
+            ['general-log-guild', generalChannel],
+            ['managed-log', managedLogChannel]
+          ] as Array<[string, any]>)
+        }
+      },
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(generalChannel.messages.fetch).toHaveBeenCalled();
+    expect(managedLogChannel.messages.fetch).not.toHaveBeenCalled();
+    expect(context.ai.askMessages).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ content: expect.stringContaining('일반 공지 내용') })
+      ])
+    }));
+    expect(context.ai.askMessages).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.not.arrayContaining([
+        expect.objectContaining({ content: expect.stringContaining('비밀 토큰 로그') })
+      ])
+    }));
+  });
+
   it('falls back to pending channel retry when planner fails to return JSON and then chat', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
