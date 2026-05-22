@@ -118,7 +118,7 @@ The starter voice preset map is defined in `src/config.ts`:
 - Aliases such as `!tts엔진 엣지`, `!tts엔진 구글`, and `!tts엔진 google` are also accepted.
 - `!tts엔진 해제` clears the stored engine and falls back to `TTS_ENGINE`.
 - TTS synthesis retries with `gtts` when the selected `edge` engine fails and logs the underlying error.
-- Hosted environments that enforce PEP 668 may reject runtime `pip install --user`. On Render, run `./scripts/setup-python-tts.sh` during build and set `PYTHON_BIN=/opt/render/project/src/.venv/bin/python`.
+- Hosted environments that enforce PEP 668 may reject runtime `pip install --user`. `npm install` runs `scripts/setup-python-tts.sh` automatically and creates `.venv`; on Render, set `PYTHON_BIN=/opt/render/project/src/.venv/bin/python` or let the bot auto-detect `.venv/bin/python`.
 
 ## AI chat behavior
 
@@ -174,11 +174,12 @@ These commands are intentionally not shown in the public `!도움말` output.
 
 Use a Render **Background Worker** for the Discord gateway process (no public HTTP server is required).
 
-- Build command: `npm install && ./scripts/setup-python-tts.sh && npm run build`
+- Build command: `npm install && npm run build`
 - Start command: `npm start`
 - Instance type: Starter or larger
-- Required secret: `DISCORD_TOKEN`
+- Required secrets: `DISCORD_TOKEN`, `GROQ_API_KEY` when AI chat is enabled
 - Recommended persistent disk path for SQLite: `/var/data/chococobot.sqlite3`
+- Recommended TTS env: `PYTHON_BIN=/opt/render/project/src/.venv/bin/python`
 
 This repo includes an optional `render.yaml` Blueprint. Render Blueprints support `type: worker`, `runtime: node`, `plan: starter`, `buildCommand`, `startCommand`, persistent disks, and `envVars` where secrets can be marked `sync: false` so Render prompts for them in the dashboard.
 

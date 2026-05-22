@@ -1,6 +1,7 @@
+import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { nanoid } from 'nanoid';
@@ -15,7 +16,20 @@ export function normalizeTtsEngineName(value: string): TtsEngine | undefined {
 }
 
 const execFileAsync = promisify(execFile);
-const pythonBinary = process.env.PYTHON_BIN ?? 'python3';
+function resolvePythonBinary(): string {
+  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  const localVenvPython = resolve(process.cwd(), '.venv/bin/python');
+  if (existsSync(localVenvPython)) return localVenvPython;
+  return 'python3';
+}
+
+const pythonBinary = resolvePythonBinary();
+
+function pythonInstallArgs(packageName: string): string[] {
+  const usesProjectVenv = pythonBinary.includes('/.venv/') || pythonBinary.endsWith('/.venv/bin/python');
+  if (usesProjectVenv || process.env.VIRTUAL_ENV) return ['-m', 'pip', 'install', packageName];
+  return ['-m', 'pip', 'install', '--user', packageName];
+}
 
 const packageImportByEngine: Record<TtsEngine, string> = {
   edge: 'edge_tts',
@@ -37,7 +51,7 @@ async function ensurePythonPackage(engine: TtsEngine): Promise<void> {
     const packageName = pipPackageByEngine[engine];
     let installPromise = installPromiseByPackage.get(packageName);
     if (!installPromise) {
-      installPromise = execFileAsync(pythonBinary, ['-m', 'pip', 'install', '--user', packageName]).then(() => undefined);
+      installPromise = execFileAsync(pythonBinary, pythonInstallArgs(packageName)).then(() => undefined);
       installPromiseByPackage.set(packageName, installPromise);
     }
     await installPromise;

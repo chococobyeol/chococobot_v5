@@ -14,7 +14,8 @@
     "setup:logs": "tsx scripts/setupLoggingGuild.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "postinstall": "bash scripts/setup-python-tts.sh"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
