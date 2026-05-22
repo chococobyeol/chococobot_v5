@@ -86,6 +86,7 @@ function sanitizeChannelName(value: string): string {
 
 const TEST_CHANNEL_CATEGORY_NAME = '봇 테스트 채널';
 const LOG_CHANNEL_CATEGORY_NAME = '서버별 로그';
+const DISCORD_CATEGORY_CHANNEL_LIMIT = 50;
 const AI_RATE_LIMIT_HEADER_WHITELIST = new Set([
   'retry-after',
   'x-ratelimit-limit-requests',
@@ -151,12 +152,17 @@ export class BotActivityLogService {
       }
     }
 
+    const targetParent = parent && this.hasCategoryCapacity(guild, parent) ? parent : await this.findAvailableLogCategory(guild);
     const channel = await guild.channels.create({
       name: desiredName,
       type: ChannelType.GuildText,
       topic: desiredTopic,
-      parent: parent?.id
+      parent: targetParent?.id
+    }).catch((error) => {
+      logger.warn(`Failed to create logging channel for source guild ${sourceGuildId}:`, error);
+      return null;
     });
+    if (!channel || channel.type !== ChannelType.GuildText) return undefined;
     this.store.setLogChannelId(sourceGuildId, channel.id);
     return channel;
   }
@@ -354,11 +360,10 @@ export class BotActivityLogService {
   }
 
   private async ensureAllSourceGuildLogChannels(guild: Guild): Promise<void> {
-    const logCategory = await this.ensureCategory(guild, LOG_CHANNEL_CATEGORY_NAME);
     const guilds = await this.client.guilds.fetch();
     for (const sourceGuild of guilds.values()) {
       if (sourceGuild.id === guild.id) continue;
-      await this.ensureGuildLogChannel(sourceGuild.id, logCategory);
+      await this.ensureGuildLogChannel(sourceGuild.id);
     }
   }
 
@@ -419,6 +424,27 @@ export class BotActivityLogService {
       throw new Error(`Unable to create required category: ${name}`);
     }
     return created;
+  }
+
+  private hasCategoryCapacity(guild: Guild, category: CategoryChannel): boolean {
+    const childCount = Array.from(guild.channels.cache.values()).filter((channel) => channel.parentId === category.id).length;
+    return childCount < DISCORD_CATEGORY_CHANNEL_LIMIT;
+  }
+
+  private async findAvailableLogCategory(guild: Guild): Promise<CategoryChannel | undefined> {
+    const existingCategories = Array.from(guild.channels.cache.values())
+      .filter((channel): channel is CategoryChannel => channel.type === ChannelType.GuildCategory && channel.name.startsWith(LOG_CHANNEL_CATEGORY_NAME))
+      .sort((left, right) => left.name.localeCompare(right.name));
+
+    const available = existingCategories.find((category) => this.hasCategoryCapacity(guild, category));
+    if (available) return available;
+
+    const nextIndex = existingCategories.length + 1;
+    const name = nextIndex === 1 ? LOG_CHANNEL_CATEGORY_NAME : `${LOG_CHANNEL_CATEGORY_NAME}-${nextIndex}`;
+    return this.ensureCategory(guild, name).catch((error) => {
+      logger.warn(`Failed to create available log category ${name}:`, error);
+      return undefined;
+    });
   }
 
   private async resolveSourceChannelLabel(guildId: string, channelId: string): Promise<string> {
