@@ -53,6 +53,20 @@ type CleanupLogDetails = {
   exhausted: boolean;
 };
 
+type ChannelHistoryLogDetails = {
+  guildId: string;
+  guildName?: string | null;
+  channelId: string;
+  userId: string;
+  userName?: string | null;
+  mode: 'summary' | 'qa';
+  query: string;
+  scannedChannels: number;
+  matchedMessages: number;
+  usedMessages: number;
+  topic?: string | null;
+};
+
 function truncate(value: string, limit = 1500): string {
   return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 }
@@ -179,6 +193,26 @@ export class BotActivityLogService {
           `exhausted=${details.exhausted}`
         ].join('\n'))
     }).catch((error) => logger.warn('Failed to send cleanup log:', error));
+  }
+
+  async logChannelHistory(details: ChannelHistoryLogDetails): Promise<void> {
+    const channel = await this.ensureGuildLogChannel(details.guildId);
+    if (!channel) return;
+    const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
+    await channel.send({
+      content: truncate(
+        [
+          `${sourceLabel}-HISTORY`,
+          `guildName=${details.guildName ?? 'unknown'}`,
+          `userName=${details.userName ?? 'unknown'}`,
+          `mode=${details.mode}`,
+          details.topic ? `topic=${details.topic}` : undefined,
+          `query=${truncate(details.query, 500)}`,
+          `scannedChannels=${details.scannedChannels}`,
+          `matchedMessages=${details.matchedMessages}`,
+          `usedMessages=${details.usedMessages}`
+        ].filter(Boolean).join('\n'))
+    }).catch((error) => logger.warn('Failed to send channel-history log:', error));
   }
 
   async logError(details: {

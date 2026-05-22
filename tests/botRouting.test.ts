@@ -95,6 +95,7 @@ function makeContext(overrides: Record<string, unknown> = {}) {
     activityLog: {
       logCommand: vi.fn(async () => undefined),
       logCleanupResult: vi.fn(async () => undefined),
+      logChannelHistory: vi.fn(async () => undefined),
       logError: vi.fn(async () => undefined),
       logTtsRequest: vi.fn(async () => undefined),
       logVoiceConnection: vi.fn(async () => undefined),
@@ -620,7 +621,47 @@ describe('handleMessageCreate', () => {
         ])
       })
     );
+    expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
+      topic: '짬뽕지존',
+      matchedMessages: 1,
+      usedMessages: 1
+    }));
     expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('does not summarize unrelated recent history when a topic lookup has no matches', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const message = makeMessage('!? 대화내용중에 정성카츠에 대한 내용이 있나?');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'unrelated-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '다른 식당 얘기만 했어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠에 관한 내용은 최근 대화에서 찾지 못했어요...' }));
+    expect(context.ai.askMessages).not.toHaveBeenCalled();
+    expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
+      topic: '정성카츠',
+      matchedMessages: 0
+    }));
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 

@@ -770,6 +770,8 @@ function buildChannelHistoryMessages(
       role: 'system',
       content: [
         '당신은 Discord 서버 대화 기록을 요약하는 도우미예요.',
+        '사용자가 특정 주제/단어가 있는지 물었다면 전체 요약을 하지 말고 그 주제가 있는지, 있다면 관련 메시지만 알려줘요.',
+        '관련 메시지가 없으면 다른 최근 대화 목록을 늘어놓지 말고 찾지 못했다고만 말해요.',
         '출력에는 "(한국어)" 같은 언어 라벨을 붙이지 않아요.',
         '채널은 ID나 멘션 대신 제공된 #채널이름 그대로 써요.',
         '시간은 제공된 Discord timestamp를 그대로 써요. UTC, ISO, 한국시간 같은 고정 시간대로 바꾸지 않아요.',
@@ -788,6 +790,34 @@ function buildChannelHistoryMessages(
         : `다음 대화 기록을 바탕으로 질문에 답해 주세요...\n${query}`
   });
   return messages;
+}
+
+function extractHistorySearchTopic(query: string): string | null {
+  const patterns = [
+    /(?:대화내용|대화\s*내용|서버|채널|기록)?\s*(?:중에|에서)?\s*["“”'‘’]?(.+?)["“”'‘’]?(?:에 대한|에 관한|관련|라는|이란|란)?\s*(?:내용|얘기|언급)?(?:이|가)?\s*(?:있나|있는지|있었는지|나왔는지|찾아봐|검색해)/i,
+    /["“”'‘’]?(.+?)["“”'‘’]?(?:에 대한|에 관한|관련)\s*(?:내용|얘기|언급)/i
+  ];
+  for (const pattern of patterns) {
+    const match = query.match(pattern);
+    const rawTopic = match?.[1]?.trim().replace(/^(이|그|저)\s+/, '').replace(/\s+/g, ' ');
+    const topic = rawTopic?.replace(/^(?:대화내용|대화 내용|서버|채널|기록)\s*(?:중에|에서|에)?\s*/, '').trim();
+    if (topic && topic.length >= 2 && !/^(대화내용|대화 내용|서버|채널|기록)$/.test(topic)) return topic;
+  }
+  return null;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/[\s"'“”'‘’.,!?！？…~\-_/\\()[\]{}:;]+/g, '');
+}
+
+function filterHistoryByTopic(
+  history: Awaited<ReturnType<typeof fetchChannelHistory>>,
+  topic: string | null
+): Awaited<ReturnType<typeof fetchChannelHistory>> {
+  if (!topic) return history;
+  const normalizedTopic = normalizeSearchText(topic);
+  if (!normalizedTopic) return history;
+  return history.filter((entry) => normalizeSearchText(entry.content).includes(normalizedTopic));
 }
 
 async function fetchRecentGuildTextHistory(
@@ -1019,6 +1049,25 @@ async function handleGuildChannelHistoryPlan(
       limit: assessment.limit,
       lookbackHours: assessment.lookbackHours
     });
+    const topic = extractHistorySearchTopic(query);
+    const filteredHistory = filterHistoryByTopic(history, topic);
+    await context.activityLog.logChannelHistory({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.member?.displayName ?? message.author.username,
+      mode,
+      query,
+      topic,
+      scannedChannels: Math.min(
+        MAX_AUTO_HISTORY_CHANNELS,
+        Array.from(message.guild?.channels.cache.values() ?? []).filter((candidate) => candidate.type === ChannelType.GuildText).length
+      ),
+      matchedMessages: filteredHistory.length,
+      usedMessages: filteredHistory.length || history.length
+    }).catch((logError) => logger.warn('Failed to log channel-history result:', logError));
+
     if (!history.length) {
       await message.reply({
         content: `최근 ${assessment.limit}개 또는 ${assessment.lookbackHours}시간 안에 읽을 대화를 찾지 못했어요...`,
@@ -1026,12 +1075,16 @@ async function handleGuildChannelHistoryPlan(
       });
       return true;
     }
+    if (topic && !filteredHistory.length) {
+      await message.reply({ content: `${topic}에 관한 내용은 최근 대화에서 찾지 못했어요...`, allowedMentions: { repliedUser: false } });
+      return true;
+    }
 
     const answer = await context.ai.askMessages({
       guildId: message.guildId,
       userId: message.author.id,
       usageScope: 'summary',
-      messages: buildChannelHistoryMessages(message, history, mode, query)
+      messages: buildChannelHistoryMessages(message, filteredHistory.length ? filteredHistory : history, mode, query)
     });
     await replyWithChunks(message, answer);
   } catch (error) {
