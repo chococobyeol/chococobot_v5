@@ -27,6 +27,7 @@ export type GuildVoiceState = {
   queue: VoiceQueueItem[];
   playing: boolean;
   generation: number;
+  lastError?: string;
   idleLeaveTimer?: NodeJS.Timeout;
 };
 
@@ -118,6 +119,7 @@ export class VoiceService {
 
   async speak(guildId: string, text: string, userId?: string): Promise<boolean> {
     const state = this.getState(guildId);
+    state.lastError = undefined;
     if (state.idleLeaveTimer) {
       clearTimeout(state.idleLeaveTimer);
       state.idleLeaveTimer = undefined;
@@ -175,6 +177,10 @@ export class VoiceService {
     this.voiceSettings.setUserTtsEngine(guildId, userId, undefined);
   }
 
+  getLastError(guildId: string): string | undefined {
+    return this.states.get(guildId)?.lastError;
+  }
+
   private async drain(guildId: string, state: GuildVoiceState): Promise<boolean> {
     const generation = state.generation;
     const next = state.queue.shift();
@@ -188,7 +194,7 @@ export class VoiceService {
     let filePath: string | undefined;
     let played = false;
     try {
-      filePath = await this.tts.synthesize(next.text, this.resolveVoice(guildId, next.userId), this.resolveEngine(guildId, next.userId));
+      filePath = await this.synthesizeWithFallback(guildId, next);
       if (!this.states.has(guildId) || this.states.get(guildId) !== state || state.generation !== generation) {
         return false;
       }
@@ -197,6 +203,7 @@ export class VoiceService {
       await entersState(state.player, AudioPlayerStatus.Idle, 60_000);
       played = true;
     } catch (error) {
+      state.lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       logger.error('TTS synthesis/playback failed:', error);
     } finally {
       if (filePath) await this.tts.cleanup(filePath);
@@ -207,6 +214,24 @@ export class VoiceService {
     }
     const restPlayed = this.states.has(guildId) ? await this.drain(guildId, state) : false;
     return played || restPlayed;
+  }
+
+  private async synthesizeWithFallback(guildId: string, item: VoiceQueueItem): Promise<string> {
+    const voice = this.resolveVoice(guildId, item.userId);
+    const primaryEngine = this.resolveEngine(guildId, item.userId);
+    try {
+      return await this.tts.synthesize(item.text, voice, primaryEngine);
+    } catch (primaryError) {
+      if (primaryEngine !== 'edge') throw primaryError;
+      logger.warn('Edge TTS failed; retrying with gTTS:', primaryError);
+      try {
+        return await this.tts.synthesize(item.text, voice, 'gtts');
+      } catch (fallbackError) {
+        const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        throw new Error(`edge TTS failed: ${primaryMessage}; gTTS fallback failed: ${fallbackMessage}`);
+      }
+    }
   }
 
   private getState(guildId: string): GuildVoiceState {

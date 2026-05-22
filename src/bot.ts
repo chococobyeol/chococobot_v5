@@ -490,6 +490,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         });
         const played = await context.voice.speak(message.guildId, text, message.author.id);
         if (!played) {
+          const voiceError = context.voice.getLastError(message.guildId);
           await context.activityLog.logError({
             guildId: message.guildId,
             guildName: message.guild?.name,
@@ -498,7 +499,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             userName: message.author.username,
             commandName: '말',
             summary: `text=${text.slice(0, 500)}`,
-            error: new Error('TTS synthesis/playback failed')
+            error: new Error(voiceError ? `TTS synthesis/playback failed: ${voiceError}` : 'TTS synthesis/playback failed')
           });
         }
       }
