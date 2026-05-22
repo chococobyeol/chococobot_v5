@@ -9,7 +9,14 @@ import { AiCommandPlanner } from './services/aiCommandPlanner.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { ConfirmationManager, type ConfirmationScope } from './services/confirmationManager.js';
-import { assessChannelHistoryQuery, fetchChannelHistory } from './services/channelHistoryService.js';
+import {
+  DEFAULT_HISTORY_LOOKBACK_HOURS,
+  DEFAULT_HISTORY_MESSAGE_LIMIT,
+  MAX_HISTORY_LOOKBACK_HOURS,
+  MAX_HISTORY_MESSAGE_LIMIT,
+  assessChannelHistoryQuery,
+  fetchChannelHistory
+} from './services/channelHistoryService.js';
 import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
 import { SqliteAiMemoryStore } from './services/aiMemoryStore.js';
 import { routeNaturalLanguageCommand, type RoutedNaturalLanguageCommand } from './services/nlCommandRouter.js';
@@ -195,6 +202,15 @@ function looksLikeChannelHistoryPrompt(prompt: string): boolean {
 
 function hasExplicitChannelReference(prompt: string): boolean {
   return /채널|<#\d+>|#[^\s]+|메모|로그|봇테스트|테스트창/.test(prompt);
+}
+
+function isServerWideHistoryTarget(target: string): boolean {
+  const normalized = normalizeChannelReference(target);
+  return /^(서버전체|전체서버|이서버|현재서버|server|guild|allchannels|all)$/.test(normalized);
+}
+
+function isBotBehaviorComplaint(prompt: string): boolean {
+  return /왜|아니|뭐야|답답|못알아|말귀|최근.*만|자꾸|또/.test(prompt) && /봇|너|검색|찾|요약|최근|채널|대화/.test(prompt);
 }
 
 function findTextChannelFromNaturalReference(message: Message, prompt: string): GuildTextBasedChannel | 'ambiguous' | null {
@@ -772,6 +788,7 @@ function buildChannelHistoryMessages(
       content: [
         '당신은 Discord 서버 대화 기록을 요약하는 도우미예요.',
         '사용자가 특정 주제/단어가 있는지 물었다면 전체 요약을 하지 말고 그 주제가 있는지, 있다면 관련 메시지만 알려줘요.',
+        '비슷한 것/관련된 것을 찾는 요청이면 단어가 정확히 같지 않아도 음식 종류, 상위 범주, 의미가 가까운 표현을 판단해요.',
         '관련 메시지가 없으면 다른 최근 대화 목록을 늘어놓지 말고 찾지 못했다고만 말해요.',
         '출력에는 "(한국어)" 같은 언어 라벨을 붙이지 않아요.',
         '채널은 ID나 멘션 대신 제공된 #채널이름 그대로 써요.',
@@ -846,7 +863,9 @@ async function fetchRecentGuildTextHistory(
     )
   );
 
-  const combined = settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
+  const combined = settled
+    .flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
+    .filter((entry) => entry.id !== message.id);
   return combined
     .sort((left, right) => right.createdTimestamp - left.createdTimestamp)
     .slice(0, options.limit)
@@ -1054,11 +1073,13 @@ async function handleGuildChannelHistoryPlan(
       return true;
     }
 
-    const history = await fetchRecentGuildTextHistory(message, {
-      limit: assessment.limit,
-      lookbackHours: assessment.lookbackHours
-    });
     const topic = extractHistorySearchTopic(query);
+    const searchLimit = topic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
+    const searchLookbackHours = topic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
+    const history = await fetchRecentGuildTextHistory(message, {
+      limit: searchLimit,
+      lookbackHours: searchLookbackHours
+    });
     const filteredHistory = filterHistoryByTopic(history, topic);
     const useFuzzySearch = Boolean(topic && isFuzzyHistorySearch(query) && filteredHistory.length === 0);
     const usedHistory = filteredHistory.length ? filteredHistory : useFuzzySearch ? history : history;
@@ -1081,13 +1102,13 @@ async function handleGuildChannelHistoryPlan(
 
     if (!history.length) {
       await message.reply({
-        content: `최근 ${assessment.limit}개 또는 ${assessment.lookbackHours}시간 안에 읽을 대화를 찾지 못했어요...`,
+        content: `${topic ? '서버에서' : '최근'} ${searchLimit}개 또는 ${searchLookbackHours}시간 안에 읽을 대화를 찾지 못했어요...`,
         allowedMentions: { repliedUser: false }
       });
       return true;
     }
     if (topic && !filteredHistory.length && !useFuzzySearch) {
-      await message.reply({ content: `${topic}에 관한 내용은 최근 대화에서 찾지 못했어요...`, allowedMentions: { repliedUser: false } });
+      await message.reply({ content: `${topic}에 관한 내용은 서버에서 ${searchLimit}개 또는 ${Math.round(searchLookbackHours / 24)}일 범위 안에 찾지 못했어요...`, allowedMentions: { repliedUser: false } });
       return true;
     }
 
@@ -1193,7 +1214,7 @@ async function handleDirectChannelHistoryPrompt(
   context: BotContext
 ): Promise<boolean> {
   const mode = channelHistoryModeFromPrompt(prompt);
-  if (!mode || !looksLikeChannelHistoryPrompt(prompt)) return false;
+  if (!mode || !looksLikeChannelHistoryPrompt(prompt) || isBotBehaviorComplaint(prompt)) return false;
 
   const targetChannel = findTextChannelFromNaturalReference(message, prompt);
   if (targetChannel && targetChannel !== 'ambiguous') {
@@ -1270,6 +1291,9 @@ export async function handleMessageCreate(
             case 'command':
               return dispatchPlannerCommand(message, commands, context, confirmations, plan.query);
             case 'channel-history':
+              if (isServerWideHistoryTarget(plan.targetChannelReference)) {
+                return handleGuildChannelHistoryPlan(message, plan.mode, plan.query, context);
+              }
               return handleChannelHistoryPlan(
                 message,
                 {

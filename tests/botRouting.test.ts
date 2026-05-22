@@ -656,7 +656,7 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠에 관한 내용은 최근 대화에서 찾지 못했어요...' }));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠에 관한 내용은 서버에서 500개 또는 7일 범위 안에 찾지 못했어요...' }));
     expect(context.ai.askMessages).not.toHaveBeenCalled();
     expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
       topic: '정성카츠',
@@ -705,6 +705,85 @@ describe('handleMessageCreate', () => {
       matchedMessages: 0,
       usedMessages: 1
     }));
+  });
+
+  it('routes planner server-wide history targets to guild search instead of resolving them as a channel', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '서버 전체',
+          query: '햄버거 비슷한거에 대한 내용'
+        }))
+      }
+    });
+    const message = makeMessage('!? 대화 내용중에 햄버거 비슷한거에 대한 내용 찾아봐');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async ({ limit }: { limit: number }) =>
+        [
+          {
+            id: 'burger-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '치킨버거 먹고 싶다는 얘기가 있었어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ].slice(0, limit) as any
+      )
+    };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 햄버거') }),
+          expect.objectContaining({ content: expect.stringContaining('치킨버거 먹고 싶다는 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(generalChannel.messages.fetch).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }));
+    expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
+      topic: '햄버거',
+      scannedChannels: 1,
+      usedMessages: 1
+    }));
+  });
+
+  it('does not reinterpret bot-behavior complaints as history topic searches', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const message = makeMessage('!? 아 왜 최근 내용만 찾아');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '!? 아 왜 최근 내용만 찾아',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '아 왜 최근 내용만 찾아');
+    expect(context.ai.askMessages).not.toHaveBeenCalled();
+    expect(context.activityLog.logChannelHistory).not.toHaveBeenCalled();
   });
 
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {
