@@ -563,14 +563,21 @@ export async function createBot(
   client.on(Events.MessageCreate, async (message) => {
     if (!message.guildId) return;
     if (!message.author.bot) {
+      if (await dispatchPrefixCommand(message, commands, context)) return;
       const prefix = getGuildPrefix(context, message.guildId);
+      if (isBareAiChatTrigger(message.content, prefix)) {
+        await message.reply({
+          content: `${prefix}? 뒤에 질문이나 요청을 적어 주세요...`,
+          allowedMentions: { repliedUser: false }
+        });
+        return;
+      }
       const aiPrompt = parseAiChatTrigger(message.content, prefix);
       if (aiPrompt) {
         await context.aiChat.handlePrompt(message, aiPrompt);
         return;
       }
     }
-    if (await dispatchPrefixCommand(message, commands, context)) return;
     if (message.author.bot && !settings.ttsReadBotMessages) return;
     const queued = await context.voice.enqueueMessage(message);
     if (queued) {
