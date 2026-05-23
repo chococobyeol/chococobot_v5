@@ -143,4 +143,35 @@ describe('AgentRuntime', () => {
     expect(observationDiagnostic.observationSummary).toContain('evidenceCount');
     expect(observationDiagnostic.observationSummary).not.toContain('짬뽕지존 얘기');
   });
+
+  it('routes mistaken blocked voice-speak decisions to the existing legacy speak command', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'blocked',
+        message: '음성 채널에 들어와서 말하기는 현재 차단된 기능입니다.',
+        blockedTools: ['voice.speak']
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '일단 음성채널에 들어와서 아무말이나 해봐', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '말 초코코봇 테스트 중이에요' });
+  });
+
+  it('keeps mixed read and voice requests blocked instead of rewriting to legacy command', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'blocked',
+        message: '읽기랑 음성 실행이 섞여 있어요.',
+        blockedTools: ['voice.speak']
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '미국 시간대 알려주고 음성으로 말해줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'blocked', message: '읽기랑 음성 실행이 섞여 있어요.', blockedTools: ['voice.speak'] });
+  });
+
 });

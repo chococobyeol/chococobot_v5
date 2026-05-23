@@ -134,7 +134,7 @@ export class AgentRuntime {
       }
 
       validationFeedback = null;
-      const envelope = parsed.envelope;
+      const envelope = normalizeLegacyActionDecision(parsed.envelope, prompt);
       if (envelope.kind !== 'tool_calls') {
         await options.onDiagnostic?.({ stage: 'agent', event: envelope.kind === 'final' ? 'final' : 'decision', runId, iteration, decisionKind: envelope.kind });
         this.updateTurnContext(key, envelope, toolCalls, observations, options.executionContext.nowMs);
@@ -211,7 +211,7 @@ export class AgentRuntime {
       '반드시 JSON 객체 하나만 출력하세요. 마크다운, 코드펜스, 설명 문장은 금지예요.',
       '읽기 전용 도구는 필요한 만큼 여러 번 호출하고, 관찰값을 본 뒤 한국어로 자연스럽게 final을 작성해요.',
       '삭제/설정/관리/음성 말하기 같은 실행 도구는 임의 agent loop에서 자동 실행하지 않아요.',
-      '단 하나의 명확한 기존 액션 명령만 요청한 경우에만 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
+      '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
       '읽기 요청과 실행/삭제/설정/음성 요청이 섞여 있으면 blocked로 답하고 아무 것도 실행하지 마세요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
       '허용 출력:',
@@ -283,6 +283,46 @@ export class AgentRuntime {
       observations: observations.slice(-4).map((observation) => compactObservation(observation))
     }, nowMs);
   }
+}
+
+
+function normalizeLegacyActionDecision(envelope: AgentEnvelope, prompt: string): AgentEnvelope {
+  if (envelope.kind !== 'blocked' || !envelope.blockedTools.includes('voice.speak')) return envelope;
+  const voiceCommand = buildVoiceLegacyCommand(prompt);
+  return voiceCommand ? { kind: 'legacy_command', query: voiceCommand } : envelope;
+}
+
+function buildVoiceLegacyCommand(prompt: string): string | null {
+  const normalized = prompt.trim();
+  if (!normalized || hasReadOnlyIntent(normalized)) return null;
+  const lower = normalized.toLowerCase();
+  const hasVoiceContext = /음성|보이스|voice|tts|채널/.test(lower);
+  const hasSpeakIntent = /말해|말하|말\s|아무말|읽어|읽기|읽어줘|speak|say|tts/.test(lower);
+  if (!hasSpeakIntent) return null;
+
+  const quoted = normalized.match(/["“”'‘’「『](.{1,180}?)["“”'’」』]/);
+  const said = normalized.match(/(.{1,180}?)(?:이라고|라고)\s*(?:말해|말하|읽어|읽|해봐|해줘|speak|say)/i);
+  const direct = normalized.match(/^(?:말해?|say|speak|tts|읽어|읽어줘)\s+(.{1,180})$/i);
+  const text = cleanVoiceText(quoted?.[1] ?? said?.[1] ?? direct?.[1] ?? '');
+  if (text) return `말 ${text}`;
+  if (hasVoiceContext && /아무말|말해|말하|읽어|speak|say|tts/.test(lower)) return '말 초코코봇 테스트 중이에요';
+  return null;
+}
+
+function cleanVoiceText(value: string): string {
+  return value
+    .replace(/^(?:음성\s*채널에\s*)?(?:들어와서|들어와|와서|가서)\s*/u, '')
+    .replace(/^(?:나한테|여기에|채널에서)\s*/u, '')
+    .replace(/\s*(?:좀|한번|해줘|해봐|줘|해라)[.!?。…\s]*$/u, '')
+    .trim()
+    .slice(0, 200);
+}
+
+function hasReadOnlyIntent(value: string): boolean {
+  const lower = value.toLowerCase();
+  const readIntent = /몇\s*시|시간대|현재\s*시간|대화\s*내용|기록|로그|찾아|검색|요약|조회|알려\s*주고|알려주고|찾고|검색하고|요약하고/.test(lower);
+  const actionJoiner = /그리고|하고|한\s*다음|후에|\+|,/.test(lower);
+  return readIntent && (actionJoiner || /말해|읽어|음성|voice|tts|speak|say/.test(lower));
 }
 
 function parseAgentEnvelope(response: string): ParseResult {
