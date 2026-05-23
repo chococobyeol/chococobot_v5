@@ -29,6 +29,7 @@ export type AgentToolObservation = {
 export type HistorySearchInput = {
   scope: 'server' | 'channel';
   channelRef?: string;
+  /** Empty query is allowed for summary mode to retrieve recent conversation without keyword filtering. */
   query: string;
   mode: 'qa' | 'summary';
   limit?: number;
@@ -191,7 +192,7 @@ function historySearchTool(handlers: ToolRegistryHandlers): AgentToolDefinition<
   return {
     name: 'history.search',
     description: 'Search or retrieve Discord channel/server history with existing permission and range checks.',
-    inputSchema: "{ scope: 'server'|'channel'; channelRef?: string; query: string; mode: 'qa'|'summary'; limit?: number }",
+    inputSchema: "{ scope: 'server'|'channel'; channelRef?: string; query: string; mode: 'qa'|'summary'; limit?: number } // query may be empty only when mode='summary' to summarize recent conversation",
     policy: 'read_only_auto',
     retryable: true,
     logFields: ['scope', 'channelRef', 'query', 'mode', 'limit'],
@@ -205,7 +206,7 @@ function historySearchTool(handlers: ToolRegistryHandlers): AgentToolDefinition<
       const limit = input.limit === undefined ? undefined : Number(input.limit);
       if (!scope) errors.push('scope must be server or channel');
       if (!mode) errors.push('mode must be qa or summary');
-      if (!query) errors.push('query must be a non-empty string');
+      if (!query && mode !== 'summary') errors.push('query must be a non-empty string unless mode is summary');
       if (scope === 'channel' && !channelRef) errors.push('channelRef is required for channel scope');
       if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 500)) errors.push('limit must be an integer from 1 to 500');
       if (errors.length || !scope || !mode) return { ok: false, errors };

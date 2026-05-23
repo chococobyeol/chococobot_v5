@@ -149,6 +149,108 @@ describe('AgentRuntime', () => {
     expect(observationDiagnostic.observationSummary).not.toContain('짬뽕지존 얘기');
   });
 
+  it('allows empty history.search query for recent conversation summaries', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'channel',
+      channelId: 'channel-1',
+      query: '',
+      scannedChannels: 1,
+      matchedMessages: 2,
+      usedMessages: 2,
+      evidence: [
+        { channelId: 'channel-1', authorName: 'ㅊㅋㅂ', timestamp: '2026-05-22T18:00:00.000Z', content: 'hello' },
+        { channelId: 'channel-1', authorName: 'ChococoBot', timestamp: '2026-05-22T18:01:00.000Z', content: '안녕하세요...' }
+      ]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'recent', tool: 'history.search', input: { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary', limit: 50 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '최근 대화는 인사와 언어 요청 흐름이에요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '대화 내용이나 요약해봐', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '최근 대화는 인사와 언어 요청 흐름이에요...' });
+    expect(historySearch).toHaveBeenCalledWith(
+      { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary', limit: 50 },
+      expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
+    );
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('query=""');
+  });
+
+  it('does not fall through to chat when history observations exist and AI returns not_handled', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'server',
+      query: '최근 대화',
+      scannedChannels: 20,
+      matchedMessages: 4,
+      usedMessages: 4,
+      evidence: [
+        { channelId: 'channel-1', authorName: 'ㅊㅋㅂ', timestamp: '2026-05-22T18:00:00.000Z', content: 'hello' },
+        { channelId: 'channel-1', authorName: 'ChococoBot', timestamp: '2026-05-22T18:01:00.000Z', content: '안녕하세요...' },
+        { channelId: 'channel-1', authorName: 'ㅊㅋㅂ', timestamp: '2026-05-22T18:02:00.000Z', content: 'english please' }
+      ]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'history', tool: 'history.search', input: { scope: 'server', query: '최근 대화', mode: 'summary', limit: 20 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '읽은 메시지 기준으로 인사와 영어 요청이 이어졌어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '대화 내용이나 요약해봐', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '읽은 메시지 기준으로 인사와 영어 요청이 이어졌어요...' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
+    expect(repairPrompt).toContain('도구 관찰값을 이미 받았기 때문에 not_handled를 사용할 수 없어요');
+    expect(repairPrompt).toContain('대화 증거:');
+    expect(repairPrompt).toContain('english please');
+  });
+
+  it('does not repeat history.search after a successful observation before finalizing', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'server',
+      query: '최근 대화',
+      scannedChannels: 20,
+      matchedMessages: 1,
+      usedMessages: 1,
+      evidence: [{ channelId: 'channel-1', authorName: 'ㅊㅋㅂ', timestamp: '2026-05-22T18:02:00.000Z', content: '너 좀 멍청해진거같아' }]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'history-1', tool: 'history.search', input: { scope: 'server', query: '최근 대화', mode: 'summary', limit: 20 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'history-2', tool: 'history.search', input: { scope: 'server', query: '최근 대화 내용', mode: 'summary', limit: 20 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '읽은 메시지 기준으로 봇 응답 품질에 대한 불만이 있었어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '대화 내용이나 요약해봐', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '읽은 메시지 기준으로 봇 응답 품질에 대한 불만이 있었어요...' });
+    expect(historySearch).toHaveBeenCalledTimes(1);
+    const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
+    expect(repairPrompt).toContain('이미 history.search 성공 관찰값이 있어요');
+    expect(repairPrompt).toContain('history.search를 다시 호출하지 말고');
+  });
+
   it('runs web.search, asks for citations, and redacts web observations in diagnostics/context', async () => {
     const diagnostics: unknown[] = [];
     const webSearch = vi.fn(async () => ({

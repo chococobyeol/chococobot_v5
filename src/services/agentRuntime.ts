@@ -102,6 +102,7 @@ export class AgentRuntime {
     let totalToolCalls = 0;
     let blockedOnce = false;
     let actionDecisionRetryRequested = false;
+    let observationAnswerRetryRequested = false;
     let validationFailureFallback: AgentRuntimeOutcome | null = null;
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
@@ -201,6 +202,21 @@ export class AgentRuntime {
         this.updateTurnContext(key, webSearchFailure, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return webSearchFailure;
       }
+      if (envelope.kind === 'not_handled' && hasUsableObservation(observations)) {
+        const fallback = buildObservationBasedFallbackOutcome(observations);
+        if (observationAnswerRetryRequested) {
+          if (fallback) {
+            await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'observation_based_final' });
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+          return { kind: 'not_handled' };
+        }
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'observation_answer_required' });
+        observationAnswerRetryRequested = true;
+        validationFeedback = buildObservationAnswerRequiredFeedback(observations);
+        continue;
+      }
       if (envelope.kind === 'legacy_command') {
         const cleanupValidation = validateLegacyCleanupCommand(envelope.query, envelope.cleanupTarget, envelope.cleanupEvidence, prompt, priorContext);
         if (!cleanupValidation.ok) {
@@ -249,6 +265,18 @@ export class AgentRuntime {
           validationErrors: ['web.search already has successful observations; answer from existing sources']
         });
         validationFeedback = buildExistingWebSearchObservationFeedback(observations);
+        continue;
+      }
+      if (hasSuccessfulHistorySearchObservation(observations) && envelope.calls.some((call) => call.tool === 'history.search')) {
+        await options.onDiagnostic?.({
+          stage: 'agent',
+          event: 'retry',
+          runId,
+          iteration,
+          decisionKind: 'history_search_observation_already_available',
+          validationErrors: ['history.search already has successful observations; answer from existing evidence']
+        });
+        validationFeedback = buildExistingHistorySearchObservationFeedback(observations);
         continue;
       }
 
@@ -362,6 +390,8 @@ export class AgentRuntime {
       '미국 시간대 질문은 최소 Eastern/Central/Mountain/Pacific을 각각 time.in_zone으로 호출해요. IANA: America/New_York, America/Chicago, America/Denver, America/Los_Angeles.',
       '이전 맥락이 시간대 목록이면 "그 4군데" 같은 후속 요청에 같은 timeZone 슬롯을 재사용해요.',
       '대화 내용/기록/찾아봐/검색/요약 요청은 history.search를 사용해요. 서버 전체면 scope=server, 채널 지정이면 scope=channel과 channelRef를 넣어요.',
+      '특정 주제 없이 최근 대화/대화 내용 자체를 요약하라는 요청이면 history.search mode=summary에서 query=""를 사용해요. "최근 대화" 같은 가짜 검색어를 만들지 마세요.',
+      'history.search 성공 관찰값이 있으면 같은 요청에서 history.search를 반복 호출하지 말고 기존 evidence로 final을 작성해요.',
       formatWebSearchPolicy(options.webSearch),
       '도구 목록:',
       this.registry.list().map((tool) => `- ${tool.name} [${tool.policy}] ${tool.description} input=${tool.inputSchema}`).join('\n'),
@@ -783,6 +813,8 @@ function buildWebSearchFailureOutcome(observations: readonly AgentToolObservatio
 function buildObservationBasedFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
   const webFailure = buildWebSearchFailureOutcome(observations);
   if (webFailure) return webFailure;
+  const historyFallback = buildHistoryFallbackOutcome(observations);
+  if (historyFallback) return historyFallback;
   const webSources = extractSuccessfulWebSearchSources(observations);
   if (!webSources.length) return null;
   return {
@@ -796,8 +828,16 @@ function buildObservationBasedFallbackOutcome(observations: readonly AgentToolOb
   };
 }
 
+function hasUsableObservation(observations: readonly AgentToolObservation[]): boolean {
+  return hasSuccessfulWebSearchObservation(observations) || hasSuccessfulHistorySearchObservation(observations);
+}
+
 function hasSuccessfulWebSearchObservation(observations: readonly AgentToolObservation[]): boolean {
   return extractSuccessfulWebSearchSources(observations).length > 0;
+}
+
+function hasSuccessfulHistorySearchObservation(observations: readonly AgentToolObservation[]): boolean {
+  return extractSuccessfulHistoryEvidence(observations).length > 0;
 }
 
 function buildExistingWebSearchObservationFeedback(observations: readonly AgentToolObservation[]): string {
@@ -809,6 +849,40 @@ function buildExistingWebSearchObservationFeedback(observations: readonly AgentT
     '출처:',
     ...sources.map((source, index) => `[${index + 1}] ${source.title} — ${source.url}`)
   ].join('\n');
+}
+
+function buildExistingHistorySearchObservationFeedback(observations: readonly AgentToolObservation[]): string {
+  const evidence = extractSuccessfulHistoryEvidence(observations);
+  return [
+    '이미 history.search 성공 관찰값이 있어요.',
+    '같은 요청에서 history.search를 다시 호출하지 말고, 아래 대화 증거와 현재 도구 관찰 JSON만 근거로 final JSON을 작성하세요.',
+    '요약이면 주요 흐름을 짧게 정리하고, 정보가 적으면 "읽은 메시지 기준"이라고 밝혀요.',
+    ...formatHistoryEvidenceForFeedback(evidence)
+  ].join('\n');
+}
+
+function buildObservationAnswerRequiredFeedback(observations: readonly AgentToolObservation[]): string {
+  const parts = [
+    '도구 관찰값을 이미 받았기 때문에 not_handled를 사용할 수 없어요.',
+    '추가 도구 호출 없이 현재 도구 관찰 JSON만 근거로 final/unavailable/blocked 중 하나를 작성하세요.'
+  ];
+  const webSources = extractSuccessfulWebSearchSources(observations);
+  if (webSources.length) {
+    parts.push('웹 출처:', ...webSources.map((source, index) => `[${index + 1}] ${source.title} — ${source.url}`));
+  }
+  const historyEvidence = extractSuccessfulHistoryEvidence(observations);
+  if (historyEvidence.length) {
+    parts.push(...formatHistoryEvidenceForFeedback(historyEvidence));
+  }
+  return parts.join('\n');
+}
+
+function formatHistoryEvidenceForFeedback(evidence: ReturnType<typeof extractSuccessfulHistoryEvidence>): string[] {
+  if (!evidence.length) return ['대화 증거: (없음)'];
+  return [
+    '대화 증거:',
+    ...evidence.slice(0, 8).map((item, index) => `[${index + 1}] ${item.authorName}: ${truncate(item.content.replace(/\s+/g, ' '), 140)}`)
+  ];
 }
 
 function extractSuccessfulWebSearchSources(observations: readonly AgentToolObservation[]): { title: string; url: string }[] {
@@ -828,6 +902,38 @@ function extractSuccessfulWebSearchSources(observations: readonly AgentToolObser
     }
   }
   return sources;
+}
+
+function extractSuccessfulHistoryEvidence(observations: readonly AgentToolObservation[]): Array<{ authorName: string; content: string }> {
+  const evidence: Array<{ authorName: string; content: string }> = [];
+  for (const observation of observations) {
+    if (observation.toolName !== 'history.search' || observation.status !== 'ok' || !isRecord(observation.output)) continue;
+    const rows = Array.isArray(observation.output.evidence) ? observation.output.evidence : [];
+    for (const row of rows) {
+      if (!isRecord(row)) continue;
+      const content = typeof row.content === 'string' ? row.content.trim() : '';
+      if (!content) continue;
+      evidence.push({
+        authorName: typeof row.authorName === 'string' && row.authorName.trim() ? row.authorName.trim() : '알 수 없음',
+        content
+      });
+      if (evidence.length >= 12) return evidence;
+    }
+  }
+  return evidence;
+}
+
+function buildHistoryFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const evidence = extractSuccessfulHistoryEvidence(observations);
+  if (!evidence.length) return null;
+  return {
+    kind: 'final',
+    message: [
+      '대화 기록은 읽었는데 답변 정리를 끝내지 못했어요...',
+      '읽은 메시지 기준으로는 이런 흐름이에요...',
+      ...evidence.slice(0, 6).map((item) => `- ${item.authorName}: ${truncate(item.content.replace(/\s+/g, ' '), 120)}`)
+    ].join('\n')
+  };
 }
 
 function formatObservationsForPrompt(observations: readonly AgentToolObservation[]): string {
