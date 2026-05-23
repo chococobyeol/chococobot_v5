@@ -181,6 +181,38 @@ describe('handleMessageCreate', () => {
     expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
   });
 
+  it('runs AI-channel natural command requests through the agent confirmation path', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext();
+    const confirmations = new ConfirmationManager();
+    context.voiceSettings.setAiChannelId('guild-1', 'channel-1');
+    context.agentRuntime = {
+      run: vi
+        .fn()
+        .mockResolvedValueOnce({ kind: 'legacy_command', query: 'ai채널 해제' })
+        .mockResolvedValueOnce({ kind: 'confirm_pending' })
+    } as any;
+
+    const first = makeMessage('이 대화채널을 ai 채팅채널 해제 해줘');
+    await handleMessageCreate(first, commands, context as any, confirmations);
+
+    expect(context.agentRuntime.run).toHaveBeenCalledWith(
+      first,
+      '이 대화채널을 ai 채팅채널 해제 해줘',
+      expect.objectContaining({ prefix: '!' })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voiceSettings.getAiChannelId('guild-1')).toBe('channel-1');
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('AI 확인 안내') }));
+
+    const second = makeMessage('ㅇㅇ', { id: 'message-2' });
+    await handleMessageCreate(second, commands, context as any, confirmations);
+
+    expect(context.voiceSettings.getAiChannelId('guild-1')).toBeUndefined();
+    expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'AI 채팅 채널 설정을 해제했어요...' }));
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
   it('deletes the cleanup command message plus the requested number of user messages without posting a public success message', async () => {
     const commands = createPrefixCommands();
     const context = makeContext();
