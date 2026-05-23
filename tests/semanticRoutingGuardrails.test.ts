@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 const guardedSources = [
   'src/bot.ts',
   'src/services/agentRuntime.ts',
-  'src/services/aiCommandPlanner.ts'
+  'src/services/aiCommandPlanner.ts',
+  'src/services/nlCommandRouter.ts',
+  'src/services/channelHistoryService.ts'
 ];
 
 const forbiddenSemanticParsers = [
@@ -16,7 +18,10 @@ const forbiddenSemanticParsers = [
   'mentionsRequesterCleanup',
   'mentionsChannelWideCleanup',
   'mentionsOtherUserCleanup',
-  'hasSelfReference'
+  'hasSelfReference',
+  'routeChannelHistory',
+  'hasBroadScope',
+  'containsAny'
 ];
 
 describe('AI routing guardrails', () => {
@@ -34,5 +39,6 @@ describe('AI routing guardrails', () => {
     expect(doc).toContain('AI to judge user intent');
     expect(doc).toContain('must not re-interpret natural-language meaning');
     expect(doc).toContain('confirm_pending');
+    expect(doc).toContain('pendingAction');
   });
 });

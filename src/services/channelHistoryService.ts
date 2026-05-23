@@ -64,7 +64,6 @@ export function assessChannelHistoryQuery(query: string): ChannelHistoryAssessme
   const normalized = query.trim();
   const explicitLimit = findExplicitCount(normalized);
   const explicitLookbackHours = findExplicitLookbackHours(normalized);
-  const hasBroadScope = /\b(all|everything|entire|whole)\b|전체|전부|모두|다\s*읽어|전부\s*요약/.test(normalized);
 
   const limit = explicitLimit ?? DEFAULT_HISTORY_MESSAGE_LIMIT;
   const lookbackHours = explicitLookbackHours ?? DEFAULT_HISTORY_LOOKBACK_HOURS;
@@ -79,7 +78,6 @@ export function assessChannelHistoryQuery(query: string): ChannelHistoryAssessme
   }
 
   if (
-    hasBroadScope ||
     (explicitLimit !== undefined && explicitLimit > DEFAULT_HISTORY_MESSAGE_LIMIT) ||
     (explicitLookbackHours !== undefined && explicitLookbackHours > DEFAULT_HISTORY_LOOKBACK_HOURS)
   ) {

@@ -29,4 +29,31 @@ describe('AgentTurnContextStore', () => {
     expect(store.get({ ...key, channelId: 'channel-2' })).toBeUndefined();
     expect(store.get(key)?.slots.topic).toBe('x');
   });
+
+  it('stores pending AI-owned action state across clarification turns', () => {
+    const store = new AgentTurnContextStore();
+    const key = { guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' };
+
+    store.set(key, {
+      lastIntent: 'clarify',
+      lastUserPrompt: '전체',
+      lastAgentMessage: '몇 개를 삭제할까요?',
+      lastToolCalls: [],
+      slots: {},
+      observations: [],
+      pendingAction: {
+        kind: 'cleanup',
+        originalPrompt: '채팅 지워봐',
+        target: 'channel',
+        missing: ['count']
+      }
+    });
+
+    expect(store.get(key)?.pendingAction).toEqual({
+      kind: 'cleanup',
+      originalPrompt: '채팅 지워봐',
+      target: 'channel',
+      missing: ['count']
+    });
+  });
 });

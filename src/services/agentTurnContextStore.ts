@@ -4,6 +4,15 @@ export type AgentTurnKey = {
   userId: string;
 };
 
+export type AgentPendingAction = {
+  kind: 'cleanup';
+  originalPrompt: string;
+  target?: 'self' | 'channel' | 'other' | 'ambiguous';
+  count?: number;
+  cleanupEvidence?: string;
+  missing: Array<'target' | 'count'>;
+};
+
 export type AgentTurnStoredContext = {
   lastIntent?: string;
   lastUserPrompt?: string;
@@ -17,6 +26,7 @@ export type AgentTurnStoredContext = {
     mode?: 'qa' | 'summary';
   };
   observations: unknown[];
+  pendingAction?: AgentPendingAction;
   updatedAt: number;
 };
 

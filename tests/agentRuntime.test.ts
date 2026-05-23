@@ -379,6 +379,73 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('이전 사용자 요청: 채팅 3개 지워봐');
   });
 
+  it('keeps AI-owned cleanup slots across multiple clarification turns', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '누구 채팅을 몇 개 지울까요?',
+          pendingAction: {
+            kind: 'cleanup',
+            originalPrompt: '채팅 지워봐',
+            missing: ['target', 'count']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '전체 채널에서 몇 개를 지울까요?',
+          pendingAction: {
+            kind: 'cleanup',
+            originalPrompt: '채팅 지워봐',
+            target: 'channel',
+            missing: ['count']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    await runtime.run(makeMessage(), '채팅 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
+    await runtime.run(makeMessage(), '전체', makeOptions({ requesterDisplayName: '테스터' }));
+    const outcome = await runtime.run(makeMessage(), '5', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"originalPrompt":"채팅 지워봐"');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('"target":"channel"');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('"missing":["count"]');
+  });
+
+  it('keeps requester cleanup evidence in AI-owned slots until count is supplied', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '몇 개를 지울까요?',
+          pendingAction: {
+            kind: 'cleanup',
+            originalPrompt: '내 채팅 지워줘',
+            target: 'self',
+            cleanupEvidence: '내 채팅',
+            missing: ['count']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 5', cleanupTarget: 'self', cleanupEvidence: '내 채팅' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    await runtime.run(makeMessage(), '내 채팅 지워줘', makeOptions({ requesterDisplayName: '테스터' }));
+    const outcome = await runtime.run(makeMessage(), '5', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 5', cleanupTarget: 'self', cleanupEvidence: '내 채팅' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"cleanupEvidence":"내 채팅"');
+  });
+
 
   it('uses AI to decide pending confirmation replies', async () => {
     const ai = {

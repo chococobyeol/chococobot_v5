@@ -43,9 +43,6 @@ export function routeNaturalLanguageCommand(content: string, prefix: string): Ro
   const confirmationRoute = routeConfirmation(remainder);
   if (confirmationRoute) return confirmationRoute;
 
-  const historyRoute = routeChannelHistory(remainder);
-  if (historyRoute) return historyRoute;
-
   return null;
 }
 
@@ -96,36 +93,6 @@ function routeConfirmation(remainder: string): RoutedNaturalLanguageCommand | nu
   return null;
 }
 
-function routeChannelHistory(remainder: string): RoutedNaturalLanguageCommand | null {
-  const token = firstToken(remainder);
-  if (!token) return null;
-
-  if (!looksLikeChannelReference(token.normalized)) return null;
-
-  const targetChannelReference = token.raw;
-  const query = token.rest.trim();
-  if (!query) {
-    return {
-      kind: 'clarify',
-      message: '어떤 내용으로 요약하거나 질문할지 같이 적어 주세요...'
-    };
-  }
-
-  if (containsAny(query.toLowerCase(), ['summary', 'summarize', '요약', '정리', 'describe'])) {
-    return { kind: 'channel-history', mode: 'summary', targetChannelReference, query };
-  }
-
-  if (containsAny(query.toLowerCase(), ['qa', 'q&a', '질문', '물어봐', '어떤', '무슨', '왜', '어떻게'])) {
-    return { kind: 'channel-history', mode: 'qa', targetChannelReference, query };
-  }
-
-  if (query.includes('?')) {
-    return { kind: 'channel-history', mode: 'qa', targetChannelReference, query };
-  }
-
-  return null;
-}
-
 function buildConfirmation(intent: ConfirmationIntent, normalizedArgs: string, preview: string): RoutedNaturalLanguageCommand {
   return {
     kind: 'confirmation',
@@ -149,12 +116,4 @@ function firstToken(text: string): { raw: string; normalized: string; rest: stri
 
 function matchesAny(token: string, aliases: readonly string[]): boolean {
   return aliases.some((alias) => token === alias.toLowerCase());
-}
-
-function containsAny(token: string, aliases: readonly string[]): boolean {
-  return aliases.some((alias) => token.includes(alias.toLowerCase()));
-}
-
-function looksLikeChannelReference(token: string): boolean {
-  return token.startsWith('<#') || token.startsWith('#');
 }

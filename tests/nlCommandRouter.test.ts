@@ -38,20 +38,8 @@ describe('routeNaturalLanguageCommand', () => {
     );
   });
 
-  it('routes channel-history queries for specified target channels', () => {
-    expect(routeNaturalLanguageCommand('!? #general 요약해줘', '!')).toEqual(
-      expect.objectContaining({
-        kind: 'channel-history',
-        mode: 'summary',
-        targetChannelReference: '#general'
-      })
-    );
-    expect(routeNaturalLanguageCommand('?? #general 질문이 뭐야?', '?')).toEqual(
-      expect.objectContaining({
-        kind: 'channel-history',
-        mode: 'qa',
-        targetChannelReference: '#general'
-      })
-    );
+  it('does not decide channel-history semantics without the AI planner', () => {
+    expect(routeNaturalLanguageCommand('!? #general 요약해줘', '!')).toBeNull();
+    expect(routeNaturalLanguageCommand('?? #general 질문이 뭐야?', '?')).toBeNull();
   });
 });

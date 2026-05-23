@@ -1,7 +1,7 @@
 import type { Message } from 'discord.js';
 import type { AiDetailedResponse, AiService } from './aiService.js';
 import { extractErrorDetails, type AiChatMessage } from './aiService.js';
-import type { AgentTurnContextStore, AgentTurnStoredContext } from './agentTurnContextStore.js';
+import type { AgentPendingAction, AgentTurnContextStore, AgentTurnStoredContext } from './agentTurnContextStore.js';
 import type { AgentToolExecutionContext, AgentToolObservation, AgentToolPolicy, ToolRegistry } from './toolRegistry.js';
 
 const MAX_ITERATIONS = 4;
@@ -14,7 +14,7 @@ const MAX_SYSTEM_CHARS = 9000;
 
 export type AgentRuntimeOutcome =
   | { kind: 'final'; message: string }
-  | { kind: 'clarify'; message: string }
+  | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
   | { kind: 'unavailable'; message: string }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
   | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'; cleanupEvidence?: string }
@@ -61,7 +61,7 @@ export type AgentRuntimeOptions = {
 type AgentEnvelope =
   | { kind: 'tool_calls'; calls: AgentToolCall[] }
   | { kind: 'final'; message: string }
-  | { kind: 'clarify'; message: string }
+  | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
   | { kind: 'unavailable'; message: string }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
   | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'; cleanupEvidence?: string }
@@ -179,7 +179,7 @@ export class AgentRuntime {
       }
       if (envelope.kind !== 'tool_calls') {
         await options.onDiagnostic?.({ stage: 'agent', event: envelope.kind === 'final' ? 'final' : 'decision', runId, iteration, decisionKind: envelope.kind });
-        this.updateTurnContext(key, envelope, prompt, toolCalls, observations, options.executionContext.nowMs);
+        this.updateTurnContext(key, envelope, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return envelope;
       }
 
@@ -268,13 +268,15 @@ export class AgentRuntime {
       '특정 다른 사람의 메시지만 지우는 요청은 청소로 처리하지 마세요. 봇은 요청자 본인 메시지 청소 또는 관리자용 채널 전체 대청소만 지원해요.',
       '대청소/전체/채널 전체처럼 채널 메시지 삭제가 명확하면 {"kind":"legacy_command","query":"대청소 N","cleanupTarget":"channel"}를 사용하고 기존 관리자/확인 경로에 맡겨요.',
       '채팅/메시지 삭제 요청에 개수나 대상이 부족하면 clarify로 자연스럽게 되물어봐요.',
-      '이전 agent 문맥이 clarify이면 현재 짧은 답변(예: 내꺼, 전체, 3개)을 이전 요청과 합쳐 legacy_command/clarify/blocked 중 하나로 처리해요.',
+      '채팅/메시지 삭제 clarify를 할 때는 AI가 판단한 슬롯 상태를 pendingAction에 함께 넣어요. 예: {"kind":"clarify","message":"누구 채팅을 몇 개 지울까요?","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","missing":["target","count"]}}',
+      '이전 agent 문맥에 pendingAction이 있으면 현재 짧은 답변(예: 내꺼, 전체, 3개)을 그 pendingAction의 originalPrompt/target/count와 합쳐 legacy_command/clarify/blocked 중 하나로 처리해요.',
+      'pendingAction cleanup에서 target은 self/channel/other/ambiguous 중 하나이고, count는 삭제 개수가 명확할 때만 넣어요. 아직 부족한 슬롯은 missing에 남겨요.',
       '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
       '허용 출력:',
       '{"kind":"tool_calls","calls":[{"id":"call_1","tool":"time.in_zone","input":{"timeZone":"America/New_York","label":"동부","offsetSeconds":0}}]}',
       '{"kind":"final","message":"..."}',
-      '{"kind":"clarify","message":"..."}',
+      '{"kind":"clarify","message":"...","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","target":"channel","missing":["count"]}}',
       '{"kind":"unavailable","message":"..."}',
       '{"kind":"blocked","message":"...","blockedTools":["command.cleanup","voice.speak"]}',
       '{"kind":"legacy_command","query":"말 안녕"}',
@@ -321,7 +323,8 @@ export class AgentRuntime {
     prompt: string,
     calls: readonly AgentToolCall[],
     observations: readonly AgentToolObservation[],
-    nowMs: number
+    nowMs: number,
+    priorContext: AgentTurnStoredContext | undefined
   ): void {
     if (envelope.kind === 'not_handled' || envelope.kind === 'legacy_command' || envelope.kind === 'confirm_pending' || (envelope.kind === 'final' && calls.length === 0)) {
       this.contextStore.clear(key);
@@ -345,7 +348,10 @@ export class AgentRuntime {
       lastAgentMessage: 'message' in envelope ? envelope.message : undefined,
       lastToolCalls: calls.map((call) => ({ tool: call.tool, input: call.input })),
       slots,
-      observations: observations.slice(-4).map((observation) => compactObservation(observation))
+      observations: observations.slice(-4).map((observation) => compactObservation(observation)),
+      ...(envelope.kind === 'clarify'
+        ? { pendingAction: envelope.pendingAction ?? priorContext?.pendingAction }
+        : {})
     }, nowMs);
   }
 }
@@ -384,6 +390,7 @@ function hasQuotedCleanupEvidence(cleanupEvidence: string | undefined, prompt: s
   const evidence = cleanupEvidence?.trim();
   if (!evidence) return false;
   return [prompt, priorContext?.lastUserPrompt, priorContext?.lastAgentMessage]
+    .concat(priorContext?.pendingAction?.originalPrompt ? [priorContext.pendingAction.originalPrompt] : [])
     .filter((value): value is string => Boolean(value))
     .some((value) => value.includes(evidence));
 }
@@ -419,7 +426,8 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     '현재 사용자 메시지는 이전 clarify 질문에 대한 후속 답변일 수 있어요.',
     priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
-    '현재 답변과 이전 요청을 합쳐 명확해졌다면 legacy_command JSON을 작성하세요. 청소/대청소 legacy_command에는 cleanupTarget도 같이 넣으세요. 아직 부족하면 clarify JSON으로 추가 질문하세요. 일반 대화가 확실할 때만 not_handled를 쓰세요.'
+    priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
+    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 legacy_command JSON을 작성하세요. 아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. 일반 대화가 확실할 때만 not_handled를 쓰세요.'
   ].filter(Boolean).join('\n');
 }
 
@@ -446,6 +454,32 @@ function buildLegacyActionDecisionFeedback(blockedTools: readonly string[], disp
     '비자동 도구를 tool_calls로 다시 호출하지 마세요.',
     displayName ? `요청자 표시 이름은 ${displayName}예요. 필요하면 clarify 문장에 반영하세요.` : undefined
   ].filter(Boolean).join('\n');
+}
+
+function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
+  if (!isRecord(raw) || raw.kind !== 'cleanup') return undefined;
+  const originalPrompt = typeof raw.originalPrompt === 'string' ? raw.originalPrompt.trim() : '';
+  if (!originalPrompt) return undefined;
+  const target = raw.target === 'self' || raw.target === 'channel' || raw.target === 'other' || raw.target === 'ambiguous'
+    ? raw.target
+    : undefined;
+  const count = typeof raw.count === 'number' && Number.isInteger(raw.count) && raw.count > 0
+    ? raw.count
+    : undefined;
+  const cleanupEvidence = typeof raw.cleanupEvidence === 'string' && raw.cleanupEvidence.trim()
+    ? raw.cleanupEvidence.trim()
+    : undefined;
+  const missing = Array.isArray(raw.missing)
+    ? raw.missing.filter((item): item is AgentPendingAction['missing'][number] => item === 'target' || item === 'count')
+    : [];
+  return {
+    kind: 'cleanup',
+    originalPrompt,
+    ...(target ? { target } : {}),
+    ...(count ? { count } : {}),
+    ...(cleanupEvidence ? { cleanupEvidence } : {}),
+    missing
+  };
 }
 
 function parseAgentEnvelope(response: string): ParseResult {
@@ -483,7 +517,9 @@ function parseAgentEnvelope(response: string): ParseResult {
     case 'unavailable': {
       const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
       if (!message) return { ok: false, errors: [`${kind}.message must be non-empty`] };
-      return { ok: true, envelope: { kind, message } };
+      if (kind !== 'clarify') return { ok: true, envelope: { kind, message } };
+      const pendingAction = parsePendingAction(parsed.pendingAction);
+      return { ok: true, envelope: pendingAction ? { kind, message, pendingAction } : { kind, message } };
     }
     case 'blocked': {
       const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
