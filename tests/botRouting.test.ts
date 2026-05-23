@@ -1586,6 +1586,52 @@ describe('handleMessageCreate', () => {
     expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'agent answer' }));
   });
 
+  it('falls back to the AI planner when the bounded agent refuses an unsupported no-tool final', async () => {
+    const commands = createPrefixCommands();
+    const channelMessages = [
+      {
+        id: 'history-1',
+        channelId: 'channel-1',
+        createdTimestamp: Date.now(),
+        content: '안녕',
+        author: { id: 'user-1', username: 'tester', bot: false },
+        member: { displayName: '테스터' }
+      },
+      {
+        id: 'history-2',
+        channelId: 'channel-1',
+        createdTimestamp: Date.now(),
+        content: '안녕하세요...',
+        author: { id: 'bot-1', username: 'ChococoBot', bot: true },
+        member: { displayName: 'ChococoBot' }
+      }
+    ];
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'not_handled', reason: 'final_without_observation' }))
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '<#channel-1>',
+          query: ''
+        }))
+      }
+    });
+    const message = makeMessage('!? 대화 내용 요약해봐');
+    const cachedChannel = message.guild.channels.cache.get('channel-1') as any;
+    cachedChannel.messages = { fetch: vi.fn(async () => channelMessages) };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalled();
+    expect(context.ai.askMessages).toHaveBeenCalledWith(expect.objectContaining({ usageScope: 'summary' }));
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+  });
+
   it('dispatches AgentRuntime legacy_command outcomes through existing safety and command execution', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({

@@ -20,7 +20,7 @@ export type AgentRuntimeOutcome =
   | { kind: 'blocked'; message: string; blockedTools: string[] }
   | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'; cleanupEvidence?: string }
   | { kind: 'confirm_pending' }
-  | { kind: 'not_handled' };
+  | { kind: 'not_handled'; reason?: 'final_without_observation' };
 
 export type AgentRuntimeDiagnostic = {
   stage: 'agent' | 'tool';
@@ -235,6 +235,10 @@ export class AgentRuntime {
         }
       }
       if (envelope.kind !== 'tool_calls') {
+        if (envelope.kind === 'final' && toolCalls.length === 0 && observations.length === 0 && !priorContext) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'final_without_observation' });
+          return { kind: 'not_handled', reason: 'final_without_observation' };
+        }
         await options.onDiagnostic?.({ stage: 'agent', event: envelope.kind === 'final' ? 'final' : 'decision', runId, iteration, decisionKind: envelope.kind });
         this.updateTurnContext(key, envelope, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return envelope;

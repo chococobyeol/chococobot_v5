@@ -92,6 +92,22 @@ describe('AgentRuntime', () => {
     expect(followUpPrompt).toContain('America/New_York');
   });
 
+  it('does not accept final answers without tools or prior context from the bounded agent', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'final',
+        message: '최근 대화 내용을 요약하면 요약 요청이 있었습니다.'
+      }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    const outcome = await runtime.run(makeMessage(), '대화 내용 요약해봐', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'not_handled', reason: 'final_without_observation' });
+    expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toBeUndefined();
+  });
+
   it('blocks mixed action/read tool requests and executes none of them', async () => {
     const ai = {
       askMessages: vi

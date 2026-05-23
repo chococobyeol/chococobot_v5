@@ -1832,6 +1832,75 @@ type AgentConfirmationContext = {
   normalizedArgs: string;
 };
 
+async function handleAiCommandPlannerPrompt(
+  message: Message,
+  prompt: string,
+  prefix: string,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  confirmations: ConfirmationManager,
+  pendingHistoryRequest: PendingChannelHistoryRequest | undefined,
+  pendingConfirmation: PendingConfirmation | undefined
+): Promise<boolean> {
+  if (!message.guildId || !context.aiCommandPlanner) return false;
+  try {
+    const member = message.member as GuildMember | null;
+    const plan = await context.aiCommandPlanner.plan(message, prompt, {
+      prefix,
+      commands,
+      availableChannels: listTextChannelCandidates(message),
+      userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
+      botVoiceConnected: context.voice.isConnected(message.guildId),
+      maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
+      pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
+      pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
+      onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
+    });
+    switch (plan.kind) {
+      case 'chat':
+        if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
+        await context.aiChat.handlePrompt(message, prompt);
+        return true;
+      case 'command':
+        return dispatchPlannerCommand(message, commands, context, confirmations, plan.query);
+      case 'confirm_pending':
+        return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
+      case 'channel-history':
+        if (isServerWideHistoryTarget(plan.targetChannelReference)) {
+          return handleGuildChannelHistoryPlan(message, plan.mode, plan.query, context);
+        }
+        return handleChannelHistoryPlan(
+          message,
+          {
+            kind: 'channel-history',
+            mode: plan.mode,
+            targetChannelReference: plan.targetChannelReference,
+            query: plan.query
+          },
+          context
+        );
+      case 'time':
+        return handleTimePlan(message, plan, context);
+      case 'clarify':
+        if (pendingHistoryRequest && await handlePendingChannelHistoryReply(message, prompt, context)) return true;
+        await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+        return true;
+      case 'unavailable':
+        await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+        return true;
+    }
+  } catch (error) {
+    if (isRateLimitLike(error)) {
+      await logPlannerDiagnostic(message, context, { event: 'rate_limit', error });
+      await message.reply({ content: 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    await logPlannerDiagnostic(message, context, { event: 'error', error });
+    await context.aiChat.handlePrompt(message, prompt);
+    return true;
+  }
+}
+
 async function dispatchConfirmedPendingCommand(
   message: Message,
   commands: Collection<string, PrefixCommand>,
@@ -1899,6 +1968,7 @@ async function handleAiPrompt(
         case 'confirm_pending':
           return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
         case 'not_handled':
+          if (outcome.reason === 'final_without_observation' && await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
           if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
           await context.aiChat.handlePrompt(message, prompt);
           return true;
@@ -1914,64 +1984,7 @@ async function handleAiPrompt(
       return true;
     }
   }
-  if (context.aiCommandPlanner) {
-    try {
-      const member = message.member as GuildMember | null;
-      const plan = await context.aiCommandPlanner.plan(message, prompt, {
-        prefix,
-        commands,
-        availableChannels: listTextChannelCandidates(message),
-        userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
-        botVoiceConnected: context.voice.isConnected(message.guildId),
-        maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
-        pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
-        pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
-        onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
-      });
-      switch (plan.kind) {
-        case 'chat':
-          if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
-          await context.aiChat.handlePrompt(message, prompt);
-          return true;
-        case 'command':
-          return dispatchPlannerCommand(message, commands, context, confirmations, plan.query);
-        case 'confirm_pending':
-          return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
-        case 'channel-history':
-          if (isServerWideHistoryTarget(plan.targetChannelReference)) {
-            return handleGuildChannelHistoryPlan(message, plan.mode, plan.query, context);
-          }
-          return handleChannelHistoryPlan(
-            message,
-            {
-              kind: 'channel-history',
-              mode: plan.mode,
-              targetChannelReference: plan.targetChannelReference,
-              query: plan.query
-            },
-            context
-          );
-        case 'time':
-          return handleTimePlan(message, plan, context);
-        case 'clarify':
-          if (pendingHistoryRequest && await handlePendingChannelHistoryReply(message, prompt, context)) return true;
-          await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
-          return true;
-        case 'unavailable':
-          await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
-          return true;
-      }
-    } catch (error) {
-      if (isRateLimitLike(error)) {
-        await logPlannerDiagnostic(message, context, { event: 'rate_limit', error });
-        await message.reply({ content: 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
-        return true;
-      }
-      await logPlannerDiagnostic(message, context, { event: 'error', error });
-      await context.aiChat.handlePrompt(message, prompt);
-      return true;
-    }
-  }
+  if (await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
   if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
   const fallbackRoute = routeNaturalLanguageCommand(routedContent, prefix);
   if (fallbackRoute && (await handleNaturalLanguageRoute(message, fallbackRoute, context, commands, confirmations))) {
