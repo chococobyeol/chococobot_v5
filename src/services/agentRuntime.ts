@@ -103,6 +103,7 @@ export class AgentRuntime {
     let blockedOnce = false;
     let actionDecisionRetryRequested = false;
     let observationAnswerRetryRequested = false;
+    const repeatedSuccessfulToolRetryNames = new Set<string>();
     let validationFailureFallback: AgentRuntimeOutcome | null = null;
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
@@ -259,28 +260,28 @@ export class AgentRuntime {
         continue;
       }
 
-      if (hasSuccessfulWebSearchObservation(observations) && envelope.calls.some((call) => call.tool === 'web.search')) {
+      const repeatedSuccessfulCalls = findRepeatedSuccessfulToolCalls(envelope.calls, toolCalls, observations);
+      if (repeatedSuccessfulCalls.length) {
+        const repeatedToolNames = [...new Set(repeatedSuccessfulCalls.map((call) => call.tool))];
+        const alreadyRetried = repeatedToolNames.some((toolName) => repeatedSuccessfulToolRetryNames.has(toolName));
         await options.onDiagnostic?.({
           stage: 'agent',
-          event: 'retry',
+          event: alreadyRetried ? 'decision' : 'retry',
           runId,
           iteration,
-          decisionKind: 'web_search_observation_already_available',
-          validationErrors: ['web.search already has successful observations; answer from existing sources']
+          decisionKind: alreadyRetried ? 'observation_based_final' : 'tool_observation_already_available',
+          validationErrors: repeatedToolNames.map((toolName) => `${toolName} already has a successful observation; answer from existing observations`)
         });
-        validationFeedback = buildExistingWebSearchObservationFeedback(observations);
-        continue;
-      }
-      if (hasSuccessfulHistorySearchObservation(observations) && envelope.calls.some((call) => call.tool === 'history.search')) {
-        await options.onDiagnostic?.({
-          stage: 'agent',
-          event: 'retry',
-          runId,
-          iteration,
-          decisionKind: 'history_search_observation_already_available',
-          validationErrors: ['history.search already has successful observations; answer from existing evidence']
-        });
-        validationFeedback = buildExistingHistorySearchObservationFeedback(observations);
+        if (alreadyRetried) {
+          const fallback = buildObservationBasedFallbackOutcome(observations);
+          if (fallback) {
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+          return { kind: 'not_handled' };
+        }
+        for (const toolName of repeatedToolNames) repeatedSuccessfulToolRetryNames.add(toolName);
+        validationFeedback = buildRepeatedSuccessfulToolFeedback(repeatedSuccessfulCalls, observations);
         continue;
       }
 
@@ -356,6 +357,12 @@ export class AgentRuntime {
       ? `<#${options.userVoiceChannel.id}>${options.userVoiceChannel.name ? ` (${options.userVoiceChannel.name})` : ''}`
       : '(사용자가 음성 채널에 없음)';
     const system = truncate([
+      validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined,
+      observations.length ? `도구 관찰 JSON: ${formatObservationsForPrompt(observations)}` : undefined,
+      priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 1200)}` : undefined,
+      `현재 채널: <#${message.channelId}>`,
+      options.pendingHistory ? `기존 채널 기록 후속 문맥: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
+      options.pendingConfirmation ? `대기 중인 확인 작업 JSON: ${JSON.stringify(options.pendingConfirmation)}` : undefined,
       '너는 Discord 봇 ChococoBot의 bounded agent runtime이에요.',
       '사용자 요청은 현재 프리픽스 뒤에 ?로 들어온 AI 요청이에요.',
       '반드시 JSON 객체 하나만 출력하세요. 마크다운, 코드펜스, 설명 문장은 금지예요.',
@@ -363,7 +370,7 @@ export class AgentRuntime {
       '도구 관찰값으로 답할 때도 ChococoBot 말투를 유지해요. 결과만 딱 끊지 말고, 확인한 내용을 짧게 받아 준 뒤 사용자가 이어 말할 수 있는 한 가지 맥락을 덧붙여요.',
       '사용자에게 보이는 final/unavailable/blocked 문장은 느낌표, 물음표, 이모지 없이 보통 ... 또는 해요로 마무리해요.',
       '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
-      'web.search 성공 관찰값이 있으면 같은 요청에서 web.search를 반복 호출하지 말고 기존 결과로 final을 작성해요.',
+      '같은 요청에서 이미 성공한 읽기 전용 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
       '이전 agent 문맥에 web_search 관찰값이 있고 사용자가 이전 검색/이전 답변/출처/주소를 묻는 후속 질문이라고 AI가 판단하면, 이전 관찰값의 제목과 URL을 근거로 답해요.',
       '삭제/설정/관리/음성 말하기 같은 실행 도구는 임의 agent loop에서 자동 실행하지 않아요.',
       '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
@@ -400,7 +407,6 @@ export class AgentRuntime {
       '이전 맥락이 시간대 목록이면 "그 4군데" 같은 후속 요청에 같은 timeZone 슬롯을 재사용해요.',
       '대화 내용/기록/찾아봐/검색/요약 요청은 history.search를 사용해요. 사용자 발화와 제공된 현재 채널/서버 문맥으로 범위를 해소할 수 있으면 바로 tool_calls를 내고, 정말 범위를 정할 근거가 없을 때만 pendingAction history가 포함된 clarify를 내요.',
       '특정 주제 없이 최근 대화/대화 내용 자체를 요약하라는 요청이면 history.search mode=summary에서 query=""를 사용해요. "최근 대화" 같은 가짜 검색어를 만들지 마세요.',
-      'history.search 성공 관찰값이 있으면 같은 요청에서 history.search를 반복 호출하지 말고 기존 evidence로 final을 작성해요.',
       formatWebSearchPolicy(options.webSearch),
       '도구 목록:',
       this.registry.list().map((tool) => `- ${tool.name} [${tool.policy}] ${tool.description} input=${tool.inputSchema}`).join('\n'),
@@ -408,17 +414,11 @@ export class AgentRuntime {
       formatCommands(options.commands),
       '참조 가능한 텍스트 채널:',
       options.availableChannels.map((channel) => `- ${channel.mention} (${channel.name}, id=${channel.id})`).join('\n') || '(없음)',
-      `현재 채널: <#${message.channelId}>`,
       options.requesterDisplayName ? `요청자 표시 이름: ${options.requesterDisplayName}` : undefined,
       `사용자 음성 채널: ${userVoice}`,
       `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
       `현재 프리픽스: ${options.prefix}`,
-      `현재 사용자 메시지 작성 시각: <t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`,
-      options.pendingHistory ? `기존 채널 기록 후속 문맥: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
-      options.pendingConfirmation ? `대기 중인 확인 작업 JSON: ${JSON.stringify(options.pendingConfirmation)}` : undefined,
-      priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 1200)}` : undefined,
-      observations.length ? `도구 관찰 JSON: ${formatObservationsForPrompt(observations)}` : undefined,
-      validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined
+      `현재 사용자 메시지 작성 시각: <t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`
     ].filter(Boolean).join('\n'), MAX_SYSTEM_CHARS);
 
     return [
@@ -708,6 +708,21 @@ function parseAgentEnvelope(response: string): ParseResult {
   }
 }
 
+function findRepeatedSuccessfulToolCalls(
+  calls: readonly AgentToolCall[],
+  previousCalls: readonly AgentToolCall[],
+  observations: readonly AgentToolObservation[]
+): AgentToolCall[] {
+  const successfulCallIds = new Set(observations
+    .filter((observation) => observation.status === 'ok' && observation.policy === 'read_only_auto')
+    .map((observation) => observation.callId));
+  if (!successfulCallIds.size) return [];
+  const successfulToolNames = new Set(previousCalls
+    .filter((call) => successfulCallIds.has(call.id))
+    .map((call) => call.tool));
+  return calls.filter((call) => successfulToolNames.has(call.tool));
+}
+
 function validateToolCallBatch(calls: readonly AgentToolCall[], registry: ToolRegistry, totalToolCalls: number): string[] {
   const errors: string[] = [];
   if (!calls.length) errors.push('tool_calls.calls must contain at least one call');
@@ -876,25 +891,25 @@ function hasSuccessfulHistorySearchObservation(observations: readonly AgentToolO
   return extractSuccessfulHistoryEvidence(observations).length > 0;
 }
 
-function buildExistingWebSearchObservationFeedback(observations: readonly AgentToolObservation[]): string {
-  const sources = extractSuccessfulWebSearchSources(observations);
+function buildRepeatedSuccessfulToolFeedback(repeatedCalls: readonly AgentToolCall[], observations: readonly AgentToolObservation[]): string {
   return [
-    '이미 web.search 성공 관찰값이 있어요.',
-    '같은 요청에서 web.search를 다시 호출하지 말고, 아래 출처와 현재 도구 관찰 JSON만 근거로 final JSON을 작성하세요.',
-    '확실하지 않은 내용은 단정하지 말고 "검색 결과 기준"이라고 밝혀요.',
-    '출처:',
-    ...sources.map((source, index) => `[${index + 1}] ${source.title} — ${source.url}`)
+    '이미 읽기 전용 도구 성공 관찰값이 있어요.',
+    `반복 도구: ${[...new Set(repeatedCalls.map((call) => call.tool))].join(', ')}`,
+    '이미 성공한 읽기 전용 도구를 다시 호출하지 말고, 현재 도구 관찰 JSON만 근거로 final/unavailable/blocked 중 하나를 작성하세요.',
+    '관찰값에 없는 내용은 단정하지 말고 확인된 내용 기준이라고 밝혀요.',
+    ...formatObservationEvidenceForFeedback(observations)
   ].join('\n');
 }
 
-function buildExistingHistorySearchObservationFeedback(observations: readonly AgentToolObservation[]): string {
-  const evidence = extractSuccessfulHistoryEvidence(observations);
-  return [
-    '이미 history.search 성공 관찰값이 있어요.',
-    '같은 요청에서 history.search를 다시 호출하지 말고, 아래 대화 증거와 현재 도구 관찰 JSON만 근거로 final JSON을 작성하세요.',
-    '요약이면 주요 흐름을 짧게 정리하고, 정보가 적으면 "읽은 메시지 기준"이라고 밝혀요.',
-    ...formatHistoryEvidenceForFeedback(evidence)
-  ].join('\n');
+function formatObservationEvidenceForFeedback(observations: readonly AgentToolObservation[]): string[] {
+  const parts: string[] = [];
+  const webSources = extractSuccessfulWebSearchSources(observations);
+  if (webSources.length) {
+    parts.push('웹 출처:', ...webSources.map((source, index) => `[${index + 1}] ${source.title} — ${source.url}`));
+  }
+  const historyEvidence = extractSuccessfulHistoryEvidence(observations);
+  if (historyEvidence.length) parts.push(...formatHistoryEvidenceForFeedback(historyEvidence));
+  return parts;
 }
 
 function buildObservationAnswerRequiredFeedback(observations: readonly AgentToolObservation[]): string {
@@ -965,9 +980,8 @@ function buildHistoryFallbackOutcome(observations: readonly AgentToolObservation
   return {
     kind: 'final',
     message: [
-      '대화 기록은 읽었는데 답변 정리를 끝내지 못했어요...',
-      '읽은 메시지 기준으로는 이런 흐름이에요...',
-      ...evidence.slice(0, 6).map((item) => `- ${item.authorName}: ${truncate(item.content.replace(/\s+/g, ' '), 120)}`)
+      '읽은 메시지 기준으로 찾은 내용이에요...',
+      ...evidence.slice(0, 6).map((item) => `${item.authorName}: ${truncate(item.content.replace(/\s+/g, ' '), 260)}`)
     ].join('\n')
   };
 }

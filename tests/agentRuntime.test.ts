@@ -379,8 +379,64 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'final', message: '읽은 메시지 기준으로 봇 응답 품질에 대한 불만이 있었어요...' });
     expect(historySearch).toHaveBeenCalledTimes(1);
     const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
-    expect(repairPrompt).toContain('이미 history.search 성공 관찰값이 있어요');
-    expect(repairPrompt).toContain('history.search를 다시 호출하지 말고');
+    expect(repairPrompt).toContain('이미 읽기 전용 도구 성공 관찰값이 있어요');
+    expect(repairPrompt).toContain('반복 도구: history.search');
+    expect(repairPrompt).toContain('이미 성공한 읽기 전용 도구를 다시 호출하지 말고');
+  });
+
+  it('falls back from evidence instead of looping when history.search is repeated after retry feedback', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'channel',
+      channelId: 'delivery',
+      query: '짬뽕지존',
+      scannedChannels: 1,
+      matchedMessages: 1,
+      usedMessages: 1,
+      evidence: [
+        {
+          channelId: 'delivery',
+          authorName: 'chocobyeol',
+          timestamp: '2026-05-22T18:00:00.000Z',
+          content: '짬뽕지존 홍대점은 지존짬뽕이 13000원이고 1000원에 500ml 제로펩시를 추가할 수 있다. 24시간 영업이 장점이다.'
+        }
+      ]
+    }));
+    const diagnostics: unknown[] = [];
+    const repeatedCall = {
+      kind: 'tool_calls',
+      calls: [{ id: 'history', tool: 'history.search', input: { scope: 'channel', channelRef: 'delivery', query: '짬뽕지존', mode: 'qa' } }]
+    };
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '배달 채널에서 짬뽕지존에 관한 내용 찾아봐', makeOptions({
+      availableChannels: [{ id: 'delivery', name: '배달', mention: '<#delivery>' }],
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'final',
+      message: expect.stringContaining('짬뽕지존 홍대점은 지존짬뽕이 13000원')
+    });
+    expect(historySearch).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt.indexOf('도구 관찰 JSON:')).toBeLessThan(observationPrompt.indexOf('너는 Discord 봇 ChococoBot'));
+    expect(observationPrompt).toContain('짬뽕지존 홍대점');
+    const retryPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
+    expect(retryPrompt.indexOf('재시도 지시:')).toBeLessThan(retryPrompt.indexOf('너는 Discord 봇 ChococoBot'));
+    expect(retryPrompt).toContain('이미 성공한 읽기 전용 도구를 다시 호출하지 말고');
+    expect(retryPrompt).toContain('반복 도구: history.search');
+    expect(retryPrompt).toContain('짬뽕지존 홍대점');
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'agent', event: 'decision', decisionKind: 'observation_based_final' })
+    ]));
   });
 
   it('runs web.search, asks for citations, and redacts web observations in diagnostics/context', async () => {
@@ -472,8 +528,9 @@ describe('AgentRuntime', () => {
     expect(webSearch).toHaveBeenCalledTimes(1);
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
     const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
-    expect(repairPrompt).toContain('이미 web.search 성공 관찰값이 있어요');
-    expect(repairPrompt).toContain('web.search를 다시 호출하지 말고');
+    expect(repairPrompt).toContain('이미 읽기 전용 도구 성공 관찰값이 있어요');
+    expect(repairPrompt).toContain('반복 도구: web.search');
+    expect(repairPrompt).toContain('이미 성공한 읽기 전용 도구를 다시 호출하지 말고');
     expect(repairPrompt).toContain('https://jjamppongjijon.example/');
   });
 
@@ -521,7 +578,7 @@ describe('AgentRuntime', () => {
     expect(outcome.kind === 'final' ? outcome.message : '').toContain('https://jjamppongjijon.example/');
     expect(webSearch).toHaveBeenCalledTimes(1);
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stage: 'agent', event: 'loop_limit', decisionKind: 'observation_based_final' })
+      expect.objectContaining({ stage: 'agent', event: 'decision', decisionKind: 'observation_based_final' })
     ]));
     const stored = store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'));
     expect(stored?.lastIntent).toBe('web_search');
