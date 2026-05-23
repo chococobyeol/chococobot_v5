@@ -158,11 +158,20 @@ export class AgentRuntime {
         validationFeedback = buildPendingConfirmationFeedback(options.pendingConfirmation);
         continue;
       }
-      if (envelope.kind === 'not_handled' && priorContext?.lastIntent === 'clarify' && !actionDecisionRetryRequested) {
+      if (envelope.kind === 'not_handled' && (priorContext?.lastIntent === 'clarify' || priorContext?.pendingAction) && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'clarify_follow_up_required' });
         actionDecisionRetryRequested = true;
         validationFeedback = buildClarifyFollowUpFeedback(priorContext);
         continue;
+      }
+      if (envelope.kind === 'not_handled' && priorContext?.pendingAction) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: 'pending_action_not_resolved' });
+        this.updateTurnContext(key, { kind: 'clarify', message: 'pending action unresolved', pendingAction: priorContext.pendingAction }, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return {
+          kind: 'blocked',
+          message: '메시지 삭제 요청의 대상이 아직 처리되지 않았어요. 제가 처리할 수 있는 건 요청자 본인 메시지 삭제나 관리자용 전체 채널 삭제뿐이에요.',
+          blockedTools: ['command.cleanup']
+        };
       }
       validationFeedback = null;
       if (envelope.kind === 'legacy_command') {
@@ -427,7 +436,9 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
-    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 legacy_command JSON을 작성하세요. 아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. 일반 대화가 확실할 때만 not_handled를 쓰세요.'
+    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 legacy_command JSON을 작성하세요.',
+    '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
+    '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 삭제 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
   ].filter(Boolean).join('\n');
 }
 

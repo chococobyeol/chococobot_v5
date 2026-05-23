@@ -446,6 +446,74 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"cleanupEvidence":"내 채팅"');
   });
 
+  it('retries short cleanup follow-ups and lets AI block unsupported targets', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '누구 채팅을 몇 개 지울까요?',
+          pendingAction: {
+            kind: 'cleanup',
+            originalPrompt: '메세지 삭제 해봐',
+            target: 'ambiguous',
+            missing: ['target', 'count']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '제 메시지만 따로 삭제하는 건 지원하지 않아요. 본인 메시지 삭제나 관리자용 전체 채널 삭제만 가능해요.',
+          blockedTools: ['command.cleanup']
+        }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    await runtime.run(makeMessage(), '메세지 삭제 해봐', makeOptions({ requesterDisplayName: '테스터' }));
+    const outcome = await runtime.run(makeMessage(), '니 메세지', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({
+      kind: 'blocked',
+      message: '제 메시지만 따로 삭제하는 건 지원하지 않아요. 본인 메시지 삭제나 관리자용 전체 채널 삭제만 가능해요.',
+      blockedTools: ['command.cleanup']
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('not_handled는 쓰지 마세요');
+  });
+
+  it('does not fall through to chat when AI still returns not_handled for a pending cleanup action', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '누구 채팅을 몇 개 지울까요?',
+          pendingAction: {
+            kind: 'cleanup',
+            originalPrompt: '메세지 삭제 해봐',
+            target: 'ambiguous',
+            missing: ['target', 'count']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    await runtime.run(makeMessage(), '메세지 삭제 해봐', makeOptions({ requesterDisplayName: '테스터' }));
+    const outcome = await runtime.run(makeMessage(), '니 메세지', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({
+      kind: 'blocked',
+      message: '메시지 삭제 요청의 대상이 아직 처리되지 않았어요. 제가 처리할 수 있는 건 요청자 본인 메시지 삭제나 관리자용 전체 채널 삭제뿐이에요.',
+      blockedTools: ['command.cleanup']
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+  });
+
 
   it('uses AI to decide pending confirmation replies', async () => {
     const ai = {

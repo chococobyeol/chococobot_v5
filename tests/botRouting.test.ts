@@ -1393,6 +1393,43 @@ describe('handleMessageCreate', () => {
     expect(agentTurnContextStore.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toBeUndefined();
   });
 
+  it('does not clear agent follow-up context before prefix-question prompts', async () => {
+    const commands = createPrefixCommands();
+    const agentTurnContextStore = new AgentTurnContextStore();
+    agentTurnContextStore.set({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      lastIntent: 'clarify',
+      lastUserPrompt: '메세지 삭제 해봐',
+      lastAgentMessage: '누구 채팅을 몇 개 지울까요?',
+      lastToolCalls: [],
+      slots: {},
+      observations: [],
+      pendingAction: {
+        kind: 'cleanup',
+        originalPrompt: '메세지 삭제 해봐',
+        target: 'ambiguous',
+        missing: ['target', 'count']
+      }
+    });
+    const context = makeContext({
+      agentTurnContextStore,
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'blocked', message: '본인 메시지 삭제나 전체 채널 삭제만 가능해요.', blockedTools: ['command.cleanup'] }))
+      }
+    });
+    const message = makeMessage('!? 니 메세지');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(agentTurnContextStore.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toEqual(
+      expect.objectContaining({
+        lastIntent: 'clarify',
+        pendingAction: expect.objectContaining({ originalPrompt: '메세지 삭제 해봐' })
+      })
+    );
+  });
+
   it('invokes AgentRuntime before the legacy planner for non-empty prefix-question prompts', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({

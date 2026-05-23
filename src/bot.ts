@@ -720,6 +720,7 @@ async function dispatchPrefixCommand(
   const prefix = getGuildPrefix(context, message.guildId);
   const parsed = parsePrefixCommand(message.content, prefix);
   if (!parsed) return false;
+  if (parsed.name === '?') return false;
   clearAgentTurnContext(message, context);
   return dispatchResolvedCommand(message, commands, context, parsed, prefix);
 }
