@@ -201,6 +201,144 @@ describe('AgentRuntime', () => {
     expect(JSON.stringify(stored?.observations)).not.toContain('x'.repeat(220));
   });
 
+  it('does not repeat web.search after a successful observation before finalizing', async () => {
+    const webSearch = vi.fn(async () => ({
+      provider: 'searxng' as const,
+      query: '짬뽕지존',
+      results: [{
+        title: '짬뽕지존 공식 웹사이트',
+        url: 'https://jjamppongjijon.example/',
+        sourceDomain: 'jjamppongjijon.example',
+        snippet: '짬뽕 전문 프랜차이즈 소개'
+      }]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'web-1', tool: 'web.search', input: { query: '짬뽕지존', count: 3, language: 'ko' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'web-2', tool: 'web.search', input: { query: '짬뽕지존 공식', count: 3, language: 'ko' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'final',
+          message: '검색 결과 기준으로 짬뽕지존은 짬뽕 전문 브랜드로 보여요... [1]\n출처: [1] 짬뽕지존 공식 웹사이트 — https://jjamppongjijon.example/'
+        }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ webSearch }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '인터넷에서 짬뽕지존 찾아봐', makeOptions({
+      webSearch: { mode: 'search_first_factual', provider: 'searxng', providerStatus: 'ready', resultCount: 3 }
+    }));
+
+    expect(outcome.kind).toBe('final');
+    expect(webSearch).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
+    expect(repairPrompt).toContain('이미 web.search 성공 관찰값이 있어요');
+    expect(repairPrompt).toContain('web.search를 다시 호출하지 말고');
+    expect(repairPrompt).toContain('https://jjamppongjijon.example/');
+  });
+
+  it('returns source-only fallback instead of not_handled when web-search loop limit is reached', async () => {
+    const diagnostics: unknown[] = [];
+    const webSearch = vi.fn(async () => ({
+      provider: 'searxng' as const,
+      query: '짬뽕지존',
+      results: [
+        {
+          title: '짬뽕지존 공식 웹사이트',
+          url: 'https://jjamppongjijon.example/',
+          sourceDomain: 'jjamppongjijon.example',
+          snippet: '짬뽕 전문 프랜차이즈 소개'
+        },
+        {
+          title: '짬뽕지존 메뉴',
+          url: 'https://jjamppongjijon.example/menu',
+          sourceDomain: 'jjamppongjijon.example',
+          snippet: '메뉴 안내'
+        }
+      ]
+    }));
+    const repeatedSearch = JSON.stringify({
+      kind: 'tool_calls',
+      calls: [{ id: 'web', tool: 'web.search', input: { query: '짬뽕지존', count: 3, language: 'ko' } }]
+    });
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValue(repeatedSearch)
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ webSearch }), store);
+
+    const outcome = await runtime.run(makeMessage(), '인터넷에서 짬뽕지존 찾아봐', makeOptions({
+      webSearch: { mode: 'search_first_factual', provider: 'searxng', providerStatus: 'ready', resultCount: 3 },
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'final',
+      message: expect.stringContaining('확인된 출처만 먼저 남길게요')
+    });
+    expect(outcome.kind === 'final' ? outcome.message : '').toContain('https://jjamppongjijon.example/');
+    expect(webSearch).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'agent', event: 'loop_limit', decisionKind: 'observation_based_final' })
+    ]));
+    const stored = store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'));
+    expect(stored?.lastIntent).toBe('web_search');
+    expect(stored?.lastUserPrompt).toBe('[redacted-web-search-prompt]');
+    expect(JSON.stringify(stored?.observations)).toContain('jjamppongjijon.example');
+  });
+
+  it('feeds prior web-search sources into follow-up source requests', async () => {
+    const webSearch = vi.fn(async () => ({
+      provider: 'searxng' as const,
+      query: '짬뽕지존',
+      results: [{
+        title: '짬뽕지존 공식 웹사이트',
+        url: 'https://jjamppongjijon.example/',
+        sourceDomain: 'jjamppongjijon.example',
+        snippet: '짬뽕 전문 프랜차이즈 소개'
+      }]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'web', tool: 'web.search', input: { query: '짬뽕지존', count: 1, language: 'ko' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'final',
+          message: '검색 결과 기준으로는 짬뽕지존 공식 사이트가 확인돼요... [1]\n출처: [1] 짬뽕지존 공식 웹사이트 — https://jjamppongjijon.example/'
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'final',
+          message: '좀아까 검색 출처는 https://jjamppongjijon.example/ 이에요...'
+        }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ webSearch }), store);
+
+    await runtime.run(makeMessage(), '인터넷에서 짬뽕지존 찾아봐', makeOptions({
+      webSearch: { mode: 'search_first_factual', provider: 'searxng', providerStatus: 'ready', resultCount: 3 }
+    }));
+    const outcome = await runtime.run(makeMessage(), '좀아까 찾은거 출처 주소를 줘', makeOptions({
+      webSearch: { mode: 'search_first_factual', provider: 'searxng', providerStatus: 'ready', resultCount: 3 }
+    }));
+
+    expect(outcome.kind).toBe('final');
+    const followUpPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
+    expect(followUpPrompt).toContain('이전 agent 문맥 JSON');
+    expect(followUpPrompt).toContain('이전 검색/이전 답변/출처/주소를 묻는 후속 질문');
+    expect(followUpPrompt).toContain('https://jjamppongjijon.example/');
+  });
+
   it('does not force web search for casual chat even when search-first mode is configured', async () => {
     const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
     const webSearch = vi.fn(async () => ({ provider: 'searxng' as const, query: 'unused', results: [] }));

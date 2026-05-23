@@ -141,7 +141,14 @@ export class AgentRuntime {
       const parsed = parseAgentEnvelope(response);
       if (!parsed.ok) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'parse_error', runId, iteration, validationErrors: parsed.errors, responseSnippet: response.slice(0, 500) });
-        if (validationFeedback) return validationFailureFallback ?? { kind: 'not_handled' };
+        if (validationFeedback) {
+          const fallback = buildObservationBasedFallbackOutcome(observations);
+          if (fallback) {
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+          return validationFailureFallback ?? { kind: 'not_handled' };
+        }
         validationFeedback = ['이전 응답은 사용할 수 없어요.', `오류: ${parsed.errors.join('; ')}`, '허용된 JSON 객체 하나로만 다시 답하세요.'].join('\n');
         continue;
       }
@@ -220,8 +227,28 @@ export class AgentRuntime {
       const callErrors = validateToolCallBatch(envelope.calls, this.registry, totalToolCalls);
       if (callErrors.length) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'parse_error', runId, iteration, validationErrors: callErrors });
-        if (iteration > MAX_RETRIES) return { kind: 'not_handled' };
+        if (iteration > MAX_RETRIES) {
+          const fallback = buildObservationBasedFallbackOutcome(observations);
+          if (fallback) {
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+          return { kind: 'not_handled' };
+        }
         validationFeedback = ['도구 호출을 실행할 수 없어요.', `오류: ${callErrors.join('; ')}`, '도구 호출을 고치거나 final/blocked/clarify로 답하세요.'].join('\n');
+        continue;
+      }
+
+      if (hasSuccessfulWebSearchObservation(observations) && envelope.calls.some((call) => call.tool === 'web.search')) {
+        await options.onDiagnostic?.({
+          stage: 'agent',
+          event: 'retry',
+          runId,
+          iteration,
+          decisionKind: 'web_search_observation_already_available',
+          validationErrors: ['web.search already has successful observations; answer from existing sources']
+        });
+        validationFeedback = buildExistingWebSearchObservationFeedback(observations);
         continue;
       }
 
@@ -274,6 +301,13 @@ export class AgentRuntime {
       }
     }
 
+    const fallback = buildObservationBasedFallbackOutcome(observations);
+    if (fallback) {
+      await options.onDiagnostic?.({ stage: 'agent', event: 'loop_limit', runId, decisionKind: fallback.kind === 'final' ? 'observation_based_final' : fallback.kind });
+      this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+      return fallback;
+    }
+
     await options.onDiagnostic?.({ stage: 'agent', event: 'loop_limit', runId, decisionKind: 'not_handled' });
     return { kind: 'not_handled' };
   }
@@ -294,6 +328,9 @@ export class AgentRuntime {
       '사용자 요청은 현재 프리픽스 뒤에 ?로 들어온 AI 요청이에요.',
       '반드시 JSON 객체 하나만 출력하세요. 마크다운, 코드펜스, 설명 문장은 금지예요.',
       '읽기 전용 도구는 필요한 만큼 여러 번 호출하고, 관찰값을 본 뒤 한국어로 자연스럽게 final을 작성해요.',
+      '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
+      'web.search 성공 관찰값이 있으면 같은 요청에서 web.search를 반복 호출하지 말고 기존 결과로 final을 작성해요.',
+      '이전 agent 문맥에 web_search 관찰값이 있고 사용자가 이전 검색/이전 답변/출처/주소를 묻는 후속 질문이라고 AI가 판단하면, 이전 관찰값의 제목과 URL을 근거로 답해요.',
       '삭제/설정/관리/음성 말하기 같은 실행 도구는 임의 agent loop에서 자동 실행하지 않아요.',
       '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
       '사용자가 "음성 채널에 들어와서 X라고 말해"처럼 입장과 말하기를 함께 요청하고 말할 내용 X가 명확하면 {"kind":"legacy_command","query":"말 X"}를 사용해요. 기존 말 명령은 필요하면 먼저 사용자의 음성 채널에 자동 입장해요.',
@@ -741,6 +778,56 @@ function buildWebSearchFailureOutcome(observations: readonly AgentToolObservatio
     reason: 'web_search_unavailable',
     message: `웹 검색 도구를 사용할 수 없어 확인이 필요한 답변을 만들 수 없어요. ${webFailure.error ? `사유: ${webFailure.error}` : 'SearXNG 설정이나 상태를 확인해 주세요.'}`
   };
+}
+
+function buildObservationBasedFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const webFailure = buildWebSearchFailureOutcome(observations);
+  if (webFailure) return webFailure;
+  const webSources = extractSuccessfulWebSearchSources(observations);
+  if (!webSources.length) return null;
+  return {
+    kind: 'final',
+    message: [
+      '검색 결과는 받았는데 답변 정리를 끝내지 못했어요...',
+      '확인된 출처만 먼저 남길게요. 아래 주소 기준으로 다시 물어보면 이어서 정리할 수 있어요...',
+      '출처:',
+      ...webSources.map((source, index) => `[${index + 1}] ${source.title} — ${source.url}`)
+    ].join('\n')
+  };
+}
+
+function hasSuccessfulWebSearchObservation(observations: readonly AgentToolObservation[]): boolean {
+  return extractSuccessfulWebSearchSources(observations).length > 0;
+}
+
+function buildExistingWebSearchObservationFeedback(observations: readonly AgentToolObservation[]): string {
+  const sources = extractSuccessfulWebSearchSources(observations);
+  return [
+    '이미 web.search 성공 관찰값이 있어요.',
+    '같은 요청에서 web.search를 다시 호출하지 말고, 아래 출처와 현재 도구 관찰 JSON만 근거로 final JSON을 작성하세요.',
+    '확실하지 않은 내용은 단정하지 말고 "검색 결과 기준"이라고 밝혀요.',
+    '출처:',
+    ...sources.map((source, index) => `[${index + 1}] ${source.title} — ${source.url}`)
+  ].join('\n');
+}
+
+function extractSuccessfulWebSearchSources(observations: readonly AgentToolObservation[]): { title: string; url: string }[] {
+  const sources: { title: string; url: string }[] = [];
+  const seenUrls = new Set<string>();
+  for (const observation of observations) {
+    if (observation.toolName !== 'web.search' || observation.status !== 'ok' || !isRecord(observation.output)) continue;
+    const results = Array.isArray(observation.output.results) ? observation.output.results : [];
+    for (const result of results) {
+      if (!isRecord(result) || typeof result.url !== 'string' || !result.url.trim() || seenUrls.has(result.url)) continue;
+      const title = typeof result.title === 'string' && result.title.trim()
+        ? truncate(result.title.trim(), 120)
+        : result.url;
+      sources.push({ title, url: result.url });
+      seenUrls.add(result.url);
+      if (sources.length >= 5) return sources;
+    }
+  }
+  return sources;
 }
 
 function formatObservationsForPrompt(observations: readonly AgentToolObservation[]): string {

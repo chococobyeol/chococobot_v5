@@ -8,12 +8,15 @@ ChococoBot uses AI to judge user intent. Runtime code may validate safety, permi
 - Permission checks, confirmation storage/consumption, rate limits, count bounds, and Discord API constraints.
 - Exact structural checks on AI output, such as required JSON fields, persisted `pendingAction` slots, or whether a quoted `cleanupEvidence` appears verbatim in the current/prior user text.
 - Deterministic execution of a command after the AI has chosen `legacy_command` or `confirm_pending`.
+- Deterministic loop guards based on tool state, for example refusing to execute another `web.search` after a successful `web.search` observation in the same agent run and asking the AI to answer from existing observations.
+- Safe fallback text based only on already collected tool observations, such as returning source URLs when a web-search run reaches the loop limit before the AI produces a final answer.
 
 ## Not allowed in code
 
 - Keyword/regex functions that decide user intent, such as whether a reply means “yes,” whether a history request is summary vs lookup, or whether a cleanup target means self/other/channel.
 - Keyword/regex functions that decide whether a prompt requires web search. Web-search routing must come from the agent choosing `web.search` or returning a structured `unavailable` reason such as `web_search_unavailable`.
 - Fallback routers that override an AI `chat`/`not_handled` decision by scanning prose for words like “요약,” “찾아,” “그래,” or “내꺼.”
+- Fallbacks that invent factual answers after a web search failed, looped, or produced no usable observation.
 - Hard-coded clarification text for semantic ambiguity. The AI should generate the clarify message; code only enforces that unsafe execution does not happen.
 
 ## Required pattern for new semantic decisions
