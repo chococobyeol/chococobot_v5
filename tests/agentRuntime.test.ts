@@ -557,12 +557,13 @@ describe('AgentRuntime', () => {
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
-    const outcome = await runtime.run(makeMessage(), '그래', makeOptions({
+    const outcome = await runtime.run(makeMessage(), 'ㅇ..', makeOptions({
       pendingConfirmation: { preview: '채널 메시지 삭제를 진행할까요?', commandQuery: '대청소 3', intent: 'cleanup', normalizedArgs: '3' }
     }));
 
     expect(outcome).toEqual({ kind: 'confirm_pending' });
     expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('대기 중인 확인 작업 JSON');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('짧은 긍정 답변');
   });
 
   it('retries not_handled pending confirmation replies through AI instead of code keywords', async () => {
@@ -581,6 +582,7 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'confirm_pending' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('사용자 답변의 의미를 판단');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('짧은 긍정');
   });
 
 });

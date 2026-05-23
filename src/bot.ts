@@ -977,6 +977,7 @@ async function searchIndexedGuildTextHistory(
 
 async function createAndReplyConfirmation(
   message: Message,
+  context: BotContext,
   confirmations: ConfirmationManager,
   intent: ConfirmationScope['intent'],
   preview: string,
@@ -995,17 +996,70 @@ async function createAndReplyConfirmation(
   };
   const confirmation = confirmations.create(scope, preview);
   await message.reply({
-    content: buildConfirmationMessage(preview, confirmation.expiresAt),
+    content: await buildConfirmationMessage(message, context, preview, confirmation.expiresAt, commandQuery),
     allowedMentions: { repliedUser: false }
   });
 }
 
-function buildConfirmationMessage(preview: string, expiresAt: number): string {
-  return [
-    preview,
-    '`그래` 또는 `확인`이라고 답하면 진행할게요.',
-    `이 확인은 <t:${Math.floor(expiresAt / 1000)}:R>까지 유효해요.`
-  ].join('\n');
+async function buildConfirmationMessage(
+  message: Message,
+  context: BotContext,
+  preview: string,
+  expiresAt: number,
+  commandQuery: string
+): Promise<string> {
+  const expiresTag = `<t:${Math.floor(expiresAt / 1000)}:R>`;
+  try {
+    const response = await context.ai.askMessagesDetailed({
+      guildId: message.guildId ?? 'dm',
+      userId: message.author.id,
+      usageScope: 'agent',
+      maxCompletionTokens: 120,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '너는 Discord 봇 ChococoBot의 확인 안내 문구 작성자예요.',
+            '사용자에게 보낼 자연스러운 한국어 확인 질문 한 개만 작성해요.',
+            '고정 템플릿처럼 쓰지 말고 상황에 맞게 말투를 자연스럽게 바꿔요.',
+            '내부 확인 토큰, UUID, 처리 흐름, JSON, 코드펜스는 절대 쓰지 마세요.',
+            '아직 실행된 것처럼 말하지 말고, 진행해도 되는지 확인하는 문장이어야 해요.',
+            '사용자가 승인/거절을 자연스럽게 답할 수 있음을 짧게 알려도 돼요.',
+            `확인 만료 시각을 언급한다면 Discord timestamp ${expiresTag}를 그대로 사용하세요.`
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: [
+            `확인할 작업: ${preview}`,
+            `실행될 기존 명령: ${commandQuery}`,
+            `만료: ${expiresTag}`
+          ].join('\n')
+        }
+      ]
+    });
+    return sanitizeConfirmationMessage(response.content, preview, expiresTag);
+  } catch (error) {
+    logger.warn('Failed to generate confirmation message with AI; using safe fallback:', error);
+    return safeConfirmationFallback(preview, expiresTag);
+  }
+}
+
+function sanitizeConfirmationMessage(content: string, preview: string, expiresTag: string): string {
+  const cleaned = content
+    .replace(/```(?:\w+)?/g, '')
+    .replace(/```/g, '')
+    .trim()
+    .slice(0, 900);
+  if (!cleaned) return safeConfirmationFallback(preview, expiresTag);
+  if (/확인\s*토큰|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu.test(cleaned)) {
+    return safeConfirmationFallback(preview, expiresTag);
+  }
+  return cleaned;
+}
+
+function safeConfirmationFallback(preview: string, expiresTag: string): string {
+  return `${preview}\n진행해도 되는지 답해 주세요. ${expiresTag}까지 기다릴게요.`;
 }
 
 function confirmationPreviewForSafety(safety: CommandSafety): string {
@@ -1148,7 +1202,7 @@ async function dispatchPlannerCommand(
       await message.reply({ content: '이 작업은 관리자 권한이 필요해요...', allowedMentions: { repliedUser: false } });
       return true;
     }
-    await createAndReplyConfirmation(message, confirmations, safety.intent, confirmationPreviewForSafety(safety), safety.args.join(' ').trim(), safety.normalizedQuery);
+    await createAndReplyConfirmation(message, context, confirmations, safety.intent, confirmationPreviewForSafety(safety), safety.args.join(' ').trim(), safety.normalizedQuery);
     return true;
   }
 
@@ -1498,7 +1552,7 @@ async function handleNaturalLanguageRoute(
       };
       const confirmation = confirmations.create(scope, route.preview);
       await message.reply({
-        content: buildConfirmationMessage(route.preview, confirmation.expiresAt),
+        content: await buildConfirmationMessage(message, context, route.preview, confirmation.expiresAt, route.query),
         allowedMentions: { repliedUser: false }
       });
       return true;

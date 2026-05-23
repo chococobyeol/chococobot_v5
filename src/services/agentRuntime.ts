@@ -295,7 +295,7 @@ export class AgentRuntime {
       '채팅/메시지 삭제 clarify를 할 때는 AI가 판단한 슬롯 상태를 pendingAction에 함께 넣어요. 예: {"kind":"clarify","message":"누구 채팅을 몇 개 지울까요?","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","missing":["target","count"]}}',
       '이전 agent 문맥에 pendingAction이 있으면 현재 짧은 답변(예: 내꺼, 전체, 3개)을 그 pendingAction의 originalPrompt/target/count와 합쳐 legacy_command/clarify/blocked 중 하나로 처리해요.',
       'pendingAction cleanup에서 target은 self/channel/other/ambiguous 중 하나이고, count는 삭제 개수가 명확할 때만 넣어요. 아직 부족한 슬롯은 missing에 남겨요.',
-      '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
+      '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 짧은 긍정 답변(예: ㅇ, ㅇㅇ, 응, 네, ok)도 맥락상 승인으로 명확하면 confirm_pending이에요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
       '허용 출력:',
       '{"kind":"tool_calls","calls":[{"id":"call_1","tool":"time.in_zone","input":{"timeZone":"America/New_York","label":"동부","offsetSeconds":0}}]}',
@@ -440,7 +440,7 @@ function buildPendingConfirmationFeedback(pending: NonNullable<AgentRuntimeOptio
     '현재 사용자 메시지는 대기 중인 확인 작업에 대한 답변일 수 있어요.',
     `대기 작업: ${pending.preview}`,
     `실행될 기존 명령: ${pending.commandQuery}`,
-    '사용자 답변의 의미를 판단해서 이 작업을 승인한 것이 명확하면 {"kind":"confirm_pending"}만 출력하세요.',
+    '사용자 답변의 의미를 판단해서 이 작업을 승인한 것이 명확하면 {"kind":"confirm_pending"}만 출력하세요. ㅇ, ㅇㅇ, 응, 네, ok 같은 짧은 긍정도 문맥상 명확하면 승인으로 보세요.',
     '승인이 아니거나 애매하면 confirm_pending을 쓰지 말고 clarify/final/not_handled 중 적절한 JSON을 출력하세요.'
   ].join('\n');
 }

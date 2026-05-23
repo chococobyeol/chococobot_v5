@@ -81,7 +81,16 @@ function makeContext(overrides: Record<string, unknown> = {}) {
       resetGuildMemory: vi.fn(async () => undefined)
     },
     ai: {
-      askMessages: vi.fn(async () => '채널 기록 답변')
+      askMessages: vi.fn(async () => '채널 기록 답변'),
+      askMessagesDetailed: vi.fn(async () => ({
+        content: 'AI 확인 안내: 이 작업 진행해도 괜찮을까요?',
+        model: 'test-model',
+        usageScope: 'agent',
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        rateLimitHeaders: {}
+      }))
     },
     voice: {
       enqueueMessage: vi.fn(async () => true),
@@ -357,7 +366,7 @@ describe('handleMessageCreate', () => {
     expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.')
+        content: expect.stringContaining('AI 확인 안내')
       })
     );
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
@@ -398,7 +407,7 @@ describe('handleMessageCreate', () => {
 
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.')
+        content: expect.stringContaining('AI 확인 안내')
       })
     );
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
@@ -421,7 +430,7 @@ describe('handleMessageCreate', () => {
       voice: { channel: { id: 'voice-1' } }
     };
     const first = makeMessage('!? 전체 채팅 3개 지워봐', { member });
-    const second = makeMessage('!? 그래', { id: 'message-2', member });
+    const second = makeMessage('!? ㅇ..', { id: 'message-2', member });
     const cleanupChannel = first.channel as any;
     const fetched = new Collection([
       ['message-2', { id: 'message-2', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
@@ -436,14 +445,14 @@ describe('handleMessageCreate', () => {
     await handleMessageCreate(first, commands, context as any, confirmations);
     await handleMessageCreate(second, commands, context as any, confirmations);
 
-    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.') }));
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('AI 확인 안내') }));
     expect(context.agentRuntime.run).toHaveBeenCalledTimes(2);
     expect(context.agentRuntime.run).toHaveBeenLastCalledWith(
       second,
-      '그래',
+      'ㅇ..',
       expect.objectContaining({ pendingConfirmation: expect.objectContaining({ commandQuery: '대청소 3' }) })
     );
-    expect(context.aiChat.handlePrompt).not.toHaveBeenCalledWith(second, '그래');
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalledWith(second, 'ㅇ..');
     expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
     expect(cleanupChannel.bulkDelete.mock.calls[0][0].map((item: { id: string }) => item.id)).toEqual([
       'message-2',
@@ -1523,7 +1532,7 @@ describe('handleMessageCreate', () => {
 
     expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
     expect(message.reply).not.toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.')
+      content: expect.stringContaining('AI 확인 안내')
     }));
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });

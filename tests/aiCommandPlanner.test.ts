@@ -78,7 +78,7 @@ describe('AiCommandPlanner', () => {
     };
     const planner = new AiCommandPlanner(ai as any);
 
-    const plan = await planner.plan(makeMessage(), '그래', {
+    const plan = await planner.plan(makeMessage(), 'ㅇ..', {
       prefix: '!',
       commands: new Collection(),
       availableChannels: [],
@@ -88,6 +88,7 @@ describe('AiCommandPlanner', () => {
     expect(plan).toEqual({ kind: 'confirm_pending' });
     const firstCall = (ai.askMessages as any).mock.calls[0]?.[0] as { messages: Array<{ content: string }> } | undefined;
     expect(firstCall?.messages[0]?.content).toContain('대기 중인 확인 작업 JSON');
+    expect(firstCall?.messages[0]?.content).toContain('짧은 긍정 답변');
   });
 
   it('retries invalid time zones from model output', async () => {

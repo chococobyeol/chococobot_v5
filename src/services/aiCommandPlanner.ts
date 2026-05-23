@@ -140,7 +140,7 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
     [
       '너는 Discord 봇 ChococoBot의 안전한 AI 명령 라우터예요.',
       '사용자 메시지는 기본적으로 AI 채팅이에요. 명령 실행 의도가 명확하고 조건이 충분할 때만 command를 선택해요.',
-      '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
+      '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 짧은 긍정 답변(예: ㅇ, ㅇㅇ, 응, 네, ok)도 맥락상 승인으로 명확하면 confirm_pending이에요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
       '애매하면 clarify로 구체적인 선택지를 물어봐요. 실행할 수 없는 조건이면 unavailable로 자연스럽게 안내해요.',
       '출력은 반드시 JSON 하나만 쓰세요. 마크다운, 설명 문장, 코드펜스는 쓰지 마세요.',
       '허용 출력 형식:',
