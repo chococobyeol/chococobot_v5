@@ -12,6 +12,7 @@ ChococoBot uses AI to judge user intent. Runtime code may validate safety, permi
 ## Not allowed in code
 
 - Keyword/regex functions that decide user intent, such as whether a reply means “yes,” whether a history request is summary vs lookup, or whether a cleanup target means self/other/channel.
+- Keyword/regex functions that decide whether a prompt requires web search. Web-search routing must come from the agent choosing `web.search` or returning a structured `unavailable` reason such as `web_search_unavailable`.
 - Fallback routers that override an AI `chat`/`not_handled` decision by scanning prose for words like “요약,” “찾아,” “그래,” or “내꺼.”
 - Hard-coded clarification text for semantic ambiguity. The AI should generate the clarify message; code only enforces that unsafe execution does not happen.
 

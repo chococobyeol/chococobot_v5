@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentRuntime } from '../src/services/agentRuntime.js';
 import { AgentTurnContextStore } from '../src/services/agentTurnContextStore.js';
@@ -214,6 +215,15 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('잡담, 창작, 의견 요청');
   });
 
+
+  it('keeps web-search intent decisions out of regex/prose classifiers', () => {
+    const source = readFileSync(new URL('../src/services/agentRuntime.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toContain('isExplicitWebSearchPrompt');
+    expect(source).not.toMatch(/웹\\s\*검색.*검색해.*최신.*뉴스/s);
+    expect(source).toContain('AI가 웹검색 필요 요청으로 판단했다면');
+  });
+
   it('fails closed when a required web search provider call fails', async () => {
     const ai = {
       askMessages: vi
@@ -234,12 +244,34 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'unavailable',
+      reason: 'web_search_unavailable',
       message: expect.stringContaining('웹 검색 도구를 사용할 수 없어')
     });
   });
 
-  it('does not fall through to plain chat for explicit search when provider config is missing', async () => {
+  it('does not override the model with keyword-based web-search classification when provider config is missing', async () => {
     const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    const outcome = await runtime.run(makeMessage(), '최신 Node.js 소식 검색해줘', makeOptions({
+      webSearch: { mode: 'automatic', provider: 'searxng', providerStatus: 'missing_config', resultCount: 3 }
+    }));
+
+    expect(outcome).toEqual({ kind: 'not_handled' });
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('providerStatus=missing_config');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('AI가 웹검색 필요 요청으로 판단했다면');
+    expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toBeUndefined();
+  });
+
+  it('redacts context when the model declares web search unavailable', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'unavailable',
+        reason: 'web_search_unavailable',
+        message: '웹 검색 서버 주소가 설정되지 않아 확인할 수 없어요...'
+      }))
+    };
     const store = new AgentTurnContextStore();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
 
@@ -249,9 +281,11 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'unavailable',
-      message: expect.stringContaining('WEB_SEARCH_BASE_URL')
+      reason: 'web_search_unavailable',
+      message: '웹 검색 서버 주소가 설정되지 않아 확인할 수 없어요...'
     });
     const stored = store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'));
+    expect(stored?.lastIntent).toBe('web_search');
     expect(stored?.lastUserPrompt).toBe('[redacted-web-search-prompt]');
     expect(JSON.stringify(stored)).not.toContain('최신 Node.js 소식');
   });

@@ -16,7 +16,7 @@ const MAX_SYSTEM_CHARS = 9000;
 export type AgentRuntimeOutcome =
   | { kind: 'final'; message: string }
   | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
-  | { kind: 'unavailable'; message: string }
+  | { kind: 'unavailable'; message: string; reason?: 'web_search_unavailable' }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
   | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'; cleanupEvidence?: string }
   | { kind: 'confirm_pending' }
@@ -69,7 +69,7 @@ type AgentEnvelope =
   | { kind: 'tool_calls'; calls: AgentToolCall[] }
   | { kind: 'final'; message: string }
   | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
-  | { kind: 'unavailable'; message: string }
+  | { kind: 'unavailable'; message: string; reason?: 'web_search_unavailable' }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
   | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'; cleanupEvidence?: string }
   | { kind: 'confirm_pending' }
@@ -188,11 +188,11 @@ export class AgentRuntime {
         };
       }
       validationFeedback = null;
-      const webSearchUnavailable = buildRequiredWebSearchUnavailableOutcome(prompt, options, observations);
-      if ((envelope.kind === 'not_handled' || envelope.kind === 'final') && webSearchUnavailable) {
+      const webSearchFailure = buildWebSearchFailureOutcome(observations);
+      if ((envelope.kind === 'not_handled' || envelope.kind === 'final') && webSearchFailure) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'web_search_unavailable' });
-        this.updateTurnContext(key, webSearchUnavailable, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-        return webSearchUnavailable;
+        this.updateTurnContext(key, webSearchFailure, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return webSearchFailure;
       }
       if (envelope.kind === 'legacy_command') {
         const cleanupValidation = validateLegacyCleanupCommand(envelope.query, envelope.cleanupTarget, envelope.cleanupEvidence, prompt, priorContext);
@@ -315,6 +315,7 @@ export class AgentRuntime {
       '{"kind":"final","message":"..."}',
       '{"kind":"clarify","message":"...","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","target":"channel","missing":["count"]}}',
       '{"kind":"unavailable","message":"..."}',
+      '{"kind":"unavailable","reason":"web_search_unavailable","message":"..."}',
       '{"kind":"blocked","message":"...","blockedTools":["command.cleanup","voice.speak"]}',
       '{"kind":"legacy_command","query":"말 안녕"}',
       '{"kind":"legacy_command","query":"청소 3","cleanupTarget":"self","cleanupEvidence":"내 채팅"}',
@@ -381,7 +382,7 @@ export class AgentRuntime {
       }
     }
     const usedWebSearch = calls.some((call) => call.tool === 'web.search');
-    const webSearchRelated = usedWebSearch || (envelope.kind === 'unavailable' && isExplicitWebSearchPrompt(prompt));
+    const webSearchRelated = usedWebSearch || (envelope.kind === 'unavailable' && envelope.reason === 'web_search_unavailable');
     this.contextStore.set(key, {
       lastIntent: inferIntent(calls, envelope),
       lastUserPrompt: webSearchRelated ? '[redacted-web-search-prompt]' : prompt,
@@ -558,12 +559,20 @@ function parseAgentEnvelope(response: string): ParseResult {
       if (errors.length) return { ok: false, errors };
       return { ok: true, envelope: { kind: 'tool_calls', calls } };
     }
-    case 'final':
-    case 'clarify':
+    case 'final': {
+      const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+      if (!message) return { ok: false, errors: ['final.message must be non-empty'] };
+      return { ok: true, envelope: { kind, message } };
+    }
     case 'unavailable': {
       const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
-      if (!message) return { ok: false, errors: [`${kind}.message must be non-empty`] };
-      if (kind !== 'clarify') return { ok: true, envelope: { kind, message } };
+      if (!message) return { ok: false, errors: ['unavailable.message must be non-empty'] };
+      const reason = parsed.reason === 'web_search_unavailable' ? parsed.reason : undefined;
+      return { ok: true, envelope: reason ? { kind, message, reason } : { kind, message } };
+    }
+    case 'clarify': {
+      const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+      if (!message) return { ok: false, errors: ['clarify.message must be non-empty'] };
       const pendingAction = parsePendingAction(parsed.pendingAction);
       return { ok: true, envelope: pendingAction ? { kind, message, pendingAction } : { kind, message } };
     }
@@ -695,6 +704,7 @@ function inferIntent(calls: readonly AgentToolCall[], envelope: AgentEnvelope): 
   if (calls.some((call) => call.tool.startsWith('time.'))) return 'time';
   if (calls.some((call) => call.tool.startsWith('history.'))) return 'history';
   if (calls.some((call) => call.tool === 'web.search')) return 'web_search';
+  if (envelope.kind === 'unavailable' && envelope.reason === 'web_search_unavailable') return 'web_search';
   return envelope.kind;
 }
 
@@ -706,7 +716,7 @@ function formatWebSearchPolicy(webSearch: AgentRuntimeOptions['webSearch']): str
     'web.search는 공개 웹의 최신/외부/검증 가능한 정보를 확인하는 읽기 전용 도구예요. Discord 서버 대화 기록은 web.search가 아니라 history.search를 사용해요.',
     '잡담, 창작, 의견 요청, 서버 대화 기록만 필요한 요청에는 web.search를 호출하지 마세요.',
     'web.search 관찰값을 근거로 답하면 문장 끝이나 문단 끝에 [1], [2]처럼 결과 번호를 붙이고, 답변 아래에 출처: [1] 제목 — URL 형식으로 간단히 적어요.',
-    'web.search가 error이거나 providerStatus가 ready가 아니면 검색 없이 사실 답을 꾸미지 말고 unavailable JSON으로 웹 검색을 사용할 수 없다고 한국어로 설명해요.'
+    'web.search가 error이거나 providerStatus가 ready가 아니고 현재 사용자 요청을 AI가 웹검색 필요 요청으로 판단했다면 검색 없이 사실 답을 꾸미지 말고 {"kind":"unavailable","reason":"web_search_unavailable","message":"..."} JSON으로 웹 검색을 사용할 수 없다고 한국어로 설명해요.'
   ];
   if (webSearch.mode === 'disabled') {
     return [...shared, '현재 서버 웹 검색 모드는 disabled예요. web.search를 호출하지 마세요. 명시적 검색 요청이면 unavailable로 답해요.'].join('\n');
@@ -723,36 +733,14 @@ function formatWebSearchPolicy(webSearch: AgentRuntimeOptions['webSearch']): str
   return [...shared, '현재 모드는 search_first_factual이에요. 최신/외부/검증 가능한 사실 질문은 가능한 먼저 web.search를 호출한 뒤 답해요.'].join('\n');
 }
 
-function buildRequiredWebSearchUnavailableOutcome(
-  prompt: string,
-  options: AgentRuntimeOptions,
-  observations: readonly AgentToolObservation[]
-): AgentRuntimeOutcome | null {
+function buildWebSearchFailureOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
   const webFailure = [...observations].reverse().find((observation) => observation.toolName === 'web.search' && observation.status === 'error');
-  if (webFailure) {
-    return {
-      kind: 'unavailable',
-      message: `웹 검색 도구를 사용할 수 없어 확인이 필요한 답변을 만들 수 없어요. ${webFailure.error ? `사유: ${webFailure.error}` : 'SearXNG 설정이나 상태를 확인해 주세요.'}`
-    };
-  }
-  const webSearch = options.webSearch;
-  if (!webSearch || !isExplicitWebSearchPrompt(prompt)) return null;
-  if (webSearch.mode === 'disabled') {
-    return { kind: 'unavailable', message: '이 서버에서는 웹 검색이 꺼져 있어서 검색 요청을 처리할 수 없어요.' };
-  }
-  if (webSearch.providerStatus !== 'ready') {
-    return {
-      kind: 'unavailable',
-      message: webSearch.providerStatus === 'missing_config'
-        ? '웹 검색 서버 주소가 설정되지 않아 검색 요청을 처리할 수 없어요. WEB_SEARCH_BASE_URL에 SearXNG 주소를 설정해야 해요.'
-        : '웹 검색 제공자를 사용할 수 없어 검색 요청을 처리할 수 없어요.'
-    };
-  }
-  return null;
-}
-
-function isExplicitWebSearchPrompt(prompt: string): boolean {
-  return /웹\s*검색|인터넷\s*검색|검색해|검색해서|찾아봐|찾아줘|찾아\s*줘|최신|뉴스|출처|사실\s*확인|팩트\s*체크|구글|search|web|look\s*up|source|citation/i.test(prompt);
+  if (!webFailure) return null;
+  return {
+    kind: 'unavailable',
+    reason: 'web_search_unavailable',
+    message: `웹 검색 도구를 사용할 수 없어 확인이 필요한 답변을 만들 수 없어요. ${webFailure.error ? `사유: ${webFailure.error}` : 'SearXNG 설정이나 상태를 확인해 주세요.'}`
+  };
 }
 
 function formatObservationsForPrompt(observations: readonly AgentToolObservation[]): string {

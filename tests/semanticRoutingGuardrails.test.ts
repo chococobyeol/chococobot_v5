@@ -21,7 +21,8 @@ const forbiddenSemanticParsers = [
   'hasSelfReference',
   'routeChannelHistory',
   'hasBroadScope',
-  'containsAny'
+  'containsAny',
+  'isExplicitWebSearchPrompt'
 ];
 
 describe('AI routing guardrails', () => {
@@ -40,5 +41,6 @@ describe('AI routing guardrails', () => {
     expect(doc).toContain('must not re-interpret natural-language meaning');
     expect(doc).toContain('confirm_pending');
     expect(doc).toContain('pendingAction');
+    expect(doc).toContain('web_search_unavailable');
   });
 });
