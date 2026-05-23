@@ -152,6 +152,35 @@ describe('handleMessageCreate', () => {
     expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
   });
 
+  it('routes ordinary messages in the configured AI channel to AI chat', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext();
+    context.voiceSettings.setAiChannelId('guild-1', 'channel-1');
+    const message = makeMessage('안녕 초코코');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '안녕 초코코');
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps prefixed commands in the configured AI channel on the command path', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext();
+    context.voiceSettings.setAiChannelId('guild-1', 'channel-1');
+    const message = makeMessage('!도움말');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('현재 프리픽스는 `!`예요...')
+      })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+  });
+
   it('deletes the cleanup command message plus the requested number of user messages without posting a public success message', async () => {
     const commands = createPrefixCommands();
     const context = makeContext();

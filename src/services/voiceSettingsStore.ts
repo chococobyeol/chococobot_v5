@@ -13,6 +13,11 @@ export type GuildTtsChannelSetting = {
   channelId: string;
 };
 
+export type GuildAiChannelSetting = {
+  guildId: string;
+  channelId: string;
+};
+
 export type UserTtsEngineSetting = {
   guildId: string;
   userId: string;
@@ -26,6 +31,8 @@ export interface VoiceSettingsStore {
   setUserTtsEngine(guildId: string, userId: string, engine: string | undefined): void;
   getWatchedChannelId(guildId: string): string | undefined;
   setWatchedChannelId(guildId: string, channelId: string | undefined): void;
+  getAiChannelId(guildId: string): string | undefined;
+  setAiChannelId(guildId: string, channelId: string | undefined): void;
   getCommandPrefix(guildId: string): string | undefined;
   setCommandPrefix(guildId: string, prefix: string | undefined): void;
   getUserTimeZone(guildId: string, userId: string): string | undefined;
@@ -50,6 +57,12 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
       );
 
       CREATE TABLE IF NOT EXISTS tts_watched_channels (
+        guild_id TEXT NOT NULL PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS ai_chat_channels (
         guild_id TEXT NOT NULL PRIMARY KEY,
         channel_id TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -142,6 +155,29 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
       .run(guildId, channelId, new Date().toISOString());
   }
 
+  getAiChannelId(guildId: string): string | undefined {
+    const row = this.db
+      .prepare('SELECT channel_id FROM ai_chat_channels WHERE guild_id = ?')
+      .get(guildId) as { channel_id: string } | undefined;
+    return row?.channel_id;
+  }
+
+  setAiChannelId(guildId: string, channelId: string | undefined): void {
+    if (!channelId) {
+      this.db.prepare('DELETE FROM ai_chat_channels WHERE guild_id = ?').run(guildId);
+      return;
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO ai_chat_channels (guild_id, channel_id, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(guild_id)
+         DO UPDATE SET channel_id = excluded.channel_id, updated_at = excluded.updated_at`
+      )
+      .run(guildId, channelId, new Date().toISOString());
+  }
+
   getCommandPrefix(guildId: string): string | undefined {
     const row = this.db
       .prepare('SELECT prefix FROM guild_prefix_settings WHERE guild_id = ?')
@@ -195,6 +231,7 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
   private readonly presets = new Map<string, string>();
   private readonly engines = new Map<string, string>();
   private readonly watchedChannels = new Map<string, string>();
+  private readonly aiChannels = new Map<string, string>();
   private readonly prefixes = new Map<string, string>();
   private readonly timeZones = new Map<string, string>();
 
@@ -228,6 +265,18 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
       return;
     }
     this.watchedChannels.set(guildId, channelId);
+  }
+
+  getAiChannelId(guildId: string): string | undefined {
+    return this.aiChannels.get(guildId);
+  }
+
+  setAiChannelId(guildId: string, channelId: string | undefined): void {
+    if (!channelId) {
+      this.aiChannels.delete(guildId);
+      return;
+    }
+    this.aiChannels.set(guildId, channelId);
   }
 
   getCommandPrefix(guildId: string): string | undefined {

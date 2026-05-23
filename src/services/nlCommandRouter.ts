@@ -75,31 +75,36 @@ function routeConfirmation(remainder: string): RoutedNaturalLanguageCommand | nu
   if (!token) return null;
 
   if (matchesAny(token.normalized, ['청소', 'clean', 'clear', '내청소', '대청소', 'purge', 'bulk-clear', 'clean-all'])) {
-    return buildConfirmation('cleanup', token.rest, '채널 메시지 삭제를 진행할까요?');
+    return buildConfirmation('cleanup', token.raw, token.rest, '채널 메시지 삭제를 진행할까요?');
   }
 
   if (matchesAny(token.normalized, ['프리픽스', 'prefix', 'command-prefix'])) {
-    return buildConfirmation('prefix-change', token.rest, '서버 프리픽스를 바꿀까요?');
+    return buildConfirmation('prefix-change', token.raw, token.rest, '서버 프리픽스를 바꿀까요?');
   }
 
   if (matchesAny(token.normalized, ['기억삭제', 'ai-memory', 'ai-reset-memory', 'memory-reset', 'memory-clear', '메모리삭제', '기억초기화'])) {
-    return buildConfirmation('memory-reset', token.rest, '서버 AI 기억을 지울까요?');
+    return buildConfirmation('memory-reset', token.raw, token.rest, '서버 AI 기억을 지울까요?');
   }
 
   if (matchesAny(token.normalized, ['tts채널', 'tts-channel', 'tts-watch', 'watch', '채널tts'])) {
-    return buildConfirmation('watch-channel', token.rest, 'TTS 채널 설정을 바꿀까요?');
+    return buildConfirmation('watch-channel', token.raw, token.rest, 'TTS 채널 설정을 바꿀까요?');
+  }
+
+  if (matchesAny(token.normalized, ['ai채널', 'ai-channel', 'ai-chat-channel', 'ai-watch', '채널ai'])) {
+    return buildConfirmation('ai-channel', token.raw, token.rest, 'AI 채팅 채널 설정을 바꿀까요?');
   }
 
   return null;
 }
 
-function buildConfirmation(intent: ConfirmationIntent, normalizedArgs: string, preview: string): RoutedNaturalLanguageCommand {
+function buildConfirmation(intent: ConfirmationIntent, commandName: string, normalizedArgs: string, preview: string): RoutedNaturalLanguageCommand {
+  const trimmedArgs = normalizedArgs.trim();
   return {
     kind: 'confirmation',
     intent,
     preview,
-    query: normalizedArgs.trim(),
-    normalizedArgs: normalizedArgs.trim()
+    query: [commandName, trimmedArgs].filter(Boolean).join(' '),
+    normalizedArgs: trimmedArgs
   };
 }
 

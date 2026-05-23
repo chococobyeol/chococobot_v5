@@ -12,6 +12,8 @@ Node.js/TypeScript Discord bot for Korean `!` prefix chat cleanup and voice TTS,
 - `!멈춰` / `!stop` / `!halt` / `!cancel` / `!pause` — stop the current TTS playback and clear the queue.
 - `!tts채널 [#채널]` — set the current or named text channel used for auto-read.
 - `!tts채널 현재` / `!tts채널 해제` — show or clear the stored auto-read channel.
+- `!ai채널 [#채널]` — set the current or named text channel where ordinary messages are treated as AI chat prompts.
+- `!ai채널 현재` / `!ai채널 해제` — show or clear the stored AI chat channel.
 - `!음색` / `!voice` — list or select supported TTS voice presets.
 - `!tts엔진` / `!engine` — list or select your TTS engine (`edge` or `gtts`).
 - `!프리픽스` / `!prefix` — show or change the server command prefix. Allowed values: `!`, `?`, `.`, `~`. Server administrators only.
@@ -125,9 +127,15 @@ The starter voice preset map is defined in `src/config.ts`:
 ## AI chat behavior
 
 - Use the current server prefix plus `?` and a space to call AI: `!? 안녕`, `~? 오늘 뭐해`, `.? 설명해줘`.
+- `!ai채널` stores the current text channel as the guild's AI chat channel.
+- `!ai채널 #채널` stores a named text channel as the guild's AI chat channel.
+- `!ai채널 현재` shows the stored AI chat channel.
+- `!ai채널 해제` clears that guild setting.
+- In the configured AI chat channel, ordinary user messages are handled as AI prompts without `!?`.
+- Prefix commands still run as commands in the AI chat channel, so `!도움말`, `!청소`, and `!ai채널 해제` are not sent to AI chat.
 - The bot replies in the same channel and does not ping the user by default.
 - AI replies are chunked to stay within Discord's message limit.
-- Only explicit AI prompts and replies are stored in guild memory; ordinary chat is not ingested.
+- Only explicit AI prompts, configured AI-channel prompts, and replies are stored in guild memory; other ordinary chat is not ingested.
 - Guild memory is shared across the server and stores user IDs/user names so future replies can keep track of who said what.
 - `!기억삭제` / `!ai-memory` clears the guild AI memory and is limited to server administrators.
 - Background memory summarization counts against guild AI usage, not the requesting user's quota.

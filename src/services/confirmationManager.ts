@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-export type ConfirmationIntent = 'cleanup' | 'prefix-change' | 'memory-reset' | 'watch-channel';
+export type ConfirmationIntent = 'cleanup' | 'prefix-change' | 'memory-reset' | 'watch-channel' | 'ai-channel';
 
 export type ConfirmationScope = {
   guildId: string;

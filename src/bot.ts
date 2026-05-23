@@ -276,6 +276,12 @@ function summarizeCommandForLog(commandName: string, args: string[]): string {
     case 'watch':
     case '채널tts':
       return `action=${args[0] ?? 'set-current'}`;
+    case 'ai채널':
+    case 'ai-channel':
+    case 'ai-chat-channel':
+    case 'ai-watch':
+    case '채널ai':
+      return `action=${args[0] ?? 'set-current'}`;
     case '음색':
     case 'voice':
     case 'tts-voice':
@@ -517,6 +523,43 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       }
     },
     {
+      name: 'ai채널',
+      aliases: ['ai-channel', 'ai-chat-channel', 'ai-watch', '채널ai'],
+      description: 'AI가 자동으로 답할 텍스트 채널을 설정하거나 해제합니다.',
+      async execute(message, args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        const action = args[0]?.trim();
+        if (!action) {
+          context.voiceSettings.setAiChannelId(message.guildId, message.channelId);
+          await message.reply({
+            content: `<#${message.channelId}>를 AI 채팅 채널로 설정했어요...`,
+            allowedMentions: { repliedUser: false }
+          });
+          return;
+        }
+
+        const normalized = action.toLowerCase();
+        if (['현재', 'status', 'show', 'info', '조회'].includes(normalized)) {
+          const aiChannelId = context.voiceSettings.getAiChannelId(message.guildId);
+          await message.reply({
+            content: aiChannelId ? `현재 AI 채팅 채널은 <#${aiChannelId}>예요...` : '현재 설정된 AI 채팅 채널이 없어요...',
+            allowedMentions: { repliedUser: false }
+          });
+          return;
+        }
+
+        if (['해제', '끄기', 'off', 'disable', 'unset', 'clear', 'none', '없음', '초기화'].includes(normalized)) {
+          context.voiceSettings.setAiChannelId(message.guildId, undefined);
+          await message.reply({ content: 'AI 채팅 채널 설정을 해제했어요...', allowedMentions: { repliedUser: false } });
+          return;
+        }
+
+        const channel = resolveTargetGuildTextChannel(message, action);
+        context.voiceSettings.setAiChannelId(message.guildId, channel.id);
+        await message.reply({ content: `<#${channel.id}>를 AI 채팅 채널로 설정했어요...`, allowedMentions: { repliedUser: false } });
+      }
+    },
+    {
       name: '음색',
       aliases: ['voice', 'tts-voice', '목소리', 'voice-style', 'voicepreset'],
       description: '내 TTS 음색 프리셋을 확인하거나 설정합니다.',
@@ -704,10 +747,12 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             `${prefix}tts채널 [#채널|해제] / ${prefix}tts-channel / ${prefix}tts-watch / ${prefix}watch / ${prefix}채널tts — 채널 TTS 읽기 설정/해제...`,
             `${prefix}말 <문장> / ${prefix}say <text> / ${prefix}speak <text> / ${prefix}talk <text> / ${prefix}read <text> / ${prefix}tts <text> — 문장을 음성으로 읽기...`,
             `${prefix}멈춰 / ${prefix}stop / ${prefix}halt / ${prefix}cancel / ${prefix}pause / ${prefix}정지 / ${prefix}그만 / ${prefix}멈춤 / ${prefix}스톱 — TTS 재생 멈추기...`,
+            `${prefix}ai채널 [#채널|해제] / ${prefix}ai-channel / ${prefix}ai-chat-channel / ${prefix}ai-watch / ${prefix}채널ai — AI가 자동으로 답할 채널 설정/해제...`,
             `${prefix}음색 [프리셋] / ${prefix}voice [preset] / ${prefix}voice-style [preset] / ${prefix}voicepreset [preset] / ${prefix}tts-voice [preset] / ${prefix}목소리 [프리셋] — 내 TTS 음색 확인/설정...`,
             `${prefix}tts엔진 [edge|gtts] / ${prefix}engine [edge|gtts] / ${prefix}tts-engine [edge|gtts] / ${prefix}ttsengine [edge|gtts] / ${prefix}엔진 [edge|gtts] — 내 TTS 엔진 확인/설정...`,
             `${prefix}시간대 [Asia/Seoul|America/Los_Angeles|해제] / ${prefix}timezone [time zone] / ${prefix}tz [time zone] — AI 시간 답변 기준 설정...`,
             `현재 프리픽스 뒤에 ?를 붙이고 공백을 넣어 AI 채팅해요... 예: \`${prefix}? 안녕\``,
+            `AI 채팅 채널에서는 일반 메시지에도 AI가 답해요. 단, \`${prefix}도움말\` 같은 프리픽스 명령은 AI 대화가 아니라 명령으로 실행돼요...`,
             `${prefix}기억삭제 / ${prefix}ai-memory / ${prefix}ai-reset-memory / ${prefix}memory-reset / ${prefix}memory-clear / ${prefix}메모리삭제 / ${prefix}기억초기화 — 서버 AI 기억 초기화... (서버 관리자만 가능해요...)`,
             `${prefix}프리픽스 / ${prefix}prefix / ${prefix}command-prefix — 서버 프리픽스 확인/변경... (서버 관리자만 가능해요...)`
           ].join('\n'),
@@ -1107,6 +1152,8 @@ function confirmationPreviewForSafety(safety: CommandSafety): string {
       return '서버 AI 기억을 지울까요?';
     case 'watch-channel':
       return 'TTS 채널 설정을 바꿀까요?';
+    case 'ai-channel':
+      return 'AI 채팅 채널 설정을 바꿀까요?';
     default:
       return '이 명령을 실행할까요?';
   }
@@ -1721,6 +1768,16 @@ async function dispatchConfirmedPendingCommand(
   return dispatchCommandQuery(message, commands, context, pending.commandQuery);
 }
 
+function parseAiChannelPrompt(message: Message, context: BotContext, prefix: string): string | null {
+  if (!message.guildId || message.author.bot) return null;
+  if (context.voiceSettings.getAiChannelId(message.guildId) !== message.channelId) return null;
+
+  const trimmed = message.content.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith(prefix)) return null;
+  return trimmed;
+}
+
 export async function handleMessageCreate(
   message: Message,
   commands: Collection<string, PrefixCommand>,
@@ -1851,6 +1908,11 @@ export async function handleMessageCreate(
     }
     const routed = routeNaturalLanguageCommand(message.content, prefix);
     if (routed && (await handleNaturalLanguageRoute(message, routed, context, commands, confirmations))) {
+      return true;
+    }
+    const aiChannelPrompt = parseAiChannelPrompt(message, context, prefix);
+    if (aiChannelPrompt) {
+      await context.aiChat.handlePrompt(message, aiChannelPrompt);
       return true;
     }
   }

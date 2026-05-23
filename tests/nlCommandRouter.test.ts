@@ -36,6 +36,13 @@ describe('routeNaturalLanguageCommand', () => {
         intent: 'cleanup'
       })
     );
+    expect(routeNaturalLanguageCommand('!? ai채널 #ai', '!')).toEqual(
+      expect.objectContaining({
+        kind: 'confirmation',
+        intent: 'ai-channel',
+        query: 'ai채널 #ai'
+      })
+    );
   });
 
   it('does not decide channel-history semantics without the AI planner', () => {

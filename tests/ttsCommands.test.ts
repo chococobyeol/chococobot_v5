@@ -75,6 +75,35 @@ describe('tts채널 prefix command', () => {
   });
 });
 
+describe('ai채널 prefix command', () => {
+  it('sets, shows, and clears the AI chat channel per guild', async () => {
+    const commands = createPrefixCommands();
+    const command = commands.get('ai채널');
+    expect(command).toBeDefined();
+
+    const context = makeContext();
+    const message = makeMessage('channel-1');
+
+    await command!.execute(message, [], context as any);
+    expect(context.voiceSettings.getAiChannelId('guild-1')).toBe('channel-1');
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<#channel-1>를 AI 채팅 채널로 설정했어요...' }));
+
+    const currentMessage = makeMessage('channel-1');
+    await command!.execute(currentMessage, ['현재'], context as any);
+    expect(currentMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '현재 AI 채팅 채널은 <#channel-1>예요...' }));
+
+    const clearMessage = makeMessage('channel-1');
+    await command!.execute(clearMessage, ['해제'], context as any);
+    expect(context.voiceSettings.getAiChannelId('guild-1')).toBeUndefined();
+    expect(clearMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'AI 채팅 채널 설정을 해제했어요...' }));
+
+    const targetMessage = makeMessage('channel-1', { id: 'channel-2', type: ChannelType.GuildText });
+    await command!.execute(targetMessage, ['channel-2'], context as any);
+    expect(context.voiceSettings.getAiChannelId('guild-1')).toBe('channel-2');
+    expect(targetMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<#channel-2>를 AI 채팅 채널로 설정했어요...' }));
+  });
+});
+
 describe('tts엔진 prefix command', () => {
   it('sets, shows, and clears the stored tts engine per guild/user', async () => {
     const commands = createPrefixCommands();

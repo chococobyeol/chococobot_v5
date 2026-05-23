@@ -56,6 +56,21 @@ describe('VoiceSettingsStore', () => {
     reopened.close();
   });
 
+  it('persists AI chat channels in sqlite', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'chococo-voice-')), 'voice.sqlite3');
+    const store = new SqliteVoiceSettingsStore(dbPath);
+    store.setAiChannelId('guild-1', 'channel-1');
+    store.setAiChannelId('guild-2', 'channel-2');
+    store.close();
+
+    const reopened = new SqliteVoiceSettingsStore(dbPath);
+    expect(reopened.getAiChannelId('guild-1')).toBe('channel-1');
+    expect(reopened.getAiChannelId('guild-2')).toBe('channel-2');
+    reopened.setAiChannelId('guild-1', undefined);
+    expect(reopened.getAiChannelId('guild-1')).toBeUndefined();
+    reopened.close();
+  });
+
   it('persists guild prefixes in sqlite', () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), 'chococo-voice-')), 'voice.sqlite3');
     const store = new SqliteVoiceSettingsStore(dbPath);
