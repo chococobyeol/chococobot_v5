@@ -45,6 +45,8 @@ RUN apt-get update \
     libffi-dev \
     libssl-dev \
   && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /etc/searxng /var/cache/searxng /var/data
+COPY config/searxng/settings.yml /etc/searxng/settings.yml
 RUN git clone --depth 1 --branch "${SEARXNG_REF}" "${SEARXNG_REPOSITORY}" "${SEARXNG_SRC}" \
   && python -m venv "${SEARXNG_VENV}" \
   && "${SEARXNG_VENV}/bin/python" -m pip install --upgrade pip setuptools wheel \
@@ -53,9 +55,7 @@ RUN git clone --depth 1 --branch "${SEARXNG_REF}" "${SEARXNG_REPOSITORY}" "${SEA
   && "${SEARXNG_VENV}/bin/python" -m pip install --use-pep517 --no-build-isolation -e . \
   && python -m venv /app/.venv \
   && /app/.venv/bin/python -m pip install --upgrade pip \
-  && /app/.venv/bin/python -m pip install edge-tts gTTS \
-  && mkdir -p /etc/searxng /var/cache/searxng /var/data
-COPY config/searxng/settings.yml /etc/searxng/settings.yml
+  && /app/.venv/bin/python -m pip install edge-tts gTTS
 COPY --from=app-build /app/package*.json ./
 COPY --from=app-build /app/node_modules ./node_modules
 COPY --from=app-build /app/dist ./dist
