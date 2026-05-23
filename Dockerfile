@@ -2,6 +2,7 @@ FROM node:22-bookworm-slim AS app-build
 WORKDIR /app
 ENV SKIP_PYTHON_TTS_SETUP=1
 COPY package*.json ./
+COPY scripts/setup-python-tts.sh ./scripts/setup-python-tts.sh
 RUN npm ci
 COPY tsconfig.json eslint.config.js vitest.config.ts ./
 COPY src ./src
