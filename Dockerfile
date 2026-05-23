@@ -22,10 +22,6 @@ ENV NODE_ENV=production \
     WEB_SEARCH_PROVIDER=searxng \
     WEB_SEARCH_ENABLED=true \
     WEB_SEARCH_BASE_URL=http://127.0.0.1:8888 \
-    GRANIAN_HOST=127.0.0.1 \
-    GRANIAN_PORT=8888 \
-    GRANIAN_WORKERS=1 \
-    GRANIAN_THREADS=2 \
     PYTHON_BIN=/app/.venv/bin/python
 ARG SEARXNG_REPOSITORY=https://github.com/searxng/searxng.git
 ARG SEARXNG_REF=master
@@ -50,7 +46,7 @@ COPY config/searxng/settings.yml /etc/searxng/settings.yml
 RUN git clone --depth 1 --branch "${SEARXNG_REF}" "${SEARXNG_REPOSITORY}" "${SEARXNG_SRC}" \
   && python -m venv "${SEARXNG_VENV}" \
   && "${SEARXNG_VENV}/bin/python" -m pip install --upgrade pip setuptools wheel \
-  && "${SEARXNG_VENV}/bin/python" -m pip install --upgrade pyyaml msgspec typing-extensions pybind11 granian \
+  && "${SEARXNG_VENV}/bin/python" -m pip install --upgrade pyyaml msgspec typing-extensions pybind11 \
   && cd "${SEARXNG_SRC}" \
   && "${SEARXNG_VENV}/bin/python" -m pip install --use-pep517 --no-build-isolation -e . \
   && python -m venv /app/.venv \

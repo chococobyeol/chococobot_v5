@@ -53,10 +53,6 @@ services:
         value: 8888
       - key: SEARXNG_READY_TIMEOUT_SECONDS
         value: 25
-      - key: GRANIAN_WORKERS
-        value: 1
-      - key: GRANIAN_THREADS
-        value: 2
       - key: BOT_TIME_ZONE
         value: Asia/Seoul
       - key: DATABASE_PATH
