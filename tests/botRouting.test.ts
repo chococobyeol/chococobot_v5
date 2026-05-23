@@ -357,7 +357,7 @@ describe('handleMessageCreate', () => {
     expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('확인 토큰')
+        content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.')
       })
     );
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
@@ -398,7 +398,7 @@ describe('handleMessageCreate', () => {
 
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('확인 토큰')
+        content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.')
       })
     );
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
@@ -436,7 +436,7 @@ describe('handleMessageCreate', () => {
     await handleMessageCreate(first, commands, context as any, confirmations);
     await handleMessageCreate(second, commands, context as any, confirmations);
 
-    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('확인 토큰') }));
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.') }));
     expect(context.agentRuntime.run).toHaveBeenCalledTimes(2);
     expect(context.agentRuntime.run).toHaveBeenLastCalledWith(
       second,
@@ -1523,7 +1523,7 @@ describe('handleMessageCreate', () => {
 
     expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
     expect(message.reply).not.toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringContaining('확인 토큰')
+      content: expect.stringContaining('`그래` 또는 `확인`이라고 답하면 진행할게요.')
     }));
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });

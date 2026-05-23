@@ -995,9 +995,17 @@ async function createAndReplyConfirmation(
   };
   const confirmation = confirmations.create(scope, preview);
   await message.reply({
-    content: [preview, `확인 토큰: \`${confirmation.token}\``, '확인을 처리하는 흐름은 다음 작업에서 이어갈 수 있어요...'].join('\n'),
+    content: buildConfirmationMessage(preview, confirmation.expiresAt),
     allowedMentions: { repliedUser: false }
   });
+}
+
+function buildConfirmationMessage(preview: string, expiresAt: number): string {
+  return [
+    preview,
+    '`그래` 또는 `확인`이라고 답하면 진행할게요.',
+    `이 확인은 <t:${Math.floor(expiresAt / 1000)}:R>까지 유효해요.`
+  ].join('\n');
 }
 
 function confirmationPreviewForSafety(safety: CommandSafety): string {
@@ -1490,7 +1498,7 @@ async function handleNaturalLanguageRoute(
       };
       const confirmation = confirmations.create(scope, route.preview);
       await message.reply({
-        content: [route.preview, `확인 토큰: \`${confirmation.token}\``, '확인을 처리하는 흐름은 다음 작업에서 이어갈 수 있어요...'].join('\n'),
+        content: buildConfirmationMessage(route.preview, confirmation.expiresAt),
         allowedMentions: { repliedUser: false }
       });
       return true;
