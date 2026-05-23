@@ -1653,6 +1653,7 @@ export async function handleMessageCreate(
           const member = message.member as GuildMember | null;
           const outcome = await context.agentRuntime.run(message, aiPrompt, {
             prefix,
+            requesterDisplayName: requesterDisplayName(message),
             commands: uniqueCommandDefinitions(commands),
             availableChannels: listTextChannelCandidates(message),
             userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,

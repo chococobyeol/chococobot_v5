@@ -1401,6 +1401,33 @@ describe('handleMessageCreate', () => {
 
 
 
+
+
+  it('asks for clarification when AgentRuntime sees a cleanup request without count or scope', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'clarify', message: '서버닉님의 채팅을 지울까요, 아니면 채널 전체 채팅을 지울까요? 지울 개수도 같이 알려 주세요. 예: 채팅 10개 지워줘' }))
+      }
+    });
+    const message = makeMessage('!? 채팅 지워줘', {
+      member: {
+        displayName: '서버닉',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+    const cleanupChannel = message.channel as any;
+    cleanupChannel.bulkDelete = vi.fn(async () => new Collection());
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('서버닉님의 채팅을 지울까요')
+    }));
+  });
+
   it('executes AgentRuntime single user cleanup legacy commands without an extra confirmation prompt', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({

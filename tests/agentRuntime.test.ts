@@ -220,4 +220,47 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).toHaveBeenCalledTimes(1);
   });
 
+
+  it('asks the model to generate a clarifying question for cleanup prompts without a count or scope', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '채팅 삭제는 차단된 기능입니다.',
+          blockedTools: ['command.cleanup']
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
+        }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '채팅 지워줘', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('삭제 요청이 모호해요');
+  });
+
+
+  it('routes other single confirmation-gated action blocks through legacy commands', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['settings.prefix'] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['settings.tts_channel'] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['memory.delete'] }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await expect(runtime.run(makeMessage(), '프리픽스 ~로 바꿔줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: '프리픽스 ~' });
+    await expect(runtime.run(makeMessage(), '여기를 tts 채널로 설정해줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: 'tts채널' });
+    await expect(runtime.run(makeMessage(), '서버 AI 기억 초기화해줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: '기억삭제' });
+  });
+
 });

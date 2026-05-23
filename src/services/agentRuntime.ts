@@ -45,6 +45,7 @@ export type AgentRuntimeDiagnostic = {
 
 export type AgentRuntimeOptions = {
   prefix: string;
+  requesterDisplayName?: string;
   commands: readonly { name: string; aliases: readonly string[]; description: string }[];
   availableChannels: readonly { id: string; name: string; mention: string }[];
   userVoiceChannel?: { id: string; name?: string | null } | null;
@@ -90,6 +91,7 @@ export class AgentRuntime {
     let validationFeedback: string | null = null;
     let totalToolCalls = 0;
     let blockedOnce = false;
+    let cleanupClarificationRequested = false;
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
       const messages = this.buildMessages(message, prompt, options, priorContext, observations, validationFeedback);
@@ -133,8 +135,21 @@ export class AgentRuntime {
         continue;
       }
 
-      validationFeedback = null;
       const envelope = normalizeLegacyActionDecision(parsed.envelope, prompt);
+      if (needsCleanupClarification(prompt) && envelope.kind !== 'clarify') {
+        await options.onDiagnostic?.({
+          stage: 'agent',
+          event: 'retry',
+          runId,
+          iteration,
+          decisionKind: 'cleanup_clarify_required'
+        });
+        if (cleanupClarificationRequested) return { kind: 'not_handled' };
+        cleanupClarificationRequested = true;
+        validationFeedback = buildCleanupClarificationFeedback(options.requesterDisplayName);
+        continue;
+      }
+      validationFeedback = null;
       if (envelope.kind !== 'tool_calls') {
         await options.onDiagnostic?.({ stage: 'agent', event: envelope.kind === 'final' ? 'final' : 'decision', runId, iteration, decisionKind: envelope.kind });
         this.updateTurnContext(key, envelope, toolCalls, observations, options.executionContext.nowMs);
@@ -219,7 +234,9 @@ export class AgentRuntime {
       '읽기 전용 도구는 필요한 만큼 여러 번 호출하고, 관찰값을 본 뒤 한국어로 자연스럽게 final을 작성해요.',
       '삭제/설정/관리/음성 말하기 같은 실행 도구는 임의 agent loop에서 자동 실행하지 않아요.',
       '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
+      '프리픽스 변경, TTS 채널 설정, 기억삭제처럼 기존 명령이 있는 단일 실행 요청도 blocked가 아니라 legacy_command로 넘기세요.',
       '읽기 요청과 실행/삭제/설정/음성 요청이 섞여 있으면 blocked로 답하고 아무 것도 실행하지 마세요.',
+      '채팅/메시지 삭제 요청에 개수나 대상(요청자 본인/채널 전체)이 없으면 clarify로 누구의 채팅을 몇 개 지울지 물어봐요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
       '허용 출력:',
       '{"kind":"tool_calls","calls":[{"id":"call_1","tool":"time.in_zone","input":{"timeZone":"America/New_York","label":"동부","offsetSeconds":0}}]}',
@@ -239,6 +256,7 @@ export class AgentRuntime {
       '참조 가능한 텍스트 채널:',
       options.availableChannels.map((channel) => `- ${channel.mention} (${channel.name}, id=${channel.id})`).join('\n') || '(없음)',
       `현재 채널: <#${message.channelId}>`,
+      options.requesterDisplayName ? `요청자 표시 이름: ${options.requesterDisplayName}` : undefined,
       `사용자 음성 채널: ${userVoice}`,
       `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
       `현재 프리픽스: ${options.prefix}`,
@@ -303,7 +321,37 @@ function buildLegacyCommandFromPrompt(prompt: string, blockedTools: readonly str
   if (hasReadOnlyIntent(prompt)) return null;
   if (blockedTools.includes('voice.speak')) return buildVoiceLegacyCommand(prompt);
   if (blockedTools.includes('command.cleanup') || blockedTools.includes('command.mass_cleanup')) return buildCleanupLegacyCommand(prompt, blockedTools);
+  if (blockedTools.includes('settings.prefix')) return buildPrefixLegacyCommand(prompt);
+  if (blockedTools.includes('settings.tts_channel')) return buildTtsChannelLegacyCommand(prompt);
+  if (blockedTools.includes('memory.delete')) return buildMemoryDeleteLegacyCommand(prompt);
   return null;
+}
+
+
+function buildPrefixLegacyCommand(prompt: string): string | null {
+  const normalized = prompt.trim();
+  if (!/프리픽스|prefix/i.test(normalized)) return null;
+  const reset = normalized.match(/해제|기본|default|reset|clear|none|초기화/i);
+  if (reset) return '프리픽스 초기화';
+  const value = normalized.match(/(?:프리픽스|prefix)[^!?.~]{0,20}([!?.~])/i)?.[1] ?? normalized.match(/([!?.~])(?:로|으로)?\s*(?:바꿔|변경|설정)/)?.[1];
+  return value ? `프리픽스 ${value}` : null;
+}
+
+function buildTtsChannelLegacyCommand(prompt: string): string | null {
+  const normalized = prompt.trim();
+  if (!/(?:tts|TTS)\s*채널|채널\s*(?:tts|TTS)|읽을\s*채널/i.test(normalized)) return null;
+  if (/해제|끄기|off|disable|unset|clear|none|없음|초기화/i.test(normalized)) return 'tts채널 해제';
+  const channelRef = normalized.match(/<#\d+>|#\S+|\b\d{10,}\b/)?.[0];
+  if (channelRef) return `tts채널 ${channelRef}`;
+  if (/여기|현재|이\s*채널|this\s+channel/i.test(normalized)) return 'tts채널';
+  return null;
+}
+
+function buildMemoryDeleteLegacyCommand(prompt: string): string | null {
+  const normalized = prompt.trim();
+  if (!/기억|메모리|memory/i.test(normalized)) return null;
+  if (!/삭제|초기화|지워|reset|clear|delete/i.test(normalized)) return null;
+  return '기억삭제';
 }
 
 function buildVoiceLegacyCommand(prompt: string): string | null {
@@ -331,11 +379,28 @@ function buildCleanupLegacyCommand(prompt: string, blockedTools: readonly string
   const hasCleanupIntent = /청소|삭제|지워|치워|정리|clean|clear|purge|delete/.test(lower) && /채팅|메시지|메세지|글|말|message|chat|개/.test(lower);
   if (!hasCleanupIntent) return null;
   const count = normalized.match(/(\d{1,4})\s*(?:개|건|줄|messages?|chats?)?/i)?.[1];
-  const countArg = count ? ` ${count}` : '';
+  if (!count) return null;
   const wantsOwnOnly = /내\s*(?:가\s*)?(?:채팅|메시지|메세지|글)|내것|내꺼|내\s*말|내\s*최근|my\s+(?:messages?|chat)/i.test(normalized);
   const wantsAll = /대청소|전체|모든|전부|채널|서버|남의|다\s*지워|싹|purge|bulk|all|everyone/i.test(normalized);
-  if (blockedTools.includes('command.mass_cleanup') || (wantsAll && !wantsOwnOnly)) return `대청소${countArg}`;
-  return `청소${countArg}`;
+  if (blockedTools.includes('command.mass_cleanup') || (wantsAll && !wantsOwnOnly)) return `대청소 ${count}`;
+  return `청소 ${count}`;
+}
+
+function needsCleanupClarification(prompt: string): boolean {
+  const normalized = prompt.trim();
+  if (!normalized || hasReadOnlyIntent(normalized)) return false;
+  const lower = normalized.toLowerCase();
+  const hasCleanupIntent = /청소|삭제|지워|치워|정리|clean|clear|purge|delete/.test(lower) && /채팅|메시지|메세지|글|말|message|chat/.test(lower);
+  if (!hasCleanupIntent) return false;
+  return !/(\d{1,4})\s*(?:개|건|줄|messages?|chats?)?/i.test(normalized);
+}
+
+function buildCleanupClarificationFeedback(displayName?: string): string {
+  return [
+    '삭제 요청이 모호해요. 도구 호출/legacy_command/blocked/final로 처리하지 말고 clarify JSON으로만 답하세요.',
+    '질문에는 지울 대상이 요청자 본인 메시지인지 채널 전체인지, 그리고 몇 개를 지울지 확인하는 내용을 자연스럽게 담으세요.',
+    displayName ? `요청자 표시 이름은 ${displayName}예요. 필요하면 이 이름을 사용하세요.` : undefined
+  ].filter(Boolean).join('\n');
 }
 
 function cleanVoiceText(value: string): string {
