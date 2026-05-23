@@ -69,7 +69,7 @@ Optional v1 settings:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `DATABASE_PATH` | `data/chococobot.sqlite3` | SQLite path for bot state. Use a persistent path such as `/var/data/chococobot.sqlite3` on Render. |
+| `DATABASE_PATH` | `data/chococobot.sqlite3` | SQLite path for bot state. On Render this defaults to `/var/data/chococobot.sqlite3` on the container's ephemeral filesystem unless you add a persistent disk. |
 | `LOGGING_GUILD_ID` | `1507058598423826533` | Dedicated Discord server for bot activity logs and test channels. |
 | `VOICE_IDLE_LEAVE_MS` | `600000` | How long the bot stays in voice after the queue becomes idle before auto-leaving. |
 | `PYTHON_BIN` | `python3` | Python executable used for TTS. In the Docker/Render image this is `/app/.venv/bin/python`. |
@@ -214,7 +214,7 @@ Use exactly one Render **Background Worker** on the Starter plan. The Blueprint 
 
 - Service: one `type: worker`, `plan: starter`, `runtime: docker`
 - Required secrets: `DISCORD_TOKEN`, `GROQ_API_KEY` when AI chat is enabled
-- SQLite disk path: `/var/data/chococobot.sqlite3`
+- SQLite path: `/var/data/chococobot.sqlite3` on the container's ephemeral filesystem by default; add a Render disk only if you want bot settings/memory to survive redeploys
 - Local web search: SearXNG runs inside the same container on `127.0.0.1:8888` and is reached through `WEB_SEARCH_BASE_URL=http://127.0.0.1:8888`
 - Bot uptime policy: startup waits briefly for SearXNG, but the Discord bot starts even if SearXNG is slow/unavailable; explicit search then fails gracefully instead of taking the bot down.
 

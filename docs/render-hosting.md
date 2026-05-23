@@ -66,6 +66,8 @@ plan: starter
 
 이 값들이 보이면 정상입니다.
 
+이 값들이 보이면 정상입니다. 현재 Blueprint는 추가 과금을 줄이기 위해 persistent disk를 만들지 않습니다. `DATABASE_PATH=/var/data/chococobot.sqlite3` 파일은 컨테이너 안에 생성되지만, Render 재배포/재시작 시 초기화될 수 있습니다.
+
 ## 4. Render가 물어보는 secret 입력
 
 `render.yaml`에는 secret 값이 `sync: false`로 선언되어 있습니다. Render는 Blueprint 최초 생성 시 이 값들을 Dashboard에서 입력하라고 물어봅니다.
@@ -108,7 +110,7 @@ plan: starter
 | `WEB_SEARCH_DEFAULT_MODE` | `search_first_factual` | 사실 확인 질문은 검색 우선 |
 | `SEARXNG_PORT` | `8888` | 내부 SearXNG port |
 | `SEARXNG_READY_TIMEOUT_SECONDS` | `25` | SearXNG readiness 대기 시간 |
-| `DATABASE_PATH` | `/var/data/chococobot.sqlite3` | Render persistent disk SQLite 경로 |
+| `DATABASE_PATH` | `/var/data/chococobot.sqlite3` | 컨테이너 임시 파일시스템의 SQLite 경로. 재배포/재시작 후 데이터 보존이 필요하면 별도 persistent disk를 추가하세요. |
 | `TTS_ENGINE` | `edge` | 기본 TTS engine |
 | `LOG_LEVEL` | `info` | 로그 레벨 |
 
