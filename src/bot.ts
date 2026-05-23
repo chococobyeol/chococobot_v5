@@ -969,7 +969,8 @@ async function createAndReplyConfirmation(
   confirmations: ConfirmationManager,
   intent: ConfirmationScope['intent'],
   preview: string,
-  normalizedArgs: string
+  normalizedArgs: string,
+  commandQuery: string
 ): Promise<void> {
   if (!message.guildId) return;
   const scope: ConfirmationScope = {
@@ -978,7 +979,8 @@ async function createAndReplyConfirmation(
     userId: message.author.id,
     intent,
     targetChannelId: extractLeadingChannelReference(normalizedArgs),
-    normalizedArgs
+    normalizedArgs,
+    commandQuery
   };
   const confirmation = confirmations.create(scope, preview);
   await message.reply({
@@ -1127,7 +1129,7 @@ async function dispatchPlannerCommand(
       await message.reply({ content: '이 작업은 관리자 권한이 필요해요...', allowedMentions: { repliedUser: false } });
       return true;
     }
-    await createAndReplyConfirmation(message, confirmations, safety.intent, confirmationPreviewForSafety(safety), safety.args.join(' ').trim());
+    await createAndReplyConfirmation(message, confirmations, safety.intent, confirmationPreviewForSafety(safety), safety.args.join(' ').trim(), safety.normalizedQuery);
     return true;
   }
 
@@ -1472,7 +1474,8 @@ async function handleNaturalLanguageRoute(
         userId: message.author.id,
         intent: route.intent,
         targetChannelId: extractLeadingChannelReference(route.normalizedArgs),
-        normalizedArgs: route.normalizedArgs
+        normalizedArgs: route.normalizedArgs,
+        commandQuery: route.query
       };
       const confirmation = confirmations.create(scope, route.preview);
       await message.reply({
@@ -1565,6 +1568,28 @@ function extractLeadingChannelReference(text: string): string | undefined {
   return undefined;
 }
 
+function isAffirmativeConfirmationReply(prompt: string): boolean {
+  const normalized = prompt.trim().toLowerCase().replace(/[.!?。！？…\s]+/g, '');
+  return ['그래', '네', '예', '응', 'ㅇㅇ', '확인', '승인', '좋아', '오케이', 'ok', 'okay', 'yes', 'y'].includes(normalized);
+}
+
+async function handlePendingConfirmationReply(
+  message: Message,
+  prompt: string,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  confirmations: ConfirmationManager
+): Promise<boolean> {
+  if (!message.guildId || !isAffirmativeConfirmationReply(prompt)) return false;
+  const pending = confirmations.consumeLatestForActor({
+    guildId: message.guildId,
+    channelId: message.channelId,
+    userId: message.author.id
+  });
+  if (!pending) return false;
+  return dispatchCommandQuery(message, commands, context, pending.commandQuery);
+}
+
 export async function handleMessageCreate(
   message: Message,
   commands: Collection<string, PrefixCommand>,
@@ -1581,6 +1606,7 @@ export async function handleMessageCreate(
     }
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
+      if (await handlePendingConfirmationReply(message, aiPrompt, commands, context, confirmations)) return true;
       const pendingHistoryRequest = getPendingChannelHistoryRequest(message);
       if (context.agentRuntime) {
         try {

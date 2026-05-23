@@ -313,6 +313,23 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('대상이 불명확하면 legacy_command를 내지 말고 clarify JSON으로 누구 채팅을 지울지 자연스럽게 물어보세요');
   });
 
+
+  it('does not trust cleanupTarget self when the prompt has no explicit requester evidence', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '누구 채팅 3개를 지울까요?' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({ kind: 'clarify', message: '누구 채팅 3개를 지울까요?' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('명시 근거가 없으면 cleanupTarget=self를 쓰지 말고 clarify하세요');
+  });
+
   it('allows explicit requester cleanup to become a legacy cleanup command', async () => {
     const ai = {
       askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' }))

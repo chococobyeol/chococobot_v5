@@ -9,6 +9,7 @@ export type ConfirmationScope = {
   intent: ConfirmationIntent;
   targetChannelId?: string | null;
   normalizedArgs: string;
+  commandQuery: string;
 };
 
 export type PendingConfirmation = ConfirmationScope & {
@@ -55,6 +56,20 @@ export class ConfirmationManager {
     return confirmation;
   }
 
+  consumeLatestForActor(scope: Pick<ConfirmationScope, 'guildId' | 'channelId' | 'userId'>): PendingConfirmation | undefined {
+    this.pruneExpired();
+    const latest = Array.from(this.confirmations.values())
+      .reverse()
+      .find((confirmation) => (
+        confirmation.guildId === scope.guildId &&
+        confirmation.channelId === scope.channelId &&
+        confirmation.userId === scope.userId
+      ));
+    if (!latest) return undefined;
+    this.confirmations.delete(latest.token);
+    return latest;
+  }
+
   cancel(token: string, scope?: ConfirmationScope): boolean {
     const confirmation = this.get(token, scope);
     if (!confirmation) return false;
@@ -80,7 +95,8 @@ export class ConfirmationManager {
       left.userId === right.userId &&
       left.intent === right.intent &&
       (left.targetChannelId ?? null) === (right.targetChannelId ?? null) &&
-      left.normalizedArgs === right.normalizedArgs
+      left.normalizedArgs === right.normalizedArgs &&
+      left.commandQuery === right.commandQuery
     );
   }
 }

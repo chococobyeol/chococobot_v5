@@ -404,6 +404,47 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
+  it('executes the latest pending confirmation when the user answers yes through AI prefix', async () => {
+    const commands = createPrefixCommands();
+    const confirmations = new ConfirmationManager();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'legacy_command', query: '대청소 3', cleanupTarget: 'channel' }))
+      }
+    });
+    const member = {
+      displayName: '관리자',
+      permissions: { has: vi.fn(() => true) },
+      voice: { channel: { id: 'voice-1' } }
+    };
+    const first = makeMessage('!? 전체 채팅 3개 지워봐', { member });
+    const second = makeMessage('!? 그래', { id: 'message-2', member });
+    const cleanupChannel = first.channel as any;
+    const fetched = new Collection([
+      ['message-2', { id: 'message-2', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+      ['chat-3', { id: 'chat-3', author: { id: 'user-3' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+      ['chat-2', { id: 'chat-2', author: { id: 'user-2' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+      ['chat-1', { id: 'chat-1', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }]
+    ]);
+    cleanupChannel.messages = { fetch: vi.fn(async () => fetched) };
+    cleanupChannel.bulkDelete = vi.fn(async (items: any[]) => new Collection(items.map((item) => [item.id, item])));
+    second.channel = cleanupChannel;
+
+    await handleMessageCreate(first, commands, context as any, confirmations);
+    await handleMessageCreate(second, commands, context as any, confirmations);
+
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('확인 토큰') }));
+    expect(context.agentRuntime.run).toHaveBeenCalledTimes(1);
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalledWith(second, '그래');
+    expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
+    expect(cleanupChannel.bulkDelete.mock.calls[0][0].map((item: { id: string }) => item.id)).toEqual([
+      'message-2',
+      'chat-3',
+      'chat-2',
+      'chat-1'
+    ]);
+  });
+
   it('blocks non-admin AI-planned purge before confirmation or deletion', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
@@ -1417,7 +1458,7 @@ describe('handleMessageCreate', () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       agentRuntime: {
-        run: vi.fn(async () => ({ kind: 'legacy_command', query: '청소 2' }))
+        run: vi.fn(async () => ({ kind: 'legacy_command', query: '청소 2', cleanupTarget: 'self' }))
       }
     });
     const message = makeMessage('!? 채팅 2개 지워줘');

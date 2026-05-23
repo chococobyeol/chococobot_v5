@@ -157,7 +157,7 @@ export class AgentRuntime {
       }
       validationFeedback = null;
       if (envelope.kind === 'legacy_command') {
-        const cleanupValidation = validateLegacyCleanupCommand(envelope.query, envelope.cleanupTarget);
+        const cleanupValidation = validateLegacyCleanupCommand(envelope.query, envelope.cleanupTarget, prompt, priorContext);
         if (!cleanupValidation.ok) {
           await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: cleanupValidation.reason });
           if (actionDecisionRetryRequested) {
@@ -343,10 +343,19 @@ export class AgentRuntime {
 
 type CleanupValidationResult = { ok: true } | { ok: false; reason: 'cleanup_target_missing' | 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported' };
 
-function validateLegacyCleanupCommand(query: string, cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'): CleanupValidationResult {
+function validateLegacyCleanupCommand(
+  query: string,
+  cleanupTarget: 'self' | 'channel' | 'other' | 'ambiguous' | undefined,
+  prompt: string,
+  priorContext?: AgentTurnStoredContext
+): CleanupValidationResult {
   const commandName = query.trim().replace(/^[!?.~]\s*/, '').split(/\s+/)[0]?.toLowerCase();
   if (['청소', 'clean', 'clean-mine', 'clear', '내청소'].includes(commandName ?? '')) {
-    if (cleanupTarget === 'self') return { ok: true };
+    if (cleanupTarget === 'self') {
+      return hasExplicitRequesterCleanupEvidence(prompt, priorContext)
+        ? { ok: true }
+        : { ok: false, reason: 'cleanup_target_ambiguous' };
+    }
     if (cleanupTarget === 'other') return { ok: false, reason: 'other_user_cleanup_unsupported' };
     if (cleanupTarget === 'ambiguous') return { ok: false, reason: 'cleanup_target_ambiguous' };
     return { ok: false, reason: 'cleanup_target_missing' };
@@ -358,12 +367,21 @@ function validateLegacyCleanupCommand(query: string, cleanupTarget?: 'self' | 'c
   return { ok: true };
 }
 
+function hasExplicitRequesterCleanupEvidence(prompt: string, priorContext?: AgentTurnStoredContext): boolean {
+  if (hasSelfReference(prompt)) return true;
+  return priorContext?.lastIntent === 'clarify' && hasSelfReference(prompt) && Boolean(priorContext.lastUserPrompt);
+}
+
+function hasSelfReference(value: string): boolean {
+  return /(?:^|[\s,.'"!?！？])(?:내꺼|내것|내\s*(?:가\s*)?(?:쓴\s*)?(?:채팅|메시지|메세지|글|말)|제\s*(?:채팅|메시지|메세지|글|말)|본인|my\s+(?:messages?|chat))(?:$|[\s,.'"!?！？])/iu.test(value);
+}
+
 function buildCleanupTargetFeedback(reason: 'cleanup_target_missing' | 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported', priorContext: AgentTurnStoredContext | undefined, displayName?: string): string {
   return [
     reason === 'other_user_cleanup_unsupported'
       ? '방금 legacy_command가 특정 다른 사람 메시지 삭제를 청소로 처리하려 했어요. 특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.'
       : '방금 cleanup legacy_command에 안전한 cleanupTarget 판단이 없거나 모호했어요.',
-    '사용자 의미를 다시 판단해서, 요청자 본인 메시지 삭제가 명확하면 cleanupTarget=self와 함께 청소 N을 내세요. 이 판단은 원문 단어가 아니라 대화 문맥까지 포함한 의미 판단이어야 해요.',
+    '사용자 의미를 다시 판단해서, 요청자 본인 메시지 삭제가 명확하면 cleanupTarget=self와 함께 청소 N을 내세요. 단, 사용자 말이나 이전 clarify 후속에 본인 메시지라는 명시 근거가 없으면 cleanupTarget=self를 쓰지 말고 clarify하세요.',
     '채널 전체 삭제가 명확하면 cleanupTarget=channel과 함께 대청소 N을 내세요.',
     '대상이 불명확하면 legacy_command를 내지 말고 clarify JSON으로 누구 채팅을 지울지 자연스럽게 물어보세요.',
     '특정 다른 사람 메시지만 지우는 요청이면 blocked JSON으로 지원하지 않는다고 안내하세요.',
