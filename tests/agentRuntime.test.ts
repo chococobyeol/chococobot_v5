@@ -192,7 +192,7 @@ describe('AgentRuntime', () => {
   });
 
 
-  it('asks the model to repair mistaken blocked cleanup decisions into legacy commands', async () => {
+  it('asks the model to repair explicit requester cleanup decisions into legacy commands', async () => {
     const ai = {
       askMessages: vi
         .fn()
@@ -205,7 +205,7 @@ describe('AgentRuntime', () => {
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
-    const outcome = await runtime.run(makeMessage(), '채팅 10개 지워줘', makeOptions());
+    const outcome = await runtime.run(makeMessage(), '내 채팅 10개 지워줘', makeOptions());
 
     expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 10' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
@@ -272,7 +272,7 @@ describe('AgentRuntime', () => {
       message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
     });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('채팅/메시지 삭제처럼 대상이나 개수가 모호하면');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('대상이 생략되면 요청자 본인 메시지라고 단정하지 마세요');
   });
 
 
@@ -296,16 +296,47 @@ describe('AgentRuntime', () => {
   });
 
 
-  it('tells the model that counted cleanup defaults to the requester messages', async () => {
+  it('asks who to delete when counted cleanup omits the target', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '누구 채팅 3개를 지울까요? 본인 메시지라면 내꺼라고 말해 주세요.' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
 
+    expect(outcome).toEqual({ kind: 'clarify', message: '누구 채팅 3개를 지울까요? 본인 메시지라면 내꺼라고 말해 주세요.' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('그냥 "채팅 3개"처럼 대상이 생략되면');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('그냥 “채팅 N개”는 요청자 본인 메시지라고 단정하지 마세요');
+  });
+
+  it('allows explicit requester cleanup to become a legacy cleanup command', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '내 채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
+
     expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3' });
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('채팅 3개 지워줘 -> {"kind":"legacy_command","query":"청소 3"}');
+  });
+
+  it('does not allow another user cleanup to be rewritten as requester cleanup', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.', blockedTools: ['command.cleanup'] }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '다른 사람 채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({ kind: 'blocked', message: '특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.', blockedTools: ['command.cleanup'] });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
   it('keeps cleanup clarification context so short follow-up answers can become legacy commands', async () => {
