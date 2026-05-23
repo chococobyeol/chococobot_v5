@@ -6,6 +6,8 @@ export type AgentTurnKey = {
 
 export type AgentTurnStoredContext = {
   lastIntent?: string;
+  lastUserPrompt?: string;
+  lastAgentMessage?: string;
   lastToolCalls: Array<{ tool: string; input: unknown }>;
   slots: {
     topic?: string;

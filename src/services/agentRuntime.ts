@@ -149,10 +149,16 @@ export class AgentRuntime {
         validationFeedback = buildLegacyActionDecisionFeedback(envelope.blockedTools, options.requesterDisplayName);
         continue;
       }
+      if (envelope.kind === 'not_handled' && priorContext?.lastIntent === 'clarify' && !actionDecisionRetryRequested) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'clarify_follow_up_required' });
+        actionDecisionRetryRequested = true;
+        validationFeedback = buildClarifyFollowUpFeedback(priorContext);
+        continue;
+      }
       validationFeedback = null;
       if (envelope.kind !== 'tool_calls') {
         await options.onDiagnostic?.({ stage: 'agent', event: envelope.kind === 'final' ? 'final' : 'decision', runId, iteration, decisionKind: envelope.kind });
-        this.updateTurnContext(key, envelope, toolCalls, observations, options.executionContext.nowMs);
+        this.updateTurnContext(key, envelope, prompt, toolCalls, observations, options.executionContext.nowMs);
         return envelope;
       }
 
@@ -236,7 +242,9 @@ export class AgentRuntime {
       '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
       '프리픽스 변경, TTS 채널 설정, 기억삭제처럼 기존 명령이 있는 단일 실행 요청도 blocked가 아니라 legacy_command로 넘기세요.',
       '읽기 요청과 실행/삭제/설정/음성 요청이 섞여 있으면 blocked로 답하고 아무 것도 실행하지 마세요.',
-      '채팅/메시지 삭제 요청에 개수나 대상(요청자 본인/채널 전체)이 없으면 clarify로 누구의 채팅을 몇 개 지울지 물어봐요.',
+      '채팅/메시지 삭제 요청에 개수가 있으면 대상이 생략되어도 기본값은 요청자 본인 메시지예요. 예: 채팅 3개 지워줘 -> {"kind":"legacy_command","query":"청소 3"}.',
+      '채팅/메시지 삭제 요청에 개수가 없거나 정말 필요한 정보가 부족할 때만 clarify로 자연스럽게 되물어봐요.',
+      '이전 agent 문맥이 clarify이면 현재 짧은 답변(예: 내꺼, 전체, 3개)을 이전 요청과 합쳐 legacy_command/clarify/blocked 중 하나로 처리해요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
       '허용 출력:',
       '{"kind":"tool_calls","calls":[{"id":"call_1","tool":"time.in_zone","input":{"timeZone":"America/New_York","label":"동부","offsetSeconds":0}}]}',
@@ -281,11 +289,12 @@ export class AgentRuntime {
   private updateTurnContext(
     key: { guildId: string; channelId: string; userId: string },
     envelope: AgentEnvelope,
+    prompt: string,
     calls: readonly AgentToolCall[],
     observations: readonly AgentToolObservation[],
     nowMs: number
   ): void {
-    if (envelope.kind === 'not_handled' || (envelope.kind === 'final' && calls.length === 0)) {
+    if (envelope.kind === 'not_handled' || envelope.kind === 'legacy_command' || (envelope.kind === 'final' && calls.length === 0)) {
       this.contextStore.clear(key);
       return;
     }
@@ -303,6 +312,8 @@ export class AgentRuntime {
     }
     this.contextStore.set(key, {
       lastIntent: inferIntent(calls, envelope),
+      lastUserPrompt: prompt,
+      lastAgentMessage: 'message' in envelope ? envelope.message : undefined,
       lastToolCalls: calls.map((call) => ({ tool: call.tool, input: call.input })),
       slots,
       observations: observations.slice(-4).map((observation) => compactObservation(observation))
@@ -310,6 +321,16 @@ export class AgentRuntime {
   }
 }
 
+
+
+function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): string {
+  return [
+    '현재 사용자 메시지는 이전 clarify 질문에 대한 후속 답변일 수 있어요.',
+    priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
+    priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
+    '현재 답변과 이전 요청을 합쳐 명확해졌다면 legacy_command JSON을 작성하세요. 아직 부족하면 clarify JSON으로 추가 질문하세요. 일반 대화가 확실할 때만 not_handled를 쓰세요.'
+  ].filter(Boolean).join('\n');
+}
 
 function shouldRetryLegacyActionDecision(blockedTools: readonly string[]): boolean {
   return blockedTools.some((tool) => LEGACY_ACTION_TOOL_NAMES.has(tool));
