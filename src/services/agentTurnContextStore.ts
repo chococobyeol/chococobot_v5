@@ -4,7 +4,7 @@ export type AgentTurnKey = {
   userId: string;
 };
 
-export type AgentPendingAction = {
+export type AgentCleanupPendingAction = {
   kind: 'cleanup';
   originalPrompt: string;
   target?: 'self' | 'channel' | 'other' | 'ambiguous';
@@ -12,6 +12,18 @@ export type AgentPendingAction = {
   cleanupEvidence?: string;
   missing: Array<'target' | 'count'>;
 };
+
+export type AgentHistoryPendingAction = {
+  kind: 'history';
+  originalPrompt: string;
+  scope?: 'server' | 'channel';
+  channelRef?: string;
+  query: string;
+  mode: 'qa' | 'summary';
+  missing: Array<'scope' | 'channel'>;
+};
+
+export type AgentPendingAction = AgentCleanupPendingAction | AgentHistoryPendingAction;
 
 export type AgentTurnStoredContext = {
   lastIntent?: string;

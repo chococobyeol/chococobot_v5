@@ -242,6 +242,79 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('query=""');
   });
 
+  it('grounds channel-summary requests in provided current-channel context before asking clarifying questions', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'channel',
+      channelId: 'channel-1',
+      query: '',
+      scannedChannels: 1,
+      matchedMessages: 2,
+      usedMessages: 2,
+      evidence: [
+        { channelId: 'channel-1', authorName: 'ㅊㅋㅂ', timestamp: '2026-05-22T18:00:00.000Z', content: '!? 안녕' },
+        { channelId: 'channel-1', authorName: 'ChococoBot', timestamp: '2026-05-22T18:01:00.000Z', content: '안녕하세요...' }
+      ]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'current-channel', tool: 'history.search', input: { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '이 채널은 인사 테스트 흐름이 있었어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '이 채널 내용 요약해봐', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '이 채널은 인사 테스트 흐름이 있었어요...' });
+    expect(historySearch).toHaveBeenCalledWith(
+      { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary', limit: undefined },
+      expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
+    );
+    const firstPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(firstPrompt).toContain('제공된 현재 채널/서버 문맥으로 범위를 해소할 수 있으면 바로 tool_calls');
+    expect(firstPrompt).toContain('정말 범위를 정할 근거가 없을 때만 pendingAction history가 포함된 clarify');
+  });
+
+  it('repairs a channel-summary clarify follow-up by steering the AI back to history.search', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'channel',
+      channelId: 'channel-1',
+      query: '',
+      scannedChannels: 1,
+      matchedMessages: 1,
+      usedMessages: 1,
+      evidence: [{ channelId: 'channel-1', authorName: 'ㅊㅋㅂ', timestamp: '2026-05-22T18:02:00.000Z', content: '이 채널 내용 요약해봐' }]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '어떤 채널의 내용을 요약해드릴까요?' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'follow-up-channel', tool: 'history.search', input: { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '이 채널 내용 기준으로 요약했어요...' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), store);
+
+    await runtime.run(makeMessage(), '이 채널 내용 요약해봐', makeOptions());
+    const outcome = await runtime.run(makeMessage(), '아니 이채널...', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '이 채널 내용 기준으로 요약했어요...' });
+    expect(historySearch).toHaveBeenCalledWith(
+      { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary', limit: undefined },
+      expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
+    );
+    const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
+    expect(repairPrompt).toContain('이전 clarify 질문: 어떤 채널의 내용을 요약해드릴까요?');
+    expect(repairPrompt).toContain('현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요');
+  });
+
   it('does not fall through to chat when history observations exist and AI returns not_handled', async () => {
     const historySearch = vi.fn(async () => ({
       scope: 'server',

@@ -377,14 +377,17 @@ export class AgentRuntime {
       '대청소/전체/채널 전체처럼 채널 메시지 삭제가 명확하면 {"kind":"legacy_command","query":"대청소 N","cleanupTarget":"channel"}를 사용하고 기존 관리자/확인 경로에 맡겨요.',
       '채팅/메시지 삭제 요청에 개수나 대상이 부족하면 clarify로 자연스럽게 되물어봐요.',
       '채팅/메시지 삭제 clarify를 할 때는 AI가 판단한 슬롯 상태를 pendingAction에 함께 넣어요. 예: {"kind":"clarify","message":"누구 채팅을 몇 개 지울까요?","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","missing":["target","count"]}}',
-      '이전 agent 문맥에 pendingAction이 있으면 현재 짧은 답변(예: 내꺼, 전체, 3개)을 그 pendingAction의 originalPrompt/target/count와 합쳐 legacy_command/clarify/blocked 중 하나로 처리해요.',
+      '대화 기록/요약 clarify를 할 때도 pendingAction을 함께 넣어요. 예: {"kind":"clarify","message":"어느 범위의 대화를 볼까요...","pendingAction":{"kind":"history","originalPrompt":"대화 내용 요약해봐","query":"","mode":"summary","missing":["scope"]}}',
+      '이전 agent 문맥에 pendingAction이 있으면 현재 짧은 답변을 그 pendingAction과 합쳐 처리해요. cleanup은 legacy_command/clarify/blocked 중 하나로, history는 history.search tool_calls 또는 clarify로 처리해요.',
       'pendingAction cleanup에서 target은 self/channel/other/ambiguous 중 하나이고, count는 삭제 개수가 명확할 때만 넣어요. 아직 부족한 슬롯은 missing에 남겨요.',
+      'pendingAction history에서 mode는 qa/summary이고, query는 특정 주제가 없으면 ""예요. 후속 답변은 이전 질문, 현재 사용자 메시지, 현재 채널/서버 문맥을 함께 보고 scope/channelRef/query를 해소해요.',
       '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 짧은 긍정 답변(예: ㅇ, ㅇㅇ, 응, 네, ok)도 맥락상 승인으로 명확하면 confirm_pending이에요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
       '허용 출력:',
       '{"kind":"tool_calls","calls":[{"id":"call_1","tool":"time.in_zone","input":{"timeZone":"America/New_York","label":"동부","offsetSeconds":0}}]}',
       '{"kind":"final","message":"..."}',
       '{"kind":"clarify","message":"...","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","target":"channel","missing":["count"]}}',
+      '{"kind":"clarify","message":"...","pendingAction":{"kind":"history","originalPrompt":"대화 내용 요약해봐","query":"","mode":"summary","missing":["scope"]}}',
       '{"kind":"unavailable","message":"..."}',
       '{"kind":"unavailable","reason":"web_search_unavailable","message":"..."}',
       '{"kind":"blocked","message":"...","blockedTools":["command.cleanup","voice.speak"]}',
@@ -395,7 +398,7 @@ export class AgentRuntime {
       '{"kind":"not_handled"}',
       '미국 시간대 질문은 최소 Eastern/Central/Mountain/Pacific을 각각 time.in_zone으로 호출해요. IANA: America/New_York, America/Chicago, America/Denver, America/Los_Angeles.',
       '이전 맥락이 시간대 목록이면 "그 4군데" 같은 후속 요청에 같은 timeZone 슬롯을 재사용해요.',
-      '대화 내용/기록/찾아봐/검색/요약 요청은 history.search를 사용해요. 서버 전체면 scope=server, 채널 지정이면 scope=channel과 channelRef를 넣어요.',
+      '대화 내용/기록/찾아봐/검색/요약 요청은 history.search를 사용해요. 사용자 발화와 제공된 현재 채널/서버 문맥으로 범위를 해소할 수 있으면 바로 tool_calls를 내고, 정말 범위를 정할 근거가 없을 때만 pendingAction history가 포함된 clarify를 내요.',
       '특정 주제 없이 최근 대화/대화 내용 자체를 요약하라는 요청이면 history.search mode=summary에서 query=""를 사용해요. "최근 대화" 같은 가짜 검색어를 만들지 마세요.',
       'history.search 성공 관찰값이 있으면 같은 요청에서 history.search를 반복 호출하지 말고 기존 evidence로 final을 작성해요.',
       formatWebSearchPolicy(options.webSearch),
@@ -541,7 +544,8 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
-    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 legacy_command JSON을 작성하세요.',
+    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 legacy_command JSON을, history는 history.search tool_calls JSON을 작성하세요.',
+    '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요.',
     '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
     '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 삭제 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
   ].filter(Boolean).join('\n');
@@ -577,7 +581,9 @@ function buildLegacyActionDecisionFeedback(blockedTools: readonly string[], disp
 }
 
 function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
-  if (!isRecord(raw) || raw.kind !== 'cleanup') return undefined;
+  if (!isRecord(raw)) return undefined;
+  if (raw.kind === 'history') return parseHistoryPendingAction(raw);
+  if (raw.kind !== 'cleanup') return undefined;
   const originalPrompt = typeof raw.originalPrompt === 'string' ? raw.originalPrompt.trim() : '';
   if (!originalPrompt) return undefined;
   const target = raw.target === 'self' || raw.target === 'channel' || raw.target === 'other' || raw.target === 'ambiguous'
@@ -590,7 +596,7 @@ function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
     ? raw.cleanupEvidence.trim()
     : undefined;
   const missing = Array.isArray(raw.missing)
-    ? raw.missing.filter((item): item is AgentPendingAction['missing'][number] => item === 'target' || item === 'count')
+    ? raw.missing.filter((item): item is 'target' | 'count' => item === 'target' || item === 'count')
     : [];
   return {
     kind: 'cleanup',
@@ -598,6 +604,30 @@ function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
     ...(target ? { target } : {}),
     ...(count ? { count } : {}),
     ...(cleanupEvidence ? { cleanupEvidence } : {}),
+    missing
+  };
+}
+
+function parseHistoryPendingAction(raw: Record<string, unknown>): AgentPendingAction | undefined {
+  const originalPrompt = typeof raw.originalPrompt === 'string' ? raw.originalPrompt.trim() : '';
+  if (!originalPrompt) return undefined;
+  const scope = raw.scope === 'server' || raw.scope === 'channel' ? raw.scope : undefined;
+  const channelRef = typeof raw.channelRef === 'string' && raw.channelRef.trim()
+    ? raw.channelRef.trim()
+    : undefined;
+  const query = typeof raw.query === 'string' ? raw.query.trim() : '';
+  const mode = raw.mode === 'qa' || raw.mode === 'summary' ? raw.mode : undefined;
+  if (!mode) return undefined;
+  const missing = Array.isArray(raw.missing)
+    ? raw.missing.filter((item): item is 'scope' | 'channel' => item === 'scope' || item === 'channel')
+    : [];
+  return {
+    kind: 'history',
+    originalPrompt,
+    ...(scope ? { scope } : {}),
+    ...(channelRef ? { channelRef } : {}),
+    query,
+    mode,
     missing
   };
 }
