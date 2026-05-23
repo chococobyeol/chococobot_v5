@@ -144,80 +144,104 @@ describe('AgentRuntime', () => {
     expect(observationDiagnostic.observationSummary).not.toContain('짬뽕지존 얘기');
   });
 
-  it('routes mistaken blocked voice-speak decisions to the existing legacy speak command', async () => {
+  it('asks the model to repair mistaken blocked voice-speak decisions into legacy commands', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
-        kind: 'blocked',
-        message: '음성 채널에 들어와서 말하기는 현재 차단된 기능입니다.',
-        blockedTools: ['voice.speak']
-      }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '음성 채널에 들어와서 말하기는 현재 차단된 기능입니다.',
+          blockedTools: ['voice.speak']
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '말 초코코봇 테스트 중이에요' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '일단 음성채널에 들어와서 아무말이나 해봐', makeOptions());
 
     expect(outcome).toEqual({ kind: 'legacy_command', query: '말 초코코봇 테스트 중이에요' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('query는 지원 prefix 명령 목록의 명령/별칭과 인자를 사용해 직접 생성');
   });
 
-  it('keeps mixed read and voice requests blocked instead of rewriting to legacy command', async () => {
+  it('lets the model keep mixed read and voice requests blocked after a repair prompt', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
-        kind: 'blocked',
-        message: '읽기랑 음성 실행이 섞여 있어요.',
-        blockedTools: ['voice.speak']
-      }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '읽기랑 음성 실행이 섞여 있어요.',
+          blockedTools: ['voice.speak']
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '읽기랑 음성 실행이 섞여 있어요.',
+          blockedTools: ['voice.speak']
+        }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '미국 시간대 알려주고 음성으로 말해줘', makeOptions());
 
     expect(outcome).toEqual({ kind: 'blocked', message: '읽기랑 음성 실행이 섞여 있어요.', blockedTools: ['voice.speak'] });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
 
-  it('routes mistaken blocked cleanup decisions to the existing confirmation-gated cleanup command', async () => {
+  it('asks the model to repair mistaken blocked cleanup decisions into legacy commands', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
-        kind: 'blocked',
-        message: '채팅 삭제는 차단된 기능입니다.',
-        blockedTools: ['command.cleanup']
-      }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '채팅 삭제는 차단된 기능입니다.',
+          blockedTools: ['command.cleanup']
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 10' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '채팅 10개 지워줘', makeOptions());
 
     expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 10' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
-  it('routes mistaken blocked mass cleanup decisions to the destructive confirmation path', async () => {
+  it('asks the model to repair mistaken blocked mass cleanup decisions into destructive legacy commands', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
-        kind: 'blocked',
-        message: '전체 채팅 삭제는 차단된 기능입니다.',
-        blockedTools: ['command.mass_cleanup']
-      }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '전체 채팅 삭제는 차단된 기능입니다.',
+          blockedTools: ['command.mass_cleanup']
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '대청소 5' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '전체 채팅 5개 지워줘', makeOptions());
 
     expect(outcome).toEqual({ kind: 'legacy_command', query: '대청소 5' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
-  it('routes non-read-only cleanup tool calls to legacy commands instead of final blocked text', async () => {
+  it('asks the model to repair non-read-only cleanup tool calls into legacy commands', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
-        kind: 'tool_calls',
-        calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { count: 3 } }]
-      }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { count: 3 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '내 채팅 3개 지워줘', makeOptions());
 
     expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3' });
-    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
 
@@ -244,23 +268,27 @@ describe('AgentRuntime', () => {
       message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
     });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('삭제 요청이 모호해요');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('채팅/메시지 삭제처럼 대상이나 개수가 모호하면');
   });
 
 
-  it('routes other single confirmation-gated action blocks through legacy commands', async () => {
+  it('asks the model to repair other single confirmation-gated action blocks through legacy commands', async () => {
     const ai = {
       askMessages: vi
         .fn()
         .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['settings.prefix'] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '프리픽스 ~' }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['settings.tts_channel'] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: 'tts채널' }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['memory.delete'] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '기억삭제' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     await expect(runtime.run(makeMessage(), '프리픽스 ~로 바꿔줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: '프리픽스 ~' });
     await expect(runtime.run(makeMessage(), '여기를 tts 채널로 설정해줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: 'tts채널' });
     await expect(runtime.run(makeMessage(), '서버 AI 기억 초기화해줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: '기억삭제' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(6);
   });
 
 });

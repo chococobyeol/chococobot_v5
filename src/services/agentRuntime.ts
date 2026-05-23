@@ -91,7 +91,7 @@ export class AgentRuntime {
     let validationFeedback: string | null = null;
     let totalToolCalls = 0;
     let blockedOnce = false;
-    let cleanupClarificationRequested = false;
+    let actionDecisionRetryRequested = false;
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
       const messages = this.buildMessages(message, prompt, options, priorContext, observations, validationFeedback);
@@ -135,18 +135,18 @@ export class AgentRuntime {
         continue;
       }
 
-      const envelope = normalizeLegacyActionDecision(parsed.envelope, prompt);
-      if (needsCleanupClarification(prompt) && envelope.kind !== 'clarify') {
+      const envelope = parsed.envelope;
+      if (envelope.kind === 'blocked' && shouldRetryLegacyActionDecision(envelope.blockedTools) && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({
           stage: 'agent',
           event: 'retry',
           runId,
           iteration,
-          decisionKind: 'cleanup_clarify_required'
+          decisionKind: 'legacy_action_decision_required',
+          validationErrors: envelope.blockedTools
         });
-        if (cleanupClarificationRequested) return { kind: 'not_handled' };
-        cleanupClarificationRequested = true;
-        validationFeedback = buildCleanupClarificationFeedback(options.requesterDisplayName);
+        actionDecisionRetryRequested = true;
+        validationFeedback = buildLegacyActionDecisionFeedback(envelope.blockedTools, options.requesterDisplayName);
         continue;
       }
       validationFeedback = null;
@@ -169,12 +169,11 @@ export class AgentRuntime {
       if (nonReadOnly.length > 0) {
         const blockedTools = envelope.calls.filter((call) => this.registry.get(call.tool)?.policy !== 'read_only_auto').map((call) => call.tool);
         const mixed = policies.some((policy) => policy === 'read_only_auto') && nonReadOnly.length > 0;
-        const legacyCommand = mixed ? null : buildLegacyCommandFromPrompt(prompt, blockedTools);
-        if (legacyCommand) {
-          await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'legacy_command' });
-          const legacyEnvelope: AgentEnvelope = { kind: 'legacy_command', query: legacyCommand };
-          this.updateTurnContext(key, legacyEnvelope, toolCalls, observations, options.executionContext.nowMs);
-          return legacyEnvelope;
+        if (!mixed && shouldRetryLegacyActionDecision(blockedTools) && !actionDecisionRetryRequested) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'legacy_action_decision_required', validationErrors: blockedTools });
+          actionDecisionRetryRequested = true;
+          validationFeedback = buildLegacyActionDecisionFeedback(blockedTools, options.requesterDisplayName);
+          continue;
         }
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: mixed ? 'mixed_tool_request' : 'non_auto_tool', validationErrors: blockedTools });
         for (const call of envelope.calls) {
@@ -188,6 +187,7 @@ export class AgentRuntime {
           return { kind: 'blocked', message: messageText, blockedTools };
         }
         blockedOnce = true;
+        if (mixed) actionDecisionRetryRequested = true;
         validationFeedback = ['방금 요청한 도구는 정책상 실행하지 않았고 관찰값으로 blocked를 추가했어요.', '이제 도구 호출 없이 final 또는 blocked JSON으로 사용자에게 짧게 설명하세요.'].join('\n');
         continue;
       }
@@ -311,113 +311,28 @@ export class AgentRuntime {
 }
 
 
-function normalizeLegacyActionDecision(envelope: AgentEnvelope, prompt: string): AgentEnvelope {
-  if (envelope.kind !== 'blocked') return envelope;
-  const legacyCommand = buildLegacyCommandFromPrompt(prompt, envelope.blockedTools);
-  return legacyCommand ? { kind: 'legacy_command', query: legacyCommand } : envelope;
+function shouldRetryLegacyActionDecision(blockedTools: readonly string[]): boolean {
+  return blockedTools.some((tool) => LEGACY_ACTION_TOOL_NAMES.has(tool));
 }
 
-function buildLegacyCommandFromPrompt(prompt: string, blockedTools: readonly string[]): string | null {
-  if (hasReadOnlyIntent(prompt)) return null;
-  if (blockedTools.includes('voice.speak')) return buildVoiceLegacyCommand(prompt);
-  if (blockedTools.includes('command.cleanup') || blockedTools.includes('command.mass_cleanup')) return buildCleanupLegacyCommand(prompt, blockedTools);
-  if (blockedTools.includes('settings.prefix')) return buildPrefixLegacyCommand(prompt);
-  if (blockedTools.includes('settings.tts_channel')) return buildTtsChannelLegacyCommand(prompt);
-  if (blockedTools.includes('memory.delete')) return buildMemoryDeleteLegacyCommand(prompt);
-  return null;
-}
+const LEGACY_ACTION_TOOL_NAMES = new Set([
+  'voice.speak',
+  'command.cleanup',
+  'command.mass_cleanup',
+  'settings.prefix',
+  'settings.tts_channel',
+  'memory.delete'
+]);
 
-
-function buildPrefixLegacyCommand(prompt: string): string | null {
-  const normalized = prompt.trim();
-  if (!/프리픽스|prefix/i.test(normalized)) return null;
-  const reset = normalized.match(/해제|기본|default|reset|clear|none|초기화/i);
-  if (reset) return '프리픽스 초기화';
-  const value = normalized.match(/(?:프리픽스|prefix)[^!?.~]{0,20}([!?.~])/i)?.[1] ?? normalized.match(/([!?.~])(?:로|으로)?\s*(?:바꿔|변경|설정)/)?.[1];
-  return value ? `프리픽스 ${value}` : null;
-}
-
-function buildTtsChannelLegacyCommand(prompt: string): string | null {
-  const normalized = prompt.trim();
-  if (!/(?:tts|TTS)\s*채널|채널\s*(?:tts|TTS)|읽을\s*채널/i.test(normalized)) return null;
-  if (/해제|끄기|off|disable|unset|clear|none|없음|초기화/i.test(normalized)) return 'tts채널 해제';
-  const channelRef = normalized.match(/<#\d+>|#\S+|\b\d{10,}\b/)?.[0];
-  if (channelRef) return `tts채널 ${channelRef}`;
-  if (/여기|현재|이\s*채널|this\s+channel/i.test(normalized)) return 'tts채널';
-  return null;
-}
-
-function buildMemoryDeleteLegacyCommand(prompt: string): string | null {
-  const normalized = prompt.trim();
-  if (!/기억|메모리|memory/i.test(normalized)) return null;
-  if (!/삭제|초기화|지워|reset|clear|delete/i.test(normalized)) return null;
-  return '기억삭제';
-}
-
-function buildVoiceLegacyCommand(prompt: string): string | null {
-  const normalized = prompt.trim();
-  if (!normalized || hasReadOnlyIntent(normalized)) return null;
-  const lower = normalized.toLowerCase();
-  const hasVoiceContext = /음성|보이스|voice|tts|채널/.test(lower);
-  const hasSpeakIntent = /말해|말하|말\s|아무말|읽어|읽기|읽어줘|speak|say|tts/.test(lower);
-  if (!hasSpeakIntent) return null;
-
-  const quoted = normalized.match(/["“”'‘’「『](.{1,180}?)["“”'’」』]/);
-  const said = normalized.match(/(.{1,180}?)(?:이라고|라고)\s*(?:말해|말하|읽어|읽|해봐|해줘|speak|say)/i);
-  const direct = normalized.match(/^(?:말해?|say|speak|tts|읽어|읽어줘)\s+(.{1,180})$/i);
-  const text = cleanVoiceText(quoted?.[1] ?? said?.[1] ?? direct?.[1] ?? '');
-  if (text) return `말 ${text}`;
-  if (hasVoiceContext && /아무말|말해|말하|읽어|speak|say|tts/.test(lower)) return '말 초코코봇 테스트 중이에요';
-  return null;
-}
-
-
-function buildCleanupLegacyCommand(prompt: string, blockedTools: readonly string[]): string | null {
-  const normalized = prompt.trim();
-  if (!normalized) return null;
-  const lower = normalized.toLowerCase();
-  const hasCleanupIntent = /청소|삭제|지워|치워|정리|clean|clear|purge|delete/.test(lower) && /채팅|메시지|메세지|글|말|message|chat|개/.test(lower);
-  if (!hasCleanupIntent) return null;
-  const count = normalized.match(/(\d{1,4})\s*(?:개|건|줄|messages?|chats?)?/i)?.[1];
-  if (!count) return null;
-  const wantsOwnOnly = /내\s*(?:가\s*)?(?:채팅|메시지|메세지|글)|내것|내꺼|내\s*말|내\s*최근|my\s+(?:messages?|chat)/i.test(normalized);
-  const wantsAll = /대청소|전체|모든|전부|채널|서버|남의|다\s*지워|싹|purge|bulk|all|everyone/i.test(normalized);
-  if (blockedTools.includes('command.mass_cleanup') || (wantsAll && !wantsOwnOnly)) return `대청소 ${count}`;
-  return `청소 ${count}`;
-}
-
-function needsCleanupClarification(prompt: string): boolean {
-  const normalized = prompt.trim();
-  if (!normalized || hasReadOnlyIntent(normalized)) return false;
-  const lower = normalized.toLowerCase();
-  const hasCleanupIntent = /청소|삭제|지워|치워|정리|clean|clear|purge|delete/.test(lower) && /채팅|메시지|메세지|글|말|message|chat/.test(lower);
-  if (!hasCleanupIntent) return false;
-  return !/(\d{1,4})\s*(?:개|건|줄|messages?|chats?)?/i.test(normalized);
-}
-
-function buildCleanupClarificationFeedback(displayName?: string): string {
+function buildLegacyActionDecisionFeedback(blockedTools: readonly string[], displayName?: string): string {
   return [
-    '삭제 요청이 모호해요. 도구 호출/legacy_command/blocked/final로 처리하지 말고 clarify JSON으로만 답하세요.',
-    '질문에는 지울 대상이 요청자 본인 메시지인지 채널 전체인지, 그리고 몇 개를 지울지 확인하는 내용을 자연스럽게 담으세요.',
-    displayName ? `요청자 표시 이름은 ${displayName}예요. 필요하면 이 이름을 사용하세요.` : undefined
+    `이전 응답은 ${blockedTools.join(', ')}를 blocked/tool_calls로 처리했지만, 기존 prefix 명령으로 넘길 수 있는 단일 실행 요청일 수 있어요.`,
+    '사용자 요청을 직접 다시 판단하세요. 명확한 단일 기존 명령이면 legacy_command JSON을 작성하고 query는 지원 prefix 명령 목록의 명령/별칭과 인자를 사용해 직접 생성하세요.',
+    '채팅/메시지 삭제처럼 대상이나 개수가 모호하면 legacy_command를 만들지 말고 clarify JSON으로 자연스럽게 되물어보세요.',
+    '읽기 요청과 실행 요청이 섞였거나 기존 명령으로 안전하게 표현할 수 없으면 blocked JSON으로 답하세요.',
+    '비자동 도구를 tool_calls로 다시 호출하지 마세요.',
+    displayName ? `요청자 표시 이름은 ${displayName}예요. 필요하면 clarify 문장에 반영하세요.` : undefined
   ].filter(Boolean).join('\n');
-}
-
-function cleanVoiceText(value: string): string {
-  return value
-    .replace(/^(?:음성\s*채널에\s*)?(?:들어와서|들어와|와서|가서)\s*/u, '')
-    .replace(/^(?:나한테|여기에|채널에서)\s*/u, '')
-    .replace(/\s*(?:좀|한번|해줘|해봐|줘|해라)[.!?。…\s]*$/u, '')
-    .trim()
-    .slice(0, 200);
-}
-
-function hasReadOnlyIntent(value: string): boolean {
-  const lower = value.toLowerCase();
-  const readIntent = /몇\s*시|시간대|현재\s*시간|지금\s*시간|대화\s*내용|기록|로그|찾아|검색|요약|조회|알려\s*주고|알려주고|찾고|검색하고|요약하고/.test(lower);
-  const actionJoiner = /그리고|하고|한\s*다음|후에|\+|,/.test(lower);
-  const actionIntent = /말해|읽어|음성|voice|tts|speak|say|삭제|지워|청소|정리|delete|clean|clear|purge/.test(lower);
-  return readIntent && (actionJoiner || actionIntent);
 }
 
 function parseAgentEnvelope(response: string): ParseResult {
