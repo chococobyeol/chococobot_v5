@@ -166,6 +166,19 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'legacy_command', query: '말 초코코봇 테스트 중이에요' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('query는 지원 prefix 명령 목록의 명령/별칭과 인자를 사용해 직접 생성');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('자동 입장 가능한 기존 "말 <문장>" 명령 하나');
+  });
+
+  it('tells the model that join-and-speak is one speak command when text is clear', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '말 안녕' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '음성채널에 들어와서 안녕이라고 말해', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '말 안녕' });
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('기존 말 명령은 필요하면 먼저 사용자의 음성 채널에 자동 입장');
   });
 
   it('lets the model keep mixed read and voice requests blocked after a repair prompt', async () => {

@@ -283,6 +283,8 @@ export class AgentRuntime {
       '읽기 전용 도구는 필요한 만큼 여러 번 호출하고, 관찰값을 본 뒤 한국어로 자연스럽게 final을 작성해요.',
       '삭제/설정/관리/음성 말하기 같은 실행 도구는 임의 agent loop에서 자동 실행하지 않아요.',
       '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
+      '사용자가 "음성 채널에 들어와서 X라고 말해"처럼 입장과 말하기를 함께 요청하고 말할 내용 X가 명확하면 {"kind":"legacy_command","query":"말 X"}를 사용해요. 기존 말 명령은 필요하면 먼저 사용자의 음성 채널에 자동 입장해요.',
+      '음성 채널에 들어오라는 요청만 명확하면 {"kind":"legacy_command","query":"들어와"}를 사용하고, 말하라는 요청인데 말할 내용이 없으면 clarify로 자연스럽게 물어봐요.',
       '프리픽스 변경, TTS 채널 설정, 기억삭제처럼 기존 명령이 있는 단일 실행 요청도 blocked가 아니라 legacy_command로 넘기세요.',
       '읽기 요청과 실행/삭제/설정/음성 요청이 섞여 있으면 blocked로 답하고 아무 것도 실행하지 마세요.',
       '채팅/메시지 삭제 요청에서 그냥 "채팅 3개"처럼 대상이 생략되면 요청자 본인 메시지라고 단정하지 말고 clarify로 누구 채팅인지 물어봐요.',
@@ -473,6 +475,8 @@ function buildLegacyActionDecisionFeedback(blockedTools: readonly string[], disp
   return [
     `이전 응답은 ${blockedTools.join(', ')}를 blocked/tool_calls로 처리했지만, 기존 prefix 명령으로 넘길 수 있는 단일 실행 요청일 수 있어요.`,
     '사용자 요청을 직접 다시 판단하세요. 명확한 단일 기존 명령이면 legacy_command JSON을 작성하고 query는 지원 prefix 명령 목록의 명령/별칭과 인자를 사용해 직접 생성하세요.',
+    '음성 채널에 들어와서 어떤 문장을 말하라는 요청은 "들어와"와 "말"을 따로 내지 말고, 자동 입장 가능한 기존 "말 <문장>" 명령 하나로 표현하세요.',
+    '말할 문장이 없고 그냥 말하라는 요청이면 legacy_command를 만들지 말고 clarify로 무슨 말을 할지 물어보세요.',
     '채팅/메시지 삭제에서 대상이 생략되면 요청자 본인 메시지라고 단정하지 마세요. 본인 대상임을 보여주는 사용자 원문 일부를 cleanupEvidence로 그대로 복사할 수 있을 때만 cleanupTarget=self와 함께 청소 N을 사용하고, 그냥 채팅 N개는 clarify로 누구 채팅인지 물어보세요.',
     '특정 다른 사람 메시지만 지우는 요청은 지원하지 않아요. 요청자 본인 청소 또는 관리자용 대청소만 가능하다고 안내하세요. 대청소는 cleanupTarget=channel을 넣으세요.',
     '읽기 요청과 실행 요청이 섞였거나 기존 명령으로 안전하게 표현할 수 없으면 blocked JSON으로 답하세요.',
