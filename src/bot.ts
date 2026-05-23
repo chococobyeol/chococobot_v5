@@ -1473,7 +1473,7 @@ async function handleChannelHistoryPlan(
     }).catch((logError) => logger.warn('Failed to log channel-history diagnostic:', logError));
     const details = extractErrorDetails(error);
     const content = details.status === 429
-      ? 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...'
+      ? '지금 AI 요청이 몰려서 잠시 지연되고 있어요... 조금 뒤에 다시 시도해 주세요...'
       : details.errorMessage || '채널 기록을 확인하지 못했어요... 다시 시도해 주세요...';
     await message.reply({ content, allowedMentions: { repliedUser: false } });
   }
@@ -1683,7 +1683,7 @@ async function handleGuildChannelHistoryPlan(
     }).catch((logError) => logger.warn('Failed to log guild channel-history diagnostic:', logError));
     const details = extractErrorDetails(error);
     const content = details.status === 429
-      ? 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...'
+      ? '지금 AI 요청이 몰려서 잠시 지연되고 있어요... 조금 뒤에 다시 시도해 주세요...'
       : details.errorMessage || '최근 대화를 확인하지 못했어요... 다시 시도해 주세요...';
     await message.reply({ content, allowedMentions: { repliedUser: false } });
   }
@@ -1892,7 +1892,7 @@ async function handleAiCommandPlannerPrompt(
   } catch (error) {
     if (isRateLimitLike(error)) {
       await logPlannerDiagnostic(message, context, { event: 'rate_limit', error });
-      await message.reply({ content: 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
+      await message.reply({ content: '지금 AI 요청이 몰려서 잠시 지연되고 있어요... 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
       return true;
     }
     await logPlannerDiagnostic(message, context, { event: 'error', error });
@@ -1976,7 +1976,7 @@ async function handleAiPrompt(
     } catch (error) {
       if (isRateLimitLike(error)) {
         await logAgentDiagnostic(message, context, { stage: 'agent', event: 'rate_limit', error });
-        await message.reply({ content: 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
+        await message.reply({ content: '지금 AI 요청이 몰려서 잠시 지연되고 있어요... 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
         return true;
       }
       await logAgentDiagnostic(message, context, { stage: 'agent', event: 'error', error });
