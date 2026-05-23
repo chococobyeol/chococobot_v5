@@ -153,7 +153,14 @@ export class AgentRuntime {
       const nonReadOnly = policies.filter((policy) => policy !== 'read_only_auto');
       if (nonReadOnly.length > 0) {
         const blockedTools = envelope.calls.filter((call) => this.registry.get(call.tool)?.policy !== 'read_only_auto').map((call) => call.tool);
-        const mixed = envelope.calls.length > 1;
+        const mixed = policies.some((policy) => policy === 'read_only_auto') && nonReadOnly.length > 0;
+        const legacyCommand = mixed ? null : buildLegacyCommandFromPrompt(prompt, blockedTools);
+        if (legacyCommand) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'legacy_command' });
+          const legacyEnvelope: AgentEnvelope = { kind: 'legacy_command', query: legacyCommand };
+          this.updateTurnContext(key, legacyEnvelope, toolCalls, observations, options.executionContext.nowMs);
+          return legacyEnvelope;
+        }
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: mixed ? 'mixed_tool_request' : 'non_auto_tool', validationErrors: blockedTools });
         for (const call of envelope.calls) {
           const policy = this.registry.get(call.tool)?.policy ?? 'blocked';
@@ -287,9 +294,16 @@ export class AgentRuntime {
 
 
 function normalizeLegacyActionDecision(envelope: AgentEnvelope, prompt: string): AgentEnvelope {
-  if (envelope.kind !== 'blocked' || !envelope.blockedTools.includes('voice.speak')) return envelope;
-  const voiceCommand = buildVoiceLegacyCommand(prompt);
-  return voiceCommand ? { kind: 'legacy_command', query: voiceCommand } : envelope;
+  if (envelope.kind !== 'blocked') return envelope;
+  const legacyCommand = buildLegacyCommandFromPrompt(prompt, envelope.blockedTools);
+  return legacyCommand ? { kind: 'legacy_command', query: legacyCommand } : envelope;
+}
+
+function buildLegacyCommandFromPrompt(prompt: string, blockedTools: readonly string[]): string | null {
+  if (hasReadOnlyIntent(prompt)) return null;
+  if (blockedTools.includes('voice.speak')) return buildVoiceLegacyCommand(prompt);
+  if (blockedTools.includes('command.cleanup') || blockedTools.includes('command.mass_cleanup')) return buildCleanupLegacyCommand(prompt, blockedTools);
+  return null;
 }
 
 function buildVoiceLegacyCommand(prompt: string): string | null {
@@ -309,6 +323,21 @@ function buildVoiceLegacyCommand(prompt: string): string | null {
   return null;
 }
 
+
+function buildCleanupLegacyCommand(prompt: string, blockedTools: readonly string[]): string | null {
+  const normalized = prompt.trim();
+  if (!normalized) return null;
+  const lower = normalized.toLowerCase();
+  const hasCleanupIntent = /청소|삭제|지워|치워|정리|clean|clear|purge|delete/.test(lower) && /채팅|메시지|메세지|글|말|message|chat|개/.test(lower);
+  if (!hasCleanupIntent) return null;
+  const count = normalized.match(/(\d{1,4})\s*(?:개|건|줄|messages?|chats?)?/i)?.[1];
+  const countArg = count ? ` ${count}` : '';
+  const wantsOwnOnly = /내\s*(?:가\s*)?(?:채팅|메시지|메세지|글)|내것|내꺼|내\s*말|내\s*최근|my\s+(?:messages?|chat)/i.test(normalized);
+  const wantsAll = /대청소|전체|모든|전부|채널|서버|남의|다\s*지워|싹|purge|bulk|all|everyone/i.test(normalized);
+  if (blockedTools.includes('command.mass_cleanup') || (wantsAll && !wantsOwnOnly)) return `대청소${countArg}`;
+  return `청소${countArg}`;
+}
+
 function cleanVoiceText(value: string): string {
   return value
     .replace(/^(?:음성\s*채널에\s*)?(?:들어와서|들어와|와서|가서)\s*/u, '')
@@ -320,9 +349,10 @@ function cleanVoiceText(value: string): string {
 
 function hasReadOnlyIntent(value: string): boolean {
   const lower = value.toLowerCase();
-  const readIntent = /몇\s*시|시간대|현재\s*시간|대화\s*내용|기록|로그|찾아|검색|요약|조회|알려\s*주고|알려주고|찾고|검색하고|요약하고/.test(lower);
+  const readIntent = /몇\s*시|시간대|현재\s*시간|지금\s*시간|대화\s*내용|기록|로그|찾아|검색|요약|조회|알려\s*주고|알려주고|찾고|검색하고|요약하고/.test(lower);
   const actionJoiner = /그리고|하고|한\s*다음|후에|\+|,/.test(lower);
-  return readIntent && (actionJoiner || /말해|읽어|음성|voice|tts|speak|say/.test(lower));
+  const actionIntent = /말해|읽어|음성|voice|tts|speak|say|삭제|지워|청소|정리|delete|clean|clear|purge/.test(lower);
+  return readIntent && (actionJoiner || actionIntent);
 }
 
 function parseAgentEnvelope(response: string): ParseResult {

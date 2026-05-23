@@ -1399,6 +1399,37 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
+
+
+  it('executes AgentRuntime single user cleanup legacy commands without an extra confirmation prompt', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'legacy_command', query: '청소 2' }))
+      }
+    });
+    const message = makeMessage('!? 채팅 2개 지워줘');
+    const cleanupChannel = message.channel as any;
+    cleanupChannel.messages = {
+      fetch: vi.fn(async () =>
+        new Collection([
+          ['cmd', { id: 'cmd', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['1', { id: '1', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }],
+          ['2', { id: '2', author: { id: 'user-1' }, createdTimestamp: Date.now(), delete: vi.fn(async () => undefined) }]
+        ])
+      )
+    };
+    cleanupChannel.bulkDelete = vi.fn(async (items: any[]) => new Collection(items.map((item) => [item.id, item])));
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
+    expect(message.reply).not.toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('확인 토큰')
+    }));
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
   it('falls back from AgentRuntime not_handled to chat without natural-language command execution', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({

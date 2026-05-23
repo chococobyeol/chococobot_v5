@@ -174,4 +174,50 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'blocked', message: '읽기랑 음성 실행이 섞여 있어요.', blockedTools: ['voice.speak'] });
   });
 
+
+  it('routes mistaken blocked cleanup decisions to the existing confirmation-gated cleanup command', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'blocked',
+        message: '채팅 삭제는 차단된 기능입니다.',
+        blockedTools: ['command.cleanup']
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '채팅 10개 지워줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 10' });
+  });
+
+  it('routes mistaken blocked mass cleanup decisions to the destructive confirmation path', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'blocked',
+        message: '전체 채팅 삭제는 차단된 기능입니다.',
+        blockedTools: ['command.mass_cleanup']
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '전체 채팅 5개 지워줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '대청소 5' });
+  });
+
+  it('routes non-read-only cleanup tool calls to legacy commands instead of final blocked text', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'tool_calls',
+        calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { count: 3 } }]
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '내 채팅 3개 지워줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+  });
+
 });

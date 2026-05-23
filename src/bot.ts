@@ -1127,7 +1127,8 @@ async function dispatchPlannerCommand(
   commands: Collection<string, PrefixCommand>,
   context: BotContext,
   confirmations: ConfirmationManager,
-  query: string
+  query: string,
+  options: { allowUserCleanupWithoutConfirmation?: boolean } = {}
 ): Promise<boolean> {
   const safety = classifyCommandQuery(query, commands);
   await logPlannerDiagnostic(message, context, {
@@ -1139,6 +1140,10 @@ async function dispatchPlannerCommand(
   if (safety.level === 'unknown') {
     await message.reply({ content: '어떤 명령을 실행해야 할지 확실하지 않아요... 조금 더 구체적으로 말해 주세요...', allowedMentions: { repliedUser: false } });
     return true;
+  }
+
+  if (options.allowUserCleanupWithoutConfirmation && safety.level === 'needs-confirmation' && safety.intent === 'cleanup') {
+    return dispatchCommandQuery(message, commands, context, query);
   }
 
   if (safety.level === 'needs-confirmation' || safety.level === 'destructive') {
@@ -1666,7 +1671,7 @@ export async function handleMessageCreate(
               await replyWithChunks(message, outcome.message);
               return true;
             case 'legacy_command':
-              return dispatchPlannerCommand(message, commands, context, confirmations, outcome.query);
+              return dispatchPlannerCommand(message, commands, context, confirmations, outcome.query, { allowUserCleanupWithoutConfirmation: true });
             case 'not_handled':
               if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
               await context.aiChat.handlePrompt(message, aiPrompt);
