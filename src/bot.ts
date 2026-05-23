@@ -41,6 +41,7 @@ const MAX_TTS_COMMAND_CHARS = 500;
 const CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT = 1;
 const PENDING_CHANNEL_HISTORY_TTL_MS = 5 * 60 * 1000;
 const MAX_AUTO_HISTORY_CHANNELS = 20;
+const CONFIRMATION_MESSAGE_ATTEMPTS = 2;
 
 type PendingChannelHistoryRequest = {
   mode: 'summary' | 'qa';
@@ -1009,53 +1010,87 @@ async function buildConfirmationMessage(
   commandQuery: string
 ): Promise<string> {
   const expiresTag = `<t:${Math.floor(expiresAt / 1000)}:R>`;
-  try {
-    const response = await context.ai.askMessagesDetailed({
-      guildId: message.guildId ?? 'dm',
-      userId: message.author.id,
-      usageScope: 'agent',
-      maxCompletionTokens: 120,
-      messages: [
-        {
-          role: 'system',
-          content: [
-            '너는 Discord 봇 ChococoBot의 확인 안내 문구 작성자예요.',
-            '사용자에게 보낼 자연스러운 한국어 확인 질문 한 개만 작성해요.',
-            '고정 템플릿처럼 쓰지 말고 상황에 맞게 말투를 자연스럽게 바꿔요.',
-            '내부 확인 토큰, UUID, 처리 흐름, JSON, 코드펜스는 절대 쓰지 마세요.',
-            '아직 실행된 것처럼 말하지 말고, 진행해도 되는지 확인하는 문장이어야 해요.',
-            '사용자가 승인/거절을 자연스럽게 답할 수 있음을 짧게 알려도 돼요.',
-            `확인 만료 시각을 언급한다면 Discord timestamp ${expiresTag}를 그대로 사용하세요.`
-          ].join('\n')
-        },
+  const messages: AiChatMessage[] = buildConfirmationPromptMessages(preview, commandQuery, expiresTag);
+  for (let attempt = 1; attempt <= CONFIRMATION_MESSAGE_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await context.ai.askMessagesDetailed({
+        guildId: message.guildId ?? 'dm',
+        userId: message.author.id,
+        usageScope: 'agent',
+        maxCompletionTokens: 120,
+        messages
+      });
+      const validation = validateConfirmationMessage(response.content);
+      if (validation.ok) return validation.content;
+      messages.push(
+        { role: 'assistant', content: response.content },
         {
           role: 'user',
           content: [
+            `방금 응답은 사용자에게 보낼 수 없어요: ${validation.reason}`,
+            '내부 오류/빈 응답/토큰/JSON 없이, 상황에 맞는 확인 질문을 자연스럽게 다시 작성하세요.',
             `확인할 작업: ${preview}`,
-            `실행될 기존 명령: ${commandQuery}`,
             `만료: ${expiresTag}`
           ].join('\n')
         }
-      ]
-    });
-    return sanitizeConfirmationMessage(response.content, preview, expiresTag);
-  } catch (error) {
-    logger.warn('Failed to generate confirmation message with AI; using safe fallback:', error);
-    return safeConfirmationFallback(preview, expiresTag);
+      );
+    } catch (error) {
+      logger.warn('Failed to generate confirmation message with AI; retrying or using safe fallback:', error);
+      messages.push({
+        role: 'user',
+        content: [
+          '이전 확인 안내 생성 호출이 실패했어요.',
+          '사용자에게 보낼 자연스러운 확인 질문만 다시 작성하세요.',
+          `확인할 작업: ${preview}`,
+          `만료: ${expiresTag}`
+        ].join('\n')
+      });
+    }
   }
+  return safeConfirmationFallback(preview, expiresTag);
 }
 
-function sanitizeConfirmationMessage(content: string, preview: string, expiresTag: string): string {
+function buildConfirmationPromptMessages(preview: string, commandQuery: string, expiresTag: string): AiChatMessage[] {
+  return [
+    {
+      role: 'system',
+      content: [
+        '너는 Discord 봇 ChococoBot의 확인 안내 문구 작성자예요.',
+        '사용자에게 보낼 자연스러운 한국어 확인 질문 한 개만 작성해요.',
+        '고정 템플릿처럼 쓰지 말고 상황에 맞게 말투를 자연스럽게 바꿔요.',
+        '내부 확인 토큰, UUID, 처리 흐름, JSON, 코드펜스는 절대 쓰지 마세요.',
+        '아직 실행된 것처럼 말하지 말고, 진행해도 되는지 확인하는 문장이어야 해요.',
+        '사용자가 승인/거절을 자연스럽게 답할 수 있음을 짧게 알려도 돼요.',
+        `확인 만료 시각을 언급한다면 Discord timestamp ${expiresTag}를 그대로 사용하세요.`
+      ].join('\n')
+    },
+    {
+      role: 'user',
+      content: [
+        `확인할 작업: ${preview}`,
+        `실행될 기존 명령: ${commandQuery}`,
+        `만료: ${expiresTag}`
+      ].join('\n')
+    }
+  ];
+}
+
+function validateConfirmationMessage(content: string): { ok: true; content: string } | { ok: false; reason: string } {
   const cleaned = content
     .replace(/```(?:\w+)?/g, '')
     .replace(/```/g, '')
     .trim()
     .slice(0, 900);
-  if (!cleaned) return safeConfirmationFallback(preview, expiresTag);
-  if (/확인\s*토큰|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu.test(cleaned)) {
-    return safeConfirmationFallback(preview, expiresTag);
+  if (!cleaned || cleaned === '응답이 비어 있어요...') {
+    return { ok: false, reason: '빈 응답이에요.' };
   }
-  return cleaned;
+  if (/확인\s*토큰|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu.test(cleaned)) {
+    return { ok: false, reason: '내부 확인 토큰이 노출됐어요.' };
+  }
+  if (/^\s*\{[\s\S]*\}\s*$/u.test(cleaned)) {
+    return { ok: false, reason: '사용자용 문장이 아니라 JSON이에요.' };
+  }
+  return { ok: true, content: cleaned };
 }
 
 function safeConfirmationFallback(preview: string, expiresTag: string): string {

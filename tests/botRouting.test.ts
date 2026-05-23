@@ -413,6 +413,59 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
+  it('retries invalid AI confirmation copy instead of sending an empty-response placeholder', async () => {
+    const commands = createPrefixCommands();
+    const askMessagesDetailed = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: '응답이 비어 있어요...',
+        model: 'test-model',
+        usageScope: 'agent',
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        rateLimitHeaders: {}
+      })
+      .mockResolvedValueOnce({
+        content: '채널 채팅 2개를 지워도 될까요? 괜찮으면 편하게 답해 주세요.',
+        model: 'test-model',
+        usageScope: 'agent',
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        rateLimitHeaders: {}
+      });
+    const context = makeContext({
+      ai: {
+        askMessages: vi.fn(async () => '채널 기록 답변'),
+        askMessagesDetailed
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '대청소 2' }))
+      }
+    });
+    const message = makeMessage('!? 전체 채팅 2개 지워줘', {
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(askMessagesDetailed).toHaveBeenCalledTimes(2);
+    expect(askMessagesDetailed.mock.calls[1][0].messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: expect.stringContaining('사용자에게 보낼 수 없어요') })
+    ]));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('채널 채팅 2개를 지워도 될까요?')
+    }));
+    expect(message.reply).not.toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('응답이 비어 있어요')
+    }));
+  });
+
   it('executes pending confirmation when AI interprets the prefix reply as approval', async () => {
     const commands = createPrefixCommands();
     const confirmations = new ConfirmationManager();
