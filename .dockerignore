@@ -1,0 +1,11 @@
+.git
+.omx
+node_modules
+dist
+data
+coverage
+*.log
+.env
+.env.*
+!.env.smoke
+.DS_Store

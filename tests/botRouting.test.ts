@@ -73,12 +73,21 @@ function makeContext(overrides: Record<string, unknown> = {}) {
       cleanMineDefaultTarget: 500,
       cleanMineMaxLimit: 500,
       cleanAllDefaultTarget: 1000,
-      cleanAllMaxLimit: 1000
+      cleanAllMaxLimit: 1000,
+      webSearchEnabled: true,
+      webSearchProvider: 'searxng',
+      webSearchBaseUrl: 'http://search.local',
+      webSearchTimeoutMs: 5000,
+      webSearchResultCount: 3,
+      webSearchDefaultMode: 'search_first_factual'
     },
     voiceSettings,
     aiChat: {
       handlePrompt: vi.fn(async () => true),
       resetGuildMemory: vi.fn(async () => undefined)
+    },
+    webSearchProvider: {
+      status: vi.fn(() => 'ready')
     },
     ai: {
       askMessages: vi.fn(async () => '채널 기록 답변'),
@@ -1664,6 +1673,72 @@ describe('handleMessageCreate', () => {
 
     expect(context.voice.join).not.toHaveBeenCalled();
     expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '들어와');
+  });
+
+  it('shows and changes guild web-search mode with administrator-only command mutations', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext();
+
+    const show = makeMessage('!웹검색 현재');
+    await handleMessageCreate(show, commands, context as any, new ConfirmationManager());
+    expect(show.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('현재 웹 검색 모드: search_first_factual')
+    }));
+
+    const denied = makeMessage('!웹검색 disabled');
+    await handleMessageCreate(denied, commands, context as any, new ConfirmationManager());
+    expect(context.voiceSettings.getGuildWebSearchMode('guild-1')).toBeUndefined();
+    expect(denied.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('서버 관리자만 웹 검색 모드를 바꿀 수 있어요')
+    }));
+
+    const admin = makeMessage('!웹검색 automatic', {
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+    await handleMessageCreate(admin, commands, context as any, new ConfirmationManager());
+    expect(context.voiceSettings.getGuildWebSearchMode('guild-1')).toBe('automatic');
+    expect(admin.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('automatic')
+    }));
+  });
+
+  it('routes natural-language web-search mode changes through confirmation before mutating settings', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext();
+    const confirmations = new ConfirmationManager();
+    const adminMember = {
+      displayName: '관리자',
+      permissions: { has: vi.fn(() => true) },
+      voice: { channel: { id: 'voice-1' } }
+    };
+
+    const first = makeMessage('!? 웹검색 disabled', { member: adminMember });
+    await handleMessageCreate(first, commands, context as any, confirmations);
+
+    expect(context.voiceSettings.getGuildWebSearchMode('guild-1')).toBeUndefined();
+    expect(confirmations.latestForActor({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toMatchObject({
+      intent: 'web-search',
+      preview: '웹 검색 모드를 바꿀까요?',
+      commandQuery: '웹검색 disabled'
+    });
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('AI 확인 안내')
+    }));
+
+    context.agentRuntime = {
+      run: vi.fn(async () => ({ kind: 'confirm_pending' }))
+    } as any;
+    const second = makeMessage('!? ㅇㅇ', { id: 'message-2', member: adminMember });
+    await handleMessageCreate(second, commands, context as any, confirmations);
+
+    expect(context.voiceSettings.getGuildWebSearchMode('guild-1')).toBe('disabled');
+    expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('disabled')
+    }));
   });
 
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {

@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import type { WebSearchMode } from './webSearchService.js';
 
 export type UserVoiceSetting = {
   guildId: string;
@@ -35,6 +36,8 @@ export interface VoiceSettingsStore {
   setAiChannelId(guildId: string, channelId: string | undefined): void;
   getCommandPrefix(guildId: string): string | undefined;
   setCommandPrefix(guildId: string, prefix: string | undefined): void;
+  getGuildWebSearchMode(guildId: string): WebSearchMode | undefined;
+  setGuildWebSearchMode(guildId: string, mode: WebSearchMode | undefined): void;
   getUserTimeZone(guildId: string, userId: string): string | undefined;
   setUserTimeZone(guildId: string, userId: string, timeZone: string | undefined): void;
   close?(): void;
@@ -79,6 +82,12 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
       CREATE TABLE IF NOT EXISTS guild_prefix_settings (
         guild_id TEXT NOT NULL PRIMARY KEY,
         prefix TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS guild_web_search_settings (
+        guild_id TEXT NOT NULL PRIMARY KEY,
+        mode TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
 
@@ -200,6 +209,28 @@ export class SqliteVoiceSettingsStore implements VoiceSettingsStore {
       .run(guildId, prefix, new Date().toISOString());
   }
 
+  getGuildWebSearchMode(guildId: string): WebSearchMode | undefined {
+    const row = this.db
+      .prepare('SELECT mode FROM guild_web_search_settings WHERE guild_id = ?')
+      .get(guildId) as { mode: string } | undefined;
+    return isWebSearchMode(row?.mode) ? row.mode : undefined;
+  }
+
+  setGuildWebSearchMode(guildId: string, mode: WebSearchMode | undefined): void {
+    if (!mode) {
+      this.db.prepare('DELETE FROM guild_web_search_settings WHERE guild_id = ?').run(guildId);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO guild_web_search_settings (guild_id, mode, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(guild_id)
+         DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at`
+      )
+      .run(guildId, mode, new Date().toISOString());
+  }
+
   getUserTimeZone(guildId: string, userId: string): string | undefined {
     const row = this.db
       .prepare('SELECT time_zone FROM user_time_zone_settings WHERE guild_id = ? AND user_id = ?')
@@ -233,6 +264,7 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
   private readonly watchedChannels = new Map<string, string>();
   private readonly aiChannels = new Map<string, string>();
   private readonly prefixes = new Map<string, string>();
+  private readonly webSearchModes = new Map<string, WebSearchMode>();
   private readonly timeZones = new Map<string, string>();
 
   getUserVoicePreset(guildId: string, userId: string): string | undefined {
@@ -291,6 +323,18 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
     this.prefixes.set(guildId, prefix);
   }
 
+  getGuildWebSearchMode(guildId: string): WebSearchMode | undefined {
+    return this.webSearchModes.get(guildId);
+  }
+
+  setGuildWebSearchMode(guildId: string, mode: WebSearchMode | undefined): void {
+    if (!mode) {
+      this.webSearchModes.delete(guildId);
+      return;
+    }
+    this.webSearchModes.set(guildId, mode);
+  }
+
   getUserTimeZone(guildId: string, userId: string): string | undefined {
     return this.timeZones.get(keyFor(guildId, userId));
   }
@@ -306,4 +350,8 @@ export class InMemoryVoiceSettingsStore implements VoiceSettingsStore {
 
 function keyFor(guildId: string, userId: string): string {
   return `${guildId}:${userId}`;
+}
+
+function isWebSearchMode(value: unknown): value is WebSearchMode {
+  return value === 'disabled' || value === 'explicit_only' || value === 'automatic' || value === 'search_first_factual';
 }

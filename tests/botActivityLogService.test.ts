@@ -129,6 +129,54 @@ describe('BotActivityLogService.logAiDiagnostic', () => {
     expect(content).toContain('observationSummary={"status":"ok"}');
   });
 
+  it('redacts raw web-search query text from AI diagnostic logs', async () => {
+    const send = vi.fn(async () => undefined);
+    const logChannel = { id: 'log-channel', type: ChannelType.GuildText, name: 'LOG-source', topic: 'Source guild: source (guild-1)', send };
+    const sourceChannel = { id: 'channel-1', type: ChannelType.GuildText, name: 'general' };
+    const loggingGuild = {
+      id: 'log-guild',
+      name: 'log',
+      channels: {
+        fetch: vi.fn(async (id?: string) => (id === 'log-channel' ? logChannel : null)),
+        create: vi.fn(async () => logChannel),
+        cache: new Map()
+      }
+    };
+    const sourceGuild = {
+      id: 'guild-1',
+      name: 'source',
+      channels: {
+        fetch: vi.fn(async (id?: string) => (id === 'channel-1' ? sourceChannel : null)),
+        cache: new Map([['channel-1', sourceChannel]])
+      }
+    };
+    const client = {
+      guilds: {
+        fetch: vi.fn(async (id?: string) => (id === 'log-guild' ? loggingGuild : sourceGuild))
+      }
+    } as any;
+    const service = new BotActivityLogService(client, new InMemoryBotActivityLogStore(), 'log-guild');
+
+    await service.logAiDiagnostic({
+      guildId: 'guild-1',
+      guildName: 'source',
+      channelId: 'channel-1',
+      userId: 'user-1',
+      userName: 'tester',
+      stage: 'tool',
+      event: 'observation',
+      toolName: 'web.search',
+      observationSummary: '{"provider":"searxng","query":"private raw query","results":1}',
+      promptSnippet: 'web.search {"query":"private raw query"}',
+      responseSnippet: 'ok'
+    });
+
+    const content = (send.mock.calls[0] as unknown as [{ content: string }])[0].content;
+    expect(content).toContain('toolName=web.search');
+    expect(content).toContain('[redacted-web-search-query]');
+    expect(content).not.toContain('private raw query');
+  });
+
 });
 
 describe('BotActivityLogService.logCleanupResult', () => {

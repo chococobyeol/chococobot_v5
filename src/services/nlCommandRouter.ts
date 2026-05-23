@@ -67,6 +67,11 @@ function routeDirectCommand(remainder: string): RoutedNaturalLanguageCommand | n
     return { kind: 'command', query: text ? `말 ${text}` : '말' };
   }
 
+  if (matchesAny(token.normalized, ['웹검색', 'web-search', 'search-mode', '검색설정']) && isWebSearchStatusArgs(token.rest)) {
+    const text = token.rest.trim();
+    return { kind: 'command', query: text ? `${token.raw} ${text}` : token.raw };
+  }
+
   return null;
 }
 
@@ -92,6 +97,10 @@ function routeConfirmation(remainder: string): RoutedNaturalLanguageCommand | nu
 
   if (matchesAny(token.normalized, ['ai채널', 'ai-channel', 'ai-chat-channel', 'ai-watch', '채널ai'])) {
     return buildConfirmation('ai-channel', token.raw, token.rest, 'AI 채팅 채널 설정을 바꿀까요?');
+  }
+
+  if (matchesAny(token.normalized, ['웹검색', 'web-search', 'search-mode', '검색설정'])) {
+    return buildConfirmation('web-search', token.raw, token.rest, '웹 검색 모드를 바꿀까요?');
   }
 
   return null;
@@ -121,4 +130,9 @@ function firstToken(text: string): { raw: string; normalized: string; rest: stri
 
 function matchesAny(token: string, aliases: readonly string[]): boolean {
   return aliases.some((alias) => token === alias.toLowerCase());
+}
+
+function isWebSearchStatusArgs(args: string): boolean {
+  const first = args.trim().split(/\s+/)[0]?.toLowerCase();
+  return !first || ['현재', 'status', 'show', 'info', '조회'].includes(first);
 }

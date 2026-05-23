@@ -1,10 +1,10 @@
 services:
   - type: worker
     name: chococobot-v5
-    runtime: node
+    runtime: docker
     plan: starter
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     disk:
       name: chococobot-data
       mountPath: /var/data
@@ -15,7 +15,7 @@ services:
       - key: NODE_VERSION
         value: 22.22.0
       - key: PYTHON_BIN
-        value: /opt/render/project/src/.venv/bin/python
+        value: /app/.venv/bin/python
       - key: DISCORD_TOKEN
         sync: false
       - key: LOGGING_GUILD_ID
@@ -40,6 +40,26 @@ services:
         value: 12
       - key: AI_MEMORY_MAX_SUMMARY_CHARS
         value: 900
+      - key: WEB_SEARCH_ENABLED
+        value: true
+      - key: WEB_SEARCH_PROVIDER
+        value: searxng
+      - key: WEB_SEARCH_BASE_URL
+        value: http://127.0.0.1:8888
+      - key: WEB_SEARCH_DEFAULT_MODE
+        value: search_first_factual
+      - key: WEB_SEARCH_TIMEOUT_MS
+        value: 5000
+      - key: WEB_SEARCH_RESULT_COUNT
+        value: 3
+      - key: SEARXNG_PORT
+        value: 8888
+      - key: SEARXNG_READY_TIMEOUT_SECONDS
+        value: 25
+      - key: GRANIAN_WORKERS
+        value: 1
+      - key: GRANIAN_THREADS
+        value: 2
       - key: BOT_TIME_ZONE
         value: Asia/Seoul
       - key: DATABASE_PATH

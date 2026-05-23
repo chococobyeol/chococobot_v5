@@ -103,6 +103,20 @@ const AI_RATE_LIMIT_HEADER_WHITELIST = new Set([
   'x-ratelimit-reset-tokens'
 ]);
 
+const WEB_SEARCH_QUERY_REDACTION = '[redacted-web-search-query]';
+
+function sanitizeAiDiagnosticText(value: string | undefined, details: AiDiagnosticLogDetails): string | undefined {
+  if (!value) return value;
+  const isWebSearchDiagnostic = details.toolName === 'web.search' || details.decisionKind === 'web_search' || details.decisionKind === 'web_search_unavailable' || value.includes('web.search');
+  if (!isWebSearchDiagnostic) return value;
+  return value
+    .replace(/("query"\s*:\s*")[^"]*(")/giu, `$1${WEB_SEARCH_QUERY_REDACTION}$2`)
+    .replace(/(query=)[^\n,}]*/giu, `$1${WEB_SEARCH_QUERY_REDACTION}`)
+    .replace(/(q=)[^\n&\s]*/giu, `$1${WEB_SEARCH_QUERY_REDACTION}`)
+    .replace(/도구 관찰 JSON:[\s\S]*/u, '도구 관찰 JSON: [redacted-for-diagnostics]')
+    .replace(/이전 agent 문맥 JSON:[\s\S]*/u, '이전 agent 문맥 JSON: [redacted-for-diagnostics]');
+}
+
 export class BotActivityLogService {
   constructor(
     private readonly client: Client,
@@ -303,6 +317,9 @@ export class BotActivityLogService {
     const channel = await this.ensureGuildLogChannel(details.guildId);
     if (!channel) return;
     const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
+    const observationSummary = sanitizeAiDiagnosticText(details.observationSummary, details);
+    const promptSnippet = sanitizeAiDiagnosticText(details.promptSnippet, details);
+    const responseSnippet = sanitizeAiDiagnosticText(details.responseSnippet, details);
     const headers = details.rateLimitHeaders && Object.keys(details.rateLimitHeaders).length
       ? Object.entries(details.rateLimitHeaders)
           .filter(([key]) => AI_RATE_LIMIT_HEADER_WHITELIST.has(key.toLowerCase()))
@@ -325,11 +342,11 @@ export class BotActivityLogService {
           details.toolCallId ? `toolCallId=${details.toolCallId}` : undefined,
           details.toolName ? `toolName=${details.toolName}` : undefined,
           details.policy ? `policy=${details.policy}` : undefined,
-          details.observationSummary ? `observationSummary=${truncate(details.observationSummary, 500)}` : undefined,
+          observationSummary ? `observationSummary=${truncate(observationSummary, 500)}` : undefined,
           typeof details.retryCount === 'number' ? `retryCount=${details.retryCount}` : undefined,
           details.validationErrors?.length ? `validationErrors=${truncate(details.validationErrors.join('; '), 500)}` : undefined,
-          details.promptSnippet ? `prompt=${truncate(details.promptSnippet, 500)}` : undefined,
-          details.responseSnippet ? `response=${truncate(details.responseSnippet, 500)}` : undefined,
+          promptSnippet ? `prompt=${truncate(promptSnippet, 500)}` : undefined,
+          responseSnippet ? `response=${truncate(responseSnippet, 500)}` : undefined,
           typeof details.promptTokens === 'number' ? `promptTokens=${details.promptTokens}` : undefined,
           typeof details.completionTokens === 'number' ? `completionTokens=${details.completionTokens}` : undefined,
           typeof details.totalTokens === 'number' ? `totalTokens=${details.totalTokens}` : undefined,

@@ -148,6 +148,114 @@ describe('AgentRuntime', () => {
     expect(observationDiagnostic.observationSummary).not.toContain('짬뽕지존 얘기');
   });
 
+  it('runs web.search, asks for citations, and redacts web observations in diagnostics/context', async () => {
+    const diagnostics: unknown[] = [];
+    const webSearch = vi.fn(async () => ({
+      provider: 'searxng' as const,
+      query: 'SearXNG JSON API',
+      results: [{
+        title: 'SearXNG Search API',
+        url: 'https://docs.searxng.org/dev/search_api.html',
+        sourceDomain: 'docs.searxng.org',
+        snippet: `safe snippet ${'x'.repeat(260)}`
+      }]
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'web', tool: 'web.search', input: { query: 'SearXNG JSON API', count: 1 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: 'SearXNG는 JSON 검색 API를 제공해요... [1]\n출처: [1] SearXNG Search API — https://docs.searxng.org/dev/search_api.html' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ webSearch }), store);
+
+    const outcome = await runtime.run(makeMessage(), 'SearXNG JSON API 최신 정보 검색해줘', makeOptions({
+      webSearch: { mode: 'search_first_factual', provider: 'searxng', providerStatus: 'ready', resultCount: 3 },
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome.kind).toBe('final');
+    expect(webSearch).toHaveBeenCalledWith(
+      { query: 'SearXNG JSON API', count: 1, language: undefined, freshness: undefined },
+      expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
+    );
+    const firstPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(firstPrompt).toContain('mode=search_first_factual');
+    expect(firstPrompt).toContain('출처: [1] 제목 — URL');
+    const secondPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(secondPrompt).toContain('https://docs.searxng.org/dev/search_api.html');
+    expect(secondPrompt).not.toContain('SearXNG JSON API');
+    expect(secondPrompt).not.toContain('x'.repeat(220));
+    const observationDiagnostic = diagnostics.find((event) => (event as { event?: string; toolName?: string }).event === 'observation' && (event as { toolName?: string }).toolName === 'web.search') as { observationSummary?: string };
+    expect(observationDiagnostic.observationSummary).toContain('"results":1');
+    expect(observationDiagnostic.observationSummary).not.toContain('SearXNG JSON API');
+    expect(observationDiagnostic.observationSummary).not.toContain('safe snippet');
+    const stored = store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'));
+    expect(JSON.stringify(stored?.observations)).toContain('docs.searxng.org');
+    expect(JSON.stringify(stored)).not.toContain('SearXNG JSON API');
+    expect(stored?.lastUserPrompt).toBe('[redacted-web-search-prompt]');
+    expect(JSON.stringify(stored?.observations)).not.toContain('x'.repeat(220));
+  });
+
+  it('does not force web search for casual chat even when search-first mode is configured', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const webSearch = vi.fn(async () => ({ provider: 'searxng' as const, query: 'unused', results: [] }));
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ webSearch }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '안녕 뭐해', makeOptions({
+      webSearch: { mode: 'search_first_factual', provider: 'searxng', providerStatus: 'ready', resultCount: 3 }
+    }));
+
+    expect(outcome).toEqual({ kind: 'not_handled' });
+    expect(webSearch).not.toHaveBeenCalled();
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('잡담, 창작, 의견 요청');
+  });
+
+  it('fails closed when a required web search provider call fails', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'web', tool: 'web.search', input: { query: '오늘 뉴스' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({
+      webSearch: vi.fn(async () => { throw new Error('web search is unavailable in this runtime'); })
+    }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '오늘 뉴스 검색해줘', makeOptions({
+      webSearch: { mode: 'explicit_only', provider: 'searxng', providerStatus: 'ready', resultCount: 3 }
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'unavailable',
+      message: expect.stringContaining('웹 검색 도구를 사용할 수 없어')
+    });
+  });
+
+  it('does not fall through to plain chat for explicit search when provider config is missing', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    const outcome = await runtime.run(makeMessage(), '최신 Node.js 소식 검색해줘', makeOptions({
+      webSearch: { mode: 'automatic', provider: 'searxng', providerStatus: 'missing_config', resultCount: 3 }
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'unavailable',
+      message: expect.stringContaining('WEB_SEARCH_BASE_URL')
+    });
+    const stored = store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'));
+    expect(stored?.lastUserPrompt).toBe('[redacted-web-search-prompt]');
+    expect(JSON.stringify(stored)).not.toContain('최신 Node.js 소식');
+  });
+
   it('asks the model to repair mistaken blocked voice-speak decisions into legacy commands', async () => {
     const ai = {
       askMessages: vi

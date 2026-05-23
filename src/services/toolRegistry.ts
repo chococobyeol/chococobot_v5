@@ -51,9 +51,29 @@ export type HistorySummarizeInput = {
   mode: 'qa' | 'summary';
 };
 
+export type WebSearchInput = {
+  query: string;
+  count?: number;
+  language?: string;
+  freshness?: string;
+};
+
+export type WebSearchOutput = {
+  provider: 'searxng';
+  query: string;
+  results: Array<{
+    title: string;
+    url: string;
+    snippet?: string;
+    sourceDomain?: string;
+    publishedAt?: string;
+  }>;
+};
+
 export type ToolRegistryHandlers = {
   historySearch?: (input: HistorySearchInput, context: AgentToolExecutionContext) => Promise<HistorySearchOutput>;
   historySummarize?: (input: HistorySummarizeInput, context: AgentToolExecutionContext) => Promise<{ message: string }>;
+  webSearch?: (input: WebSearchInput, context: AgentToolExecutionContext) => Promise<WebSearchOutput>;
 };
 
 export class ToolRegistry {
@@ -101,11 +121,13 @@ export function createDefaultToolRegistry(handlers: ToolRegistryHandlers = {}): 
     timeInZoneTool(),
     historySearchTool(handlers),
     historySummarizeTool(handlers),
+    webSearchTool(handlers),
     blockedTool('voice.speak', 'Speak text in a Discord voice channel.'),
     confirmationTool('command.cleanup', 'Delete recent user messages.'),
     confirmationTool('command.mass_cleanup', 'Delete recent channel messages.'),
     confirmationTool('settings.prefix', 'Change server command prefix.'),
     confirmationTool('settings.tts_channel', 'Change TTS watched channel settings.'),
+    confirmationTool('settings.web_search', 'Change server web search mode.'),
     confirmationTool('memory.delete', 'Delete AI memory.'),
     blockedTool('admin.log_management', 'Manage bot logging channels.')
   ]);
@@ -192,6 +214,33 @@ function historySearchTool(handlers: ToolRegistryHandlers): AgentToolDefinition<
     async execute(input, context) {
       if (!handlers.historySearch) throw new Error('history.search is unavailable in this runtime');
       return handlers.historySearch(input, context);
+    }
+  };
+}
+
+function webSearchTool(handlers: ToolRegistryHandlers): AgentToolDefinition<WebSearchInput, WebSearchOutput> {
+  return {
+    name: 'web.search',
+    description: 'Search the public web for current, external, or fact-checkable information and return concise cited results.',
+    inputSchema: '{ query: string; count?: number; language?: string; freshness?: string }',
+    policy: 'read_only_auto',
+    retryable: true,
+    logFields: ['query', 'count', 'language', 'freshness'],
+    validate(input) {
+      if (!isRecord(input)) return { ok: false, errors: ['input must be an object'] };
+      const query = typeof input.query === 'string' ? input.query.trim() : '';
+      const count = input.count === undefined ? undefined : Number(input.count);
+      const language = typeof input.language === 'string' ? input.language.trim() : undefined;
+      const freshness = typeof input.freshness === 'string' ? input.freshness.trim() : undefined;
+      const errors: string[] = [];
+      if (!query) errors.push('query must be a non-empty string');
+      if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > 10)) errors.push('count must be an integer from 1 to 10');
+      if (errors.length) return { ok: false, errors };
+      return { ok: true, value: { query, count, language, freshness } };
+    },
+    async execute(input, context) {
+      if (!handlers.webSearch) throw new Error('web.search is unavailable in this runtime');
+      return handlers.webSearch(input, context);
     }
   };
 }

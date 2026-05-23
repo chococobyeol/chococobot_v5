@@ -12,6 +12,12 @@ export type Settings = {
   aiMemoryRecentTurns: number;
   aiMemoryCompactAfterTurns: number;
   aiMemoryMaxSummaryChars: number;
+  webSearchEnabled: boolean;
+  webSearchProvider: 'searxng';
+  webSearchBaseUrl: string;
+  webSearchTimeoutMs: number;
+  webSearchResultCount: number;
+  webSearchDefaultMode: 'disabled' | 'explicit_only' | 'automatic' | 'search_first_factual';
   botTimeZone: string;
   cleanMineDefaultTarget: number;
   cleanMineMaxLimit: number;
@@ -61,6 +67,16 @@ function boolFromEnv(name: string, fallback: boolean): boolean {
   return ['1', 'true', 'yes', 'y', 'on'].includes(raw.toLowerCase());
 }
 
+function enumFromEnv<T extends string>(name: string, fallback: T, allowed: readonly T[]): T {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const normalized = raw.toLowerCase() as T;
+  if (!allowed.includes(normalized)) {
+    throw new Error(`${name} must be one of: ${allowed.join(', ')}`);
+  }
+  return normalized;
+}
+
 export function loadSettings(): Settings {
   return {
     discordToken: process.env.DISCORD_TOKEN ?? '',
@@ -82,6 +98,12 @@ export function loadSettings(): Settings {
     aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 4),
     aiMemoryCompactAfterTurns: positiveIntFromEnv('AI_MEMORY_COMPACT_AFTER_TURNS', 12),
     aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 900),
+    webSearchEnabled: boolFromEnv('WEB_SEARCH_ENABLED', true),
+    webSearchProvider: enumFromEnv('WEB_SEARCH_PROVIDER', 'searxng', ['searxng']),
+    webSearchBaseUrl: process.env.WEB_SEARCH_BASE_URL?.trim().replace(/\/+$/, '') ?? '',
+    webSearchTimeoutMs: positiveIntFromEnv('WEB_SEARCH_TIMEOUT_MS', 5_000),
+    webSearchResultCount: positiveIntFromEnv('WEB_SEARCH_RESULT_COUNT', 3),
+    webSearchDefaultMode: enumFromEnv('WEB_SEARCH_DEFAULT_MODE', 'search_first_factual', ['disabled', 'explicit_only', 'automatic', 'search_first_factual']),
     botTimeZone: process.env.BOT_TIME_ZONE ?? 'Asia/Seoul',
     cleanMineDefaultTarget: positiveIntFromEnv('CLEAN_MINE_DEFAULT_TARGET', 500),
     cleanMineMaxLimit: positiveIntFromEnv('CLEAN_MINE_MAX_LIMIT', 500),
@@ -99,9 +121,10 @@ export function loadSettings(): Settings {
   };
 }
 
-export function assertRuntimeSettings(settings: Settings): void {
+export function assertRuntimeSettings(settings: Settings, options: { requireDiscordToken?: boolean } = {}): void {
+  const requireDiscordToken = options.requireDiscordToken ?? true;
   const missing: string[] = [];
-  if (!settings.discordToken) missing.push('DISCORD_TOKEN');
+  if (requireDiscordToken && !settings.discordToken) missing.push('DISCORD_TOKEN');
   if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   if (!settings.loggingGuildId) throw new Error('LOGGING_GUILD_ID is required');
   try {

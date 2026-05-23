@@ -14,6 +14,7 @@ Node.js/TypeScript Discord bot for Korean `!` prefix chat cleanup and voice TTS,
 - `!tts채널 현재` / `!tts채널 해제` — show or clear the stored auto-read channel.
 - `!ai채널 [#채널]` — set the current or named text channel where ordinary messages are treated as AI chat prompts.
 - `!ai채널 현재` / `!ai채널 해제` — show or clear the stored AI chat channel.
+- `!웹검색 현재` / `!웹검색 <모드>` — show or change the guild AI web-search mode. Server administrators only for changes.
 - `!음색` / `!voice` — list or select supported TTS voice presets.
 - `!tts엔진` / `!engine` — list or select your TTS engine (`edge` or `gtts`).
 - `!프리픽스` / `!prefix` — show or change the server command prefix. Allowed values: `!`, `?`, `.`, `~`. Server administrators only.
@@ -71,7 +72,7 @@ Optional v1 settings:
 | `DATABASE_PATH` | `data/chococobot.sqlite3` | SQLite path for bot state. Use a persistent path such as `/var/data/chococobot.sqlite3` on Render. |
 | `LOGGING_GUILD_ID` | `1507058598423826533` | Dedicated Discord server for bot activity logs and test channels. |
 | `VOICE_IDLE_LEAVE_MS` | `600000` | How long the bot stays in voice after the queue becomes idle before auto-leaving. |
-| `PYTHON_BIN` | `python3` | Python executable used for TTS. On Render this should point to the build-created venv, e.g. `/opt/render/project/src/.venv/bin/python`. |
+| `PYTHON_BIN` | `python3` | Python executable used for TTS. In the Docker/Render image this is `/app/.venv/bin/python`. |
 | `CLEAN_MINE_DEFAULT_TARGET` | `500` | Default target count for `!청소` when no number is provided. |
 | `CLEAN_MINE_MAX_LIMIT` | `500` | Maximum accepted target count for own-message cleanup. |
 | `CLEAN_ALL_DEFAULT_TARGET` | `1000` | Default target count for `!대청소` when no number is provided. |
@@ -83,6 +84,15 @@ Optional v1 settings:
 | `AI_MEMORY_RECENT_TURNS` | `8` | How many recent unsummarized AI turns are kept in the live prompt. |
 | `AI_MEMORY_COMPACT_AFTER_TURNS` | `12` | When the bot compacts guild AI memory into a summary. |
 | `AI_MEMORY_MAX_SUMMARY_CHARS` | `2000` | Maximum stored summary length after compaction. |
+| `WEB_SEARCH_ENABLED` | `true` | Enables the AI agent's web-search tool. The tool still requires a provider base URL before it can search. |
+| `WEB_SEARCH_PROVIDER` | `searxng` | Web-search provider. Currently only `searxng` is implemented. |
+| `WEB_SEARCH_BASE_URL` | _(none)_ | Base URL of a SearXNG instance with JSON search enabled. The Docker/Render worker defaults to private loopback `http://127.0.0.1:8888`. The bot calls `/search?q=...&format=json`. |
+| `WEB_SEARCH_TIMEOUT_MS` | `5000` | Timeout for one web-search provider request. |
+| `WEB_SEARCH_RESULT_COUNT` | `3` | Default number of normalized search results passed to the AI agent. |
+| `WEB_SEARCH_DEFAULT_MODE` | `search_first_factual` | Default guild web-search mode: `disabled`, `explicit_only`, `automatic`, or `search_first_factual`. |
+| `SEARXNG_PORT` | `8888` | Local-only SearXNG port used by the Docker/Render entrypoint. |
+| `SEARXNG_READY_TIMEOUT_SECONDS` | `25` | Startup readiness wait for local SearXNG before the bot starts anyway. |
+| `SMOKE_MODE` | _(none)_ | Set to `1` for login-free startup smoke validation; this mode never calls `client.login`. |
 | `BOT_TIME_ZONE` | `Asia/Seoul` | Fallback server time zone for features that cannot use Discord's client-local timestamp rendering. Current-time AI replies use Discord timestamp tags instead. |
 | `LOG_LEVEL` | `info` | Logging verbosity label. |
 
@@ -131,6 +141,9 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!ai채널 #채널` stores a named text channel as the guild's AI chat channel.
 - `!ai채널 현재` shows the stored AI chat channel.
 - `!ai채널 해제` clears that guild setting.
+- `!웹검색 현재` shows the guild's AI web-search mode and provider status.
+- `!웹검색 disabled|explicit_only|automatic|search_first_factual` changes how eagerly AI chat may call web search.
+- `!웹검색 초기화` clears the guild override and falls back to `WEB_SEARCH_DEFAULT_MODE`.
 - In the configured AI chat channel, ordinary user messages are handled as AI prompts without `!?`.
 - Prefix commands still run as commands in the AI chat channel, so `!도움말`, `!청소`, and `!ai채널 해제` are not sent to AI chat.
 - The bot replies in the same channel and does not ping the user by default.
@@ -139,6 +152,19 @@ The starter voice preset map is defined in `src/config.ts`:
 - Guild memory is shared across the server and stores user IDs/user names so future replies can keep track of who said what.
 - `!기억삭제` / `!ai-memory` clears the guild AI memory and is limited to server administrators.
 - Background memory summarization counts against guild AI usage, not the requesting user's quota.
+
+### AI web search
+
+AI chat can call a read-only `web.search` tool when the server mode allows it:
+
+- `disabled` — never search; explicit search requests receive an unavailable-style answer.
+- `explicit_only` — search only when the user explicitly asks for web/search/latest/source/fact-checking.
+- `automatic` — search when current external facts or uncertainty materially affect the answer.
+- `search_first_factual` — default; prefer searching for current, external, or fact-checkable questions.
+
+The current implementation is SearXNG-first and uses Node's built-in `fetch`, so it adds no default npm dependency and no mandatory search API key. In Docker/Render deployments this repo starts a private loopback SearXNG process in the same worker and points `WEB_SEARCH_BASE_URL` at it. Search observations are normalized to short title/URL/snippet records before AI prompts, diagnostics, or short-term agent context use them; raw provider JSON, raw web-search query text, and long result bodies are not logged.
+
+Brave Search is intentionally not enabled by default because it requires an API key/account and a separate provider implementation. It can be added later as an explicit opt-in provider with its own `WEB_SEARCH_PROVIDER` value and key setting.
 
 ## Command prefix behavior
 
@@ -182,16 +208,25 @@ These commands are intentionally not shown in the public `!도움말` output.
 
 ## Render deployment
 
-Use a Render **Background Worker** for the Discord gateway process (no public HTTP server is required).
+자세한 Render 호스팅 절차는 [`docs/render-hosting.md`](docs/render-hosting.md)를 참고하세요.
 
-- Build command: `npm install && npm run build`
-- Start command: `npm start`
-- Instance type: Starter or larger
+Use exactly one Render **Background Worker** on the Starter plan. The Blueprint now uses `runtime: docker`, so Render builds `Dockerfile` and starts `scripts/render-start.sh` from the image `CMD`. No public HTTP service or second SearXNG service is required.
+
+- Service: one `type: worker`, `plan: starter`, `runtime: docker`
 - Required secrets: `DISCORD_TOKEN`, `GROQ_API_KEY` when AI chat is enabled
-- Recommended persistent disk path for SQLite: `/var/data/chococobot.sqlite3`
-- Recommended TTS env: `PYTHON_BIN=/opt/render/project/src/.venv/bin/python`
+- SQLite disk path: `/var/data/chococobot.sqlite3`
+- Local web search: SearXNG runs inside the same container on `127.0.0.1:8888` and is reached through `WEB_SEARCH_BASE_URL=http://127.0.0.1:8888`
+- Bot uptime policy: startup waits briefly for SearXNG, but the Discord bot starts even if SearXNG is slow/unavailable; explicit search then fails gracefully instead of taking the bot down.
 
-This repo includes an optional `render.yaml` Blueprint. Render Blueprints support `type: worker`, `runtime: node`, `plan: starter`, `buildCommand`, `startCommand`, persistent disks, and `envVars` where secrets can be marked `sync: false` so Render prompts for them in the dashboard.
+SearXNG is configured in `config/searxng/settings.yml` with JSON output enabled and no public exposure. `SEARXNG_SECRET` is generated at container start if you do not provide one; it is not a paid provider API key.
+
+For local Docker verification, run:
+
+```bash
+scripts/docker-smoke.sh
+```
+
+That script builds the image and runs it with `.env.smoke` plus `SMOKE_MODE=1`. Smoke mode validates config and the local SearXNG JSON endpoint without calling `client.login`.
 
 ## Verification
 

@@ -86,6 +86,27 @@ describe('VoiceSettingsStore', () => {
     reopened.close();
   });
 
+  it('persists guild web search modes in sqlite and memory stores', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'chococo-voice-')), 'voice.sqlite3');
+    const store = new SqliteVoiceSettingsStore(dbPath);
+    store.setGuildWebSearchMode('guild-1', 'explicit_only');
+    store.setGuildWebSearchMode('guild-2', 'disabled');
+    store.close();
+
+    const reopened = new SqliteVoiceSettingsStore(dbPath);
+    expect(reopened.getGuildWebSearchMode('guild-1')).toBe('explicit_only');
+    expect(reopened.getGuildWebSearchMode('guild-2')).toBe('disabled');
+    reopened.setGuildWebSearchMode('guild-1', undefined);
+    expect(reopened.getGuildWebSearchMode('guild-1')).toBeUndefined();
+    reopened.close();
+
+    const memory = new InMemoryVoiceSettingsStore();
+    memory.setGuildWebSearchMode('guild-1', 'automatic');
+    expect(memory.getGuildWebSearchMode('guild-1')).toBe('automatic');
+    memory.setGuildWebSearchMode('guild-1', undefined);
+    expect(memory.getGuildWebSearchMode('guild-1')).toBeUndefined();
+  });
+
   it('persists per-guild per-user time zones in sqlite', () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), 'chococo-voice-')), 'voice.sqlite3');
     const store = new SqliteVoiceSettingsStore(dbPath);

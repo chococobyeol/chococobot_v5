@@ -3,6 +3,7 @@ import type { AiDetailedResponse, AiService } from './aiService.js';
 import { extractErrorDetails, type AiChatMessage } from './aiService.js';
 import type { AgentPendingAction, AgentTurnContextStore, AgentTurnStoredContext } from './agentTurnContextStore.js';
 import type { AgentToolExecutionContext, AgentToolObservation, AgentToolPolicy, ToolRegistry } from './toolRegistry.js';
+import type { WebSearchMode, WebSearchProviderName, WebSearchProviderStatus } from './webSearchService.js';
 
 const MAX_ITERATIONS = 4;
 const MAX_TOTAL_TOOL_CALLS = 8;
@@ -54,6 +55,12 @@ export type AgentRuntimeOptions = {
   maxCompletionTokens?: number;
   pendingHistory?: { mode: 'summary' | 'qa'; query: string } | null;
   pendingConfirmation?: { preview: string; commandQuery: string; intent: string; normalizedArgs: string } | null;
+  webSearch?: {
+    mode: WebSearchMode;
+    provider: WebSearchProviderName;
+    providerStatus: WebSearchProviderStatus;
+    resultCount: number;
+  };
   executionContext: AgentToolExecutionContext;
   onDiagnostic?: (details: AgentRuntimeDiagnostic) => Promise<void> | void;
 };
@@ -104,7 +111,7 @@ export class AgentRuntime {
         event: validationFeedback ? 'retry' : 'request',
         runId,
         iteration,
-        promptSnippet: messages.map((item) => item.content).join('\n').slice(0, 500)
+        promptSnippet: summarizePromptForDiagnostic(messages)
       });
 
       let detailed: string | AiDetailedResponse;
@@ -181,6 +188,12 @@ export class AgentRuntime {
         };
       }
       validationFeedback = null;
+      const webSearchUnavailable = buildRequiredWebSearchUnavailableOutcome(prompt, options, observations);
+      if ((envelope.kind === 'not_handled' || envelope.kind === 'final') && webSearchUnavailable) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'web_search_unavailable' });
+        this.updateTurnContext(key, webSearchUnavailable, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return webSearchUnavailable;
+      }
       if (envelope.kind === 'legacy_command') {
         const cleanupValidation = validateLegacyCleanupCommand(envelope.query, envelope.cleanupTarget, envelope.cleanupEvidence, prompt, priorContext);
         if (!cleanupValidation.ok) {
@@ -285,7 +298,7 @@ export class AgentRuntime {
       '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
       '사용자가 "음성 채널에 들어와서 X라고 말해"처럼 입장과 말하기를 함께 요청하고 말할 내용 X가 명확하면 {"kind":"legacy_command","query":"말 X"}를 사용해요. 기존 말 명령은 필요하면 먼저 사용자의 음성 채널에 자동 입장해요.',
       '음성 채널에 들어오라는 요청만 명확하면 {"kind":"legacy_command","query":"들어와"}를 사용하고, 말하라는 요청인데 말할 내용이 없으면 clarify로 자연스럽게 물어봐요.',
-      '프리픽스 변경, TTS 채널 설정, 기억삭제처럼 기존 명령이 있는 단일 실행 요청도 blocked가 아니라 legacy_command로 넘기세요.',
+      '프리픽스 변경, TTS 채널 설정, 웹 검색 모드 설정, 기억삭제처럼 기존 명령이 있는 단일 실행 요청도 blocked가 아니라 legacy_command로 넘기세요.',
       '읽기 요청과 실행/삭제/설정/음성 요청이 섞여 있으면 blocked로 답하고 아무 것도 실행하지 마세요.',
       '채팅/메시지 삭제 요청에서 그냥 "채팅 3개"처럼 대상이 생략되면 요청자 본인 메시지라고 단정하지 말고 clarify로 누구 채팅인지 물어봐요.',
       '요청자가 "내 채팅/내꺼/내 메시지"라고 명확히 말했거나 이전 clarify 후속으로 본인 것이라고 답한 경우에만 {"kind":"legacy_command","query":"청소 N","cleanupTarget":"self","cleanupEvidence":"내 채팅"}를 사용해요.',
@@ -311,6 +324,7 @@ export class AgentRuntime {
       '미국 시간대 질문은 최소 Eastern/Central/Mountain/Pacific을 각각 time.in_zone으로 호출해요. IANA: America/New_York, America/Chicago, America/Denver, America/Los_Angeles.',
       '이전 맥락이 시간대 목록이면 "그 4군데" 같은 후속 요청에 같은 timeZone 슬롯을 재사용해요.',
       '대화 내용/기록/찾아봐/검색/요약 요청은 history.search를 사용해요. 서버 전체면 scope=server, 채널 지정이면 scope=channel과 channelRef를 넣어요.',
+      formatWebSearchPolicy(options.webSearch),
       '도구 목록:',
       this.registry.list().map((tool) => `- ${tool.name} [${tool.policy}] ${tool.description} input=${tool.inputSchema}`).join('\n'),
       '지원 prefix 명령:',
@@ -325,8 +339,8 @@ export class AgentRuntime {
       `현재 사용자 메시지 작성 시각: <t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`,
       options.pendingHistory ? `기존 채널 기록 후속 문맥: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
       options.pendingConfirmation ? `대기 중인 확인 작업 JSON: ${JSON.stringify(options.pendingConfirmation)}` : undefined,
-      priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(priorContext).slice(0, 1200)}` : undefined,
-      observations.length ? `도구 관찰 JSON: ${JSON.stringify(observations).slice(0, MAX_OBSERVATION_CHARS)}` : undefined,
+      priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 1200)}` : undefined,
+      observations.length ? `도구 관찰 JSON: ${formatObservationsForPrompt(observations)}` : undefined,
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined
     ].filter(Boolean).join('\n'), MAX_SYSTEM_CHARS);
 
@@ -366,11 +380,13 @@ export class AgentRuntime {
         if (call.input.mode === 'qa' || call.input.mode === 'summary') slots.mode = call.input.mode;
       }
     }
+    const usedWebSearch = calls.some((call) => call.tool === 'web.search');
+    const webSearchRelated = usedWebSearch || (envelope.kind === 'unavailable' && isExplicitWebSearchPrompt(prompt));
     this.contextStore.set(key, {
       lastIntent: inferIntent(calls, envelope),
-      lastUserPrompt: prompt,
+      lastUserPrompt: webSearchRelated ? '[redacted-web-search-prompt]' : prompt,
       lastAgentMessage: 'message' in envelope ? envelope.message : undefined,
-      lastToolCalls: calls.map((call) => ({ tool: call.tool, input: call.input })),
+      lastToolCalls: calls.map((call) => sanitizeToolCallForStoredContext(call)),
       slots,
       observations: observations.slice(-4).map((observation) => compactObservation(observation)),
       ...(envelope.kind === 'clarify'
@@ -468,6 +484,7 @@ const LEGACY_ACTION_TOOL_NAMES = new Set([
   'command.mass_cleanup',
   'settings.prefix',
   'settings.tts_channel',
+  'settings.web_search',
   'memory.delete'
 ]);
 
@@ -638,6 +655,16 @@ function summarizeObservation(observation: AgentToolObservation): string {
       evidenceCount: Array.isArray(observation.output.evidence) ? observation.output.evidence.length : undefined
     }).slice(0, 500);
   }
+  if (observation.toolName === 'web.search') {
+    const results = isRecord(observation.output) && Array.isArray(observation.output.results)
+      ? observation.output.results.length
+      : undefined;
+    return JSON.stringify({
+      ...base,
+      provider: isRecord(observation.output) ? observation.output.provider : undefined,
+      results
+    }).slice(0, 500);
+  }
   if (observation.toolName.startsWith('time.')) {
     return JSON.stringify({
       ...base,
@@ -651,6 +678,9 @@ function summarizeObservation(observation: AgentToolObservation): string {
 }
 
 function compactObservation(observation: AgentToolObservation): unknown {
+  if (observation.toolName === 'web.search') {
+    return sanitizeWebSearchObservation(observation);
+  }
   return {
     callId: observation.callId,
     toolName: observation.toolName,
@@ -664,7 +694,144 @@ function compactObservation(observation: AgentToolObservation): unknown {
 function inferIntent(calls: readonly AgentToolCall[], envelope: AgentEnvelope): string | undefined {
   if (calls.some((call) => call.tool.startsWith('time.'))) return 'time';
   if (calls.some((call) => call.tool.startsWith('history.'))) return 'history';
+  if (calls.some((call) => call.tool === 'web.search')) return 'web_search';
   return envelope.kind;
+}
+
+function formatWebSearchPolicy(webSearch: AgentRuntimeOptions['webSearch']): string {
+  if (!webSearch) return '웹 검색 설정: unavailable. web.search를 호출하지 말고 일반 대화면 not_handled, 검색이 필요한 요청이면 unavailable로 답해요.';
+  const statusText = `웹 검색 설정: mode=${webSearch.mode}, provider=${webSearch.provider}, providerStatus=${webSearch.providerStatus}, resultCount=${webSearch.resultCount}.`;
+  const shared = [
+    statusText,
+    'web.search는 공개 웹의 최신/외부/검증 가능한 정보를 확인하는 읽기 전용 도구예요. Discord 서버 대화 기록은 web.search가 아니라 history.search를 사용해요.',
+    '잡담, 창작, 의견 요청, 서버 대화 기록만 필요한 요청에는 web.search를 호출하지 마세요.',
+    'web.search 관찰값을 근거로 답하면 문장 끝이나 문단 끝에 [1], [2]처럼 결과 번호를 붙이고, 답변 아래에 출처: [1] 제목 — URL 형식으로 간단히 적어요.',
+    'web.search가 error이거나 providerStatus가 ready가 아니면 검색 없이 사실 답을 꾸미지 말고 unavailable JSON으로 웹 검색을 사용할 수 없다고 한국어로 설명해요.'
+  ];
+  if (webSearch.mode === 'disabled') {
+    return [...shared, '현재 서버 웹 검색 모드는 disabled예요. web.search를 호출하지 마세요. 명시적 검색 요청이면 unavailable로 답해요.'].join('\n');
+  }
+  if (webSearch.providerStatus !== 'ready') {
+    return [...shared, `현재 providerStatus가 ${webSearch.providerStatus}라 web.search를 호출해도 실패할 수 있어요. 명시적 검색/사실 확인 요청이면 unavailable로 답해요.`].join('\n');
+  }
+  if (webSearch.mode === 'explicit_only') {
+    return [...shared, '현재 모드는 explicit_only예요. 사용자가 웹 검색/인터넷 검색/최신 확인/출처 확인을 명시한 경우에만 web.search를 호출해요.'].join('\n');
+  }
+  if (webSearch.mode === 'automatic') {
+    return [...shared, '현재 모드는 automatic이에요. 최신성/외부 사실/불확실성이 답 품질에 중요할 때 web.search를 호출해요.'].join('\n');
+  }
+  return [...shared, '현재 모드는 search_first_factual이에요. 최신/외부/검증 가능한 사실 질문은 가능한 먼저 web.search를 호출한 뒤 답해요.'].join('\n');
+}
+
+function buildRequiredWebSearchUnavailableOutcome(
+  prompt: string,
+  options: AgentRuntimeOptions,
+  observations: readonly AgentToolObservation[]
+): AgentRuntimeOutcome | null {
+  const webFailure = [...observations].reverse().find((observation) => observation.toolName === 'web.search' && observation.status === 'error');
+  if (webFailure) {
+    return {
+      kind: 'unavailable',
+      message: `웹 검색 도구를 사용할 수 없어 확인이 필요한 답변을 만들 수 없어요. ${webFailure.error ? `사유: ${webFailure.error}` : 'SearXNG 설정이나 상태를 확인해 주세요.'}`
+    };
+  }
+  const webSearch = options.webSearch;
+  if (!webSearch || !isExplicitWebSearchPrompt(prompt)) return null;
+  if (webSearch.mode === 'disabled') {
+    return { kind: 'unavailable', message: '이 서버에서는 웹 검색이 꺼져 있어서 검색 요청을 처리할 수 없어요.' };
+  }
+  if (webSearch.providerStatus !== 'ready') {
+    return {
+      kind: 'unavailable',
+      message: webSearch.providerStatus === 'missing_config'
+        ? '웹 검색 서버 주소가 설정되지 않아 검색 요청을 처리할 수 없어요. WEB_SEARCH_BASE_URL에 SearXNG 주소를 설정해야 해요.'
+        : '웹 검색 제공자를 사용할 수 없어 검색 요청을 처리할 수 없어요.'
+    };
+  }
+  return null;
+}
+
+function isExplicitWebSearchPrompt(prompt: string): boolean {
+  return /웹\s*검색|인터넷\s*검색|검색해|검색해서|찾아봐|찾아줘|찾아\s*줘|최신|뉴스|출처|사실\s*확인|팩트\s*체크|구글|search|web|look\s*up|source|citation/i.test(prompt);
+}
+
+function formatObservationsForPrompt(observations: readonly AgentToolObservation[]): string {
+  return JSON.stringify(observations.map((observation) => observation.toolName === 'web.search'
+    ? sanitizeWebSearchObservation(observation)
+    : observation)).slice(0, MAX_OBSERVATION_CHARS);
+}
+
+function summarizePromptForDiagnostic(messages: readonly AiChatMessage[]): string {
+  return messages
+    .map((item) => {
+      if (item.role === 'user') return '사용자 메시지: [redacted-for-diagnostics]';
+      return item.content
+        .replace(/이전 agent 문맥 JSON:[\s\S]*?(?=\n도구 관찰 JSON:|\n재시도 지시:|$)/u, '이전 agent 문맥 JSON: [redacted-for-diagnostics]')
+        .replace(/도구 관찰 JSON:[\s\S]*/u, '도구 관찰 JSON: [redacted-for-diagnostics]');
+    })
+    .join('\n')
+    .slice(0, 500);
+}
+
+function sanitizeWebSearchObservation(observation: AgentToolObservation): unknown {
+  if (!isRecord(observation.output)) {
+    return {
+      callId: observation.callId,
+      toolName: observation.toolName,
+      status: observation.status,
+      policy: observation.policy,
+      error: observation.error
+    };
+  }
+  const results = Array.isArray(observation.output.results)
+    ? observation.output.results.filter(isRecord).slice(0, 10).map((result) => ({
+      title: typeof result.title === 'string' ? truncate(result.title, 140) : undefined,
+      url: typeof result.url === 'string' ? result.url : undefined,
+      sourceDomain: typeof result.sourceDomain === 'string' ? result.sourceDomain : undefined,
+      publishedAt: typeof result.publishedAt === 'string' ? result.publishedAt : undefined,
+      snippet: typeof result.snippet === 'string' ? truncate(result.snippet, 180) : undefined
+    }))
+    : undefined;
+  return {
+    callId: observation.callId,
+    toolName: observation.toolName,
+    status: observation.status,
+    policy: observation.policy,
+    output: {
+      provider: observation.output.provider,
+      results
+    },
+    error: observation.error
+  };
+}
+
+function sanitizePriorContextForPrompt(context: AgentTurnStoredContext): AgentTurnStoredContext {
+  return {
+    ...context,
+    lastToolCalls: context.lastToolCalls.map((call) => sanitizeToolCallForStoredContext(call)),
+    observations: context.observations.map((observation) => sanitizeStoredObservation(observation))
+  };
+}
+
+function sanitizeToolCallForStoredContext(call: { tool: string; input: unknown }): { tool: string; input: unknown } {
+  if (call.tool !== 'web.search' || !isRecord(call.input)) return { tool: call.tool, input: call.input };
+  const safeInput = { ...call.input };
+  delete safeInput.query;
+  return {
+    tool: call.tool,
+    input: {
+      ...safeInput,
+      query: '[redacted-web-search-query]'
+    }
+  };
+}
+
+function sanitizeStoredObservation(observation: unknown): unknown {
+  if (!isRecord(observation) || observation.toolName !== 'web.search') return observation;
+  if (!isRecord(observation.output)) return observation;
+  const safeOutput = { ...observation.output };
+  delete safeOutput.query;
+  return { ...observation, output: safeOutput };
 }
 
 function formatCommands(commands: AgentRuntimeOptions['commands']): string {

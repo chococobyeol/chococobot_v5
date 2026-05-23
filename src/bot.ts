@@ -9,6 +9,7 @@ import { AiCommandPlanner } from './services/aiCommandPlanner.js';
 import { AgentRuntime, type AgentRuntimeDiagnostic } from './services/agentRuntime.js';
 import { AgentTurnContextStore } from './services/agentTurnContextStore.js';
 import { createDefaultToolRegistry, type HistorySearchInput, type HistorySearchOutput } from './services/toolRegistry.js';
+import { createWebSearchProvider, type WebSearchMode, type WebSearchProvider } from './services/webSearchService.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { ConfirmationManager, type ConfirmationScope, type PendingConfirmation } from './services/confirmationManager.js';
@@ -63,6 +64,7 @@ export type BotContext = {
   aiCommandPlanner?: AiCommandPlanner;
   agentRuntime?: AgentRuntime;
   agentTurnContextStore?: AgentTurnContextStore;
+  webSearchProvider?: WebSearchProvider;
   voice: VoiceService;
   voiceSettings: import('./services/voiceSettingsStore.js').VoiceSettingsStore;
   activityLog: BotActivityLogService;
@@ -87,8 +89,37 @@ function getGuildPrefix(context: BotContext, guildId?: string): string {
   return context.voiceSettings.getCommandPrefix(guildId) ?? DEFAULT_PREFIX;
 }
 
+function getGuildWebSearchMode(context: BotContext, guildId?: string): WebSearchMode {
+  if (!guildId) return context.settings.webSearchDefaultMode;
+  return context.voiceSettings.getGuildWebSearchMode(guildId) ?? context.settings.webSearchDefaultMode;
+}
+
 function isAllowedPrefix(prefix: string): prefix is (typeof ALLOWED_PREFIXES)[number] {
   return (ALLOWED_PREFIXES as readonly string[]).includes(prefix);
+}
+
+function parseWebSearchModeArg(raw: string | undefined): WebSearchMode | 'reset' | null {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (['해제', '기본', 'default', 'reset', 'clear', 'none', '초기화'].includes(normalized)) return 'reset';
+  if (['disabled', 'disable', 'off', '꺼짐', '끄기', '비활성'].includes(normalized)) return 'disabled';
+  if (['explicit_only', 'explicit-only', 'explicit', 'manual', '명시', '수동', '명시적'].includes(normalized)) return 'explicit_only';
+  if (['automatic', 'auto', '자동'].includes(normalized)) return 'automatic';
+  if (['search_first_factual', 'search-first-factual', 'factual', 'search-first', '사실우선', '검색우선', '기본모드'].includes(normalized)) return 'search_first_factual';
+  return null;
+}
+
+function formatWebSearchMode(mode: WebSearchMode): string {
+  switch (mode) {
+    case 'disabled':
+      return 'disabled (웹 검색 꺼짐)';
+    case 'explicit_only':
+      return 'explicit_only (명시적으로 검색을 요청할 때만)';
+    case 'automatic':
+      return 'automatic (필요하면 자동 검색)';
+    case 'search_first_factual':
+      return 'search_first_factual (사실 확인 질문은 검색 우선)';
+  }
 }
 
 function parseOptionalPositiveInt(value: string | undefined): number | undefined {
@@ -282,6 +313,11 @@ function summarizeCommandForLog(commandName: string, args: string[]): string {
     case 'ai-watch':
     case '채널ai':
       return `action=${args[0] ?? 'set-current'}`;
+    case '웹검색':
+    case 'web-search':
+    case 'search-mode':
+    case '검색설정':
+      return `mode=${args[0] ?? 'show'}`;
     case '음색':
     case 'voice':
     case 'tts-voice':
@@ -560,6 +596,50 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       }
     },
     {
+      name: '웹검색',
+      aliases: ['web-search', 'search-mode', '검색설정'],
+      description: '서버 AI 웹 검색 모드를 확인하거나 변경합니다.',
+      async execute(message, args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        const raw = args[0]?.trim();
+        const current = getGuildWebSearchMode(context, message.guildId);
+        if (!raw || ['현재', 'status', 'show', 'info', '조회'].includes(raw.toLowerCase())) {
+          await message.reply({
+            content: [
+              `현재 웹 검색 모드: ${formatWebSearchMode(current)}`,
+              `기본 모드: ${formatWebSearchMode(context.settings.webSearchDefaultMode)}`,
+              `제공자: ${context.settings.webSearchProvider}, 상태: ${context.webSearchProvider?.status() ?? 'unavailable'}`,
+              '사용 가능: disabled, explicit_only, automatic, search_first_factual',
+              '서버 관리자만 변경할 수 있어요...'
+            ].join('\n'),
+            allowedMentions: { repliedUser: false }
+          });
+          return;
+        }
+
+        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+          throw new Error('서버 관리자만 웹 검색 모드를 바꿀 수 있어요...');
+        }
+
+        const parsedMode = parseWebSearchModeArg(raw);
+        if (!parsedMode) {
+          throw new Error('알 수 없는 웹 검색 모드예요... disabled, explicit_only, automatic, search_first_factual 중 하나를 사용해 주세요...');
+        }
+
+        if (parsedMode === 'reset') {
+          context.voiceSettings.setGuildWebSearchMode(message.guildId, undefined);
+          await message.reply({
+            content: `웹 검색 모드를 기본값으로 되돌렸어요... 현재 기본값은 ${formatWebSearchMode(context.settings.webSearchDefaultMode)}예요...`,
+            allowedMentions: { repliedUser: false }
+          });
+          return;
+        }
+
+        context.voiceSettings.setGuildWebSearchMode(message.guildId, parsedMode);
+        await message.reply({ content: `웹 검색 모드를 ${formatWebSearchMode(parsedMode)}로 저장했어요...`, allowedMentions: { repliedUser: false } });
+      }
+    },
+    {
       name: '음색',
       aliases: ['voice', 'tts-voice', '목소리', 'voice-style', 'voicepreset'],
       description: '내 TTS 음색 프리셋을 확인하거나 설정합니다.',
@@ -748,6 +828,7 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             `${prefix}말 <문장> / ${prefix}say <text> / ${prefix}speak <text> / ${prefix}talk <text> / ${prefix}read <text> / ${prefix}tts <text> — 문장을 음성으로 읽기...`,
             `${prefix}멈춰 / ${prefix}stop / ${prefix}halt / ${prefix}cancel / ${prefix}pause / ${prefix}정지 / ${prefix}그만 / ${prefix}멈춤 / ${prefix}스톱 — TTS 재생 멈추기...`,
             `${prefix}ai채널 [#채널|해제] / ${prefix}ai-channel / ${prefix}ai-chat-channel / ${prefix}ai-watch / ${prefix}채널ai — AI가 자동으로 답할 채널 설정/해제...`,
+            `${prefix}웹검색 [현재|disabled|explicit_only|automatic|search_first_factual|초기화] / ${prefix}web-search / ${prefix}search-mode / ${prefix}검색설정 — AI 웹 검색 모드 확인/변경... (서버 관리자만 변경 가능해요...)`,
             `${prefix}음색 [프리셋] / ${prefix}voice [preset] / ${prefix}voice-style [preset] / ${prefix}voicepreset [preset] / ${prefix}tts-voice [preset] / ${prefix}목소리 [프리셋] — 내 TTS 음색 확인/설정...`,
             `${prefix}tts엔진 [edge|gtts] / ${prefix}engine [edge|gtts] / ${prefix}tts-engine [edge|gtts] / ${prefix}ttsengine [edge|gtts] / ${prefix}엔진 [edge|gtts] — 내 TTS 엔진 확인/설정...`,
             `${prefix}시간대 [Asia/Seoul|America/Los_Angeles|해제] / ${prefix}timezone [time zone] / ${prefix}tz [time zone] — AI 시간 답변 기준 설정...`,
@@ -1154,6 +1235,8 @@ function confirmationPreviewForSafety(safety: CommandSafety): string {
       return 'TTS 채널 설정을 바꿀까요?';
     case 'ai-channel':
       return 'AI 채팅 채널 설정을 바꿀까요?';
+    case 'web-search':
+      return '웹 검색 모드를 바꿀까요?';
     default:
       return '이 명령을 실행할까요?';
   }
@@ -1794,6 +1877,12 @@ async function handleAiPrompt(
         maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
         pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
         pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
+        webSearch: {
+          mode: getGuildWebSearchMode(context, message.guildId),
+          provider: context.settings.webSearchProvider,
+          providerStatus: context.webSearchProvider?.status() ?? 'unavailable',
+          resultCount: context.settings.webSearchResultCount
+        },
         executionContext: { nowMs: message.createdTimestamp, message, botContext: context },
         onDiagnostic: (details) => logAgentDiagnostic(message, context, details)
       });
@@ -1988,11 +2077,13 @@ export async function createBot(
   const ai = new AiService(settings, usageStore);
   const aiCommandPlanner = new AiCommandPlanner(ai);
   const agentTurnContextStore = new AgentTurnContextStore();
+  const webSearchProvider = createWebSearchProvider(settings);
   const agentRuntime = new AgentRuntime(
     ai,
     createDefaultToolRegistry({
       historySearch: (input, executionContext) =>
-        executeHistorySearchTool(executionContext.message as Message, executionContext.botContext as BotContext, input)
+        executeHistorySearchTool(executionContext.message as Message, executionContext.botContext as BotContext, input),
+      webSearch: (input) => webSearchProvider.search(input)
     }),
     agentTurnContextStore
   );
@@ -2005,6 +2096,7 @@ export async function createBot(
     aiCommandPlanner,
     agentRuntime,
     agentTurnContextStore,
+    webSearchProvider,
     activityLog,
     voiceSettings,
     voice: new VoiceService(
