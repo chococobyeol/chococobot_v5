@@ -56,15 +56,19 @@ export class ConfirmationManager {
     return confirmation;
   }
 
-  consumeLatestForActor(scope: Pick<ConfirmationScope, 'guildId' | 'channelId' | 'userId'>): PendingConfirmation | undefined {
+  latestForActor(scope: Pick<ConfirmationScope, 'guildId' | 'channelId' | 'userId'>): PendingConfirmation | undefined {
     this.pruneExpired();
-    const latest = Array.from(this.confirmations.values())
+    return Array.from(this.confirmations.values())
       .reverse()
       .find((confirmation) => (
         confirmation.guildId === scope.guildId &&
         confirmation.channelId === scope.channelId &&
         confirmation.userId === scope.userId
       ));
+  }
+
+  consumeLatestForActor(scope: Pick<ConfirmationScope, 'guildId' | 'channelId' | 'userId'>): PendingConfirmation | undefined {
+    const latest = this.latestForActor(scope);
     if (!latest) return undefined;
     this.confirmations.delete(latest.token);
     return latest;

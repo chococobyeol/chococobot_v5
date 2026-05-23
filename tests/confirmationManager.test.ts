@@ -47,6 +47,8 @@ describe('ConfirmationManager', () => {
       commandQuery: '대청소 2'
     }, 'second');
 
+    expect(manager.latestForActor({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toEqual(second);
+    expect(manager.get(second.token)).toEqual(second);
     expect(manager.consumeLatestForActor({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toEqual(second);
     expect(manager.get(second.token)).toBeUndefined();
     expect(manager.get(first.token)).toEqual(first);

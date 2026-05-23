@@ -14,6 +14,7 @@ const MAX_RETRIES = 1;
 export type AiCommandPlan =
   | { kind: 'chat' }
   | { kind: 'command'; query: string }
+  | { kind: 'confirm_pending' }
   | { kind: 'channel-history'; mode: 'summary' | 'qa'; targetChannelReference: string; query: string }
   | { kind: 'time'; target: 'viewer' | 'zone'; offsetSeconds?: number; timeZone?: string; label?: string }
   | { kind: 'clarify'; message: string }
@@ -27,6 +28,7 @@ export type AiCommandPlannerOptions = {
   botVoiceConnected?: boolean;
   maxCompletionTokens?: number;
   pendingHistory?: { mode: 'summary' | 'qa'; query: string } | null;
+  pendingConfirmation?: { preview: string; commandQuery: string; intent: string; normalizedArgs: string } | null;
   onDiagnostic?: (details: AiPlannerDiagnostic) => Promise<void> | void;
 };
 
@@ -138,11 +140,13 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
     [
       '너는 Discord 봇 ChococoBot의 안전한 AI 명령 라우터예요.',
       '사용자 메시지는 기본적으로 AI 채팅이에요. 명령 실행 의도가 명확하고 조건이 충분할 때만 command를 선택해요.',
+      '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
       '애매하면 clarify로 구체적인 선택지를 물어봐요. 실행할 수 없는 조건이면 unavailable로 자연스럽게 안내해요.',
       '출력은 반드시 JSON 하나만 쓰세요. 마크다운, 설명 문장, 코드펜스는 쓰지 마세요.',
       '허용 출력 형식:',
       '{"kind":"chat"}',
       '{"kind":"command","query":"도움말"}',
+      '{"kind":"confirm_pending"}',
       '{"kind":"clarify","message":"채팅으로 답할까요, 음성으로 말할까요?"}',
       '{"kind":"unavailable","message":"음성으로 말하려면 먼저 음성 채널에 들어가 있어야 해요..."}',
       '{"kind":"channel-history","mode":"summary","targetChannelReference":"<#1234567890>","query":"메모 채널 내용 요약해줘"}',
@@ -172,6 +176,7 @@ export function buildPlannerMessages(message: Message, prompt: string, options: 
       `현재 프리픽스: ${options.prefix}`,
       `현재 사용자 메시지 작성 시각: <t:${Math.floor(message.createdTimestamp / 1000)}:t>`,
       options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
+      options.pendingConfirmation ? `대기 중인 확인 작업 JSON: ${JSON.stringify(options.pendingConfirmation)}` : undefined,
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined
     ]
       .filter(Boolean)
@@ -238,6 +243,8 @@ export function parseAiCommandPlan(response: string): ParseResult {
       if (!query) return { ok: false, errors: ['command.query must be a non-empty string'] };
       return { ok: true, plan: { kind: 'command', query } };
     }
+    case 'confirm_pending':
+      return { ok: true, plan: { kind: 'confirm_pending' } };
     case 'channel-history': {
       const mode = parsed.mode === 'qa' || parsed.mode === 'summary' ? parsed.mode : null;
       const query = typeof parsed.query === 'string' ? parsed.query.trim() : '';

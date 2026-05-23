@@ -404,12 +404,15 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
-  it('executes the latest pending confirmation when the user answers yes through AI prefix', async () => {
+  it('executes pending confirmation when AI interprets the prefix reply as approval', async () => {
     const commands = createPrefixCommands();
     const confirmations = new ConfirmationManager();
     const context = makeContext({
       agentRuntime: {
-        run: vi.fn(async () => ({ kind: 'legacy_command', query: '대청소 3', cleanupTarget: 'channel' }))
+        run: vi
+          .fn()
+          .mockResolvedValueOnce({ kind: 'legacy_command', query: '대청소 3', cleanupTarget: 'channel' })
+          .mockResolvedValueOnce({ kind: 'confirm_pending' })
       }
     });
     const member = {
@@ -434,7 +437,12 @@ describe('handleMessageCreate', () => {
     await handleMessageCreate(second, commands, context as any, confirmations);
 
     expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('확인 토큰') }));
-    expect(context.agentRuntime.run).toHaveBeenCalledTimes(1);
+    expect(context.agentRuntime.run).toHaveBeenCalledTimes(2);
+    expect(context.agentRuntime.run).toHaveBeenLastCalledWith(
+      second,
+      '그래',
+      expect.objectContaining({ pendingConfirmation: expect.objectContaining({ commandQuery: '대청소 3' }) })
+    );
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalledWith(second, '그래');
     expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
     expect(cleanupChannel.bulkDelete.mock.calls[0][0].map((item: { id: string }) => item.id)).toEqual([
@@ -1458,7 +1466,7 @@ describe('handleMessageCreate', () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       agentRuntime: {
-        run: vi.fn(async () => ({ kind: 'legacy_command', query: '청소 2', cleanupTarget: 'self' }))
+        run: vi.fn(async () => ({ kind: 'legacy_command', query: '청소 2', cleanupTarget: 'self', cleanupEvidence: '내 채팅' }))
       }
     });
     const message = makeMessage('!? 채팅 2개 지워줘');

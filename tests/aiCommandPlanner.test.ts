@@ -71,6 +71,25 @@ describe('AiCommandPlanner', () => {
     expect(plan).toEqual({ kind: 'time', target: 'viewer', offsetSeconds: 18000, timeZone: undefined, label: undefined });
   });
 
+
+  it('lets the model decide pending confirmation replies', async () => {
+    const ai = {
+      askMessages: vi.fn(async () => '{"kind":"confirm_pending"}')
+    };
+    const planner = new AiCommandPlanner(ai as any);
+
+    const plan = await planner.plan(makeMessage(), '그래', {
+      prefix: '!',
+      commands: new Collection(),
+      availableChannels: [],
+      pendingConfirmation: { preview: '채널 메시지 삭제를 진행할까요?', commandQuery: '대청소 3', intent: 'cleanup', normalizedArgs: '3' }
+    });
+
+    expect(plan).toEqual({ kind: 'confirm_pending' });
+    const firstCall = (ai.askMessages as any).mock.calls[0]?.[0] as { messages: Array<{ content: string }> } | undefined;
+    expect(firstCall?.messages[0]?.content).toContain('대기 중인 확인 작업 JSON');
+  });
+
   it('retries invalid time zones from model output', async () => {
     const ai = {
       askMessages: vi.fn()

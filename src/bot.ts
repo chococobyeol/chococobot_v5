@@ -11,7 +11,7 @@ import { AgentTurnContextStore } from './services/agentTurnContextStore.js';
 import { createDefaultToolRegistry, type HistorySearchInput, type HistorySearchOutput } from './services/toolRegistry.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
-import { ConfirmationManager, type ConfirmationScope } from './services/confirmationManager.js';
+import { ConfirmationManager, type ConfirmationScope, type PendingConfirmation } from './services/confirmationManager.js';
 import {
   DEFAULT_HISTORY_LOOKBACK_HOURS,
   DEFAULT_HISTORY_MESSAGE_LIMIT,
@@ -1568,25 +1568,48 @@ function extractLeadingChannelReference(text: string): string | undefined {
   return undefined;
 }
 
-function isAffirmativeConfirmationReply(prompt: string): boolean {
-  const normalized = prompt.trim().toLowerCase().replace(/[.!?。！？…\s]+/g, '');
-  return ['그래', '네', '예', '응', 'ㅇㅇ', '확인', '승인', '좋아', '오케이', 'ok', 'okay', 'yes', 'y'].includes(normalized);
+function latestConfirmationForMessage(message: Message, confirmations: ConfirmationManager): PendingConfirmation | undefined {
+  if (!message.guildId) return undefined;
+  return confirmations.latestForActor({
+    guildId: message.guildId,
+    channelId: message.channelId,
+    userId: message.author.id
+  });
 }
 
-async function handlePendingConfirmationReply(
+function pendingConfirmationPromptContext(pending: PendingConfirmation | undefined): AgentConfirmationContext | null {
+  if (!pending) return null;
+  return {
+    preview: pending.preview,
+    commandQuery: pending.commandQuery,
+    intent: pending.intent,
+    normalizedArgs: pending.normalizedArgs
+  };
+}
+
+type AgentConfirmationContext = {
+  preview: string;
+  commandQuery: string;
+  intent: string;
+  normalizedArgs: string;
+};
+
+async function dispatchConfirmedPendingCommand(
   message: Message,
-  prompt: string,
   commands: Collection<string, PrefixCommand>,
   context: BotContext,
   confirmations: ConfirmationManager
 ): Promise<boolean> {
-  if (!message.guildId || !isAffirmativeConfirmationReply(prompt)) return false;
+  if (!message.guildId) return false;
   const pending = confirmations.consumeLatestForActor({
     guildId: message.guildId,
     channelId: message.channelId,
     userId: message.author.id
   });
-  if (!pending) return false;
+  if (!pending) {
+    await message.reply({ content: '확인할 대기 작업을 찾지 못했어요...', allowedMentions: { repliedUser: false } });
+    return true;
+  }
   return dispatchCommandQuery(message, commands, context, pending.commandQuery);
 }
 
@@ -1606,7 +1629,7 @@ export async function handleMessageCreate(
     }
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
-      if (await handlePendingConfirmationReply(message, aiPrompt, commands, context, confirmations)) return true;
+      const pendingConfirmation = latestConfirmationForMessage(message, confirmations);
       const pendingHistoryRequest = getPendingChannelHistoryRequest(message);
       if (context.agentRuntime) {
         try {
@@ -1620,6 +1643,7 @@ export async function handleMessageCreate(
             botVoiceConnected: context.voice.isConnected(message.guildId),
             maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
             pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
+            pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
             executionContext: { nowMs: message.createdTimestamp, message, botContext: context },
             onDiagnostic: (details) => logAgentDiagnostic(message, context, details)
           });
@@ -1633,6 +1657,8 @@ export async function handleMessageCreate(
               return true;
             case 'legacy_command':
               return dispatchPlannerCommand(message, commands, context, confirmations, outcome.query, { allowUserCleanupWithoutConfirmation: true });
+            case 'confirm_pending':
+              return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
             case 'not_handled':
               if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
               await context.aiChat.handlePrompt(message, aiPrompt);
@@ -1660,6 +1686,7 @@ export async function handleMessageCreate(
             botVoiceConnected: context.voice.isConnected(message.guildId),
             maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
             pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
+            pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
             onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
           });
           switch (plan.kind) {
@@ -1669,6 +1696,8 @@ export async function handleMessageCreate(
               return true;
             case 'command':
               return dispatchPlannerCommand(message, commands, context, confirmations, plan.query);
+            case 'confirm_pending':
+              return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
             case 'channel-history':
               if (isServerWideHistoryTarget(plan.targetChannelReference)) {
                 return handleGuildChannelHistoryPlan(message, plan.mode, plan.query, context);
