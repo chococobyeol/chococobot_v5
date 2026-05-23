@@ -6,6 +6,9 @@ import type { UsageStore } from './services/usageStore.js';
 import { AiService } from './services/aiService.js';
 import { extractErrorDetails, type AiChatMessage } from './services/aiService.js';
 import { AiCommandPlanner } from './services/aiCommandPlanner.js';
+import { AgentRuntime, type AgentRuntimeDiagnostic } from './services/agentRuntime.js';
+import { AgentTurnContextStore } from './services/agentTurnContextStore.js';
+import { createDefaultToolRegistry, type HistorySearchInput, type HistorySearchOutput } from './services/toolRegistry.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { ConfirmationManager, type ConfirmationScope } from './services/confirmationManager.js';
@@ -57,6 +60,8 @@ export type BotContext = {
   ai: AiService;
   aiChat: AiChatService;
   aiCommandPlanner?: AiCommandPlanner;
+  agentRuntime?: AgentRuntime;
+  agentTurnContextStore?: AgentTurnContextStore;
   voice: VoiceService;
   voiceSettings: import('./services/voiceSettingsStore.js').VoiceSettingsStore;
   activityLog: BotActivityLogService;
@@ -202,6 +207,11 @@ function setPendingChannelHistoryRequest(message: Message, pending: Omit<Pending
 
 function clearPendingChannelHistoryRequest(message: Message): void {
   pendingChannelHistoryRequests.delete(pendingChannelHistoryKey(message));
+}
+
+function clearAgentTurnContext(message: Message, context: BotContext): void {
+  if (!message.guildId) return;
+  context.agentTurnContextStore?.clear({ guildId: message.guildId, channelId: message.channelId, userId: message.author.id });
 }
 
 function channelHistoryModeFromPrompt(prompt: string): 'summary' | 'qa' | null {
@@ -729,6 +739,7 @@ async function dispatchPrefixCommand(
   const prefix = getGuildPrefix(context, message.guildId);
   const parsed = parsePrefixCommand(message.content, prefix);
   if (!parsed) return false;
+  clearAgentTurnContext(message, context);
   return dispatchResolvedCommand(message, commands, context, parsed, prefix);
 }
 
@@ -1073,6 +1084,44 @@ function isRateLimitLike(error: unknown): boolean {
   return extractErrorDetails(error).status === 429;
 }
 
+async function logAgentDiagnostic(
+  message: Message,
+  context: BotContext,
+  details: AgentRuntimeDiagnostic
+): Promise<void> {
+  if (!message.guildId) return;
+  const errorDetails = details.error ? extractErrorDetails(details.error) : undefined;
+  if (typeof context.activityLog.logAiDiagnostic !== 'function') return;
+  await context.activityLog.logAiDiagnostic({
+    guildId: message.guildId,
+    guildName: message.guild?.name,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userName: message.member?.displayName ?? message.author.username,
+    stage: details.stage,
+    event: details.event,
+    runId: details.runId,
+    iteration: details.iteration,
+    toolCallId: details.toolCallId,
+    toolName: details.toolName,
+    policy: details.policy,
+    observationSummary: details.observationSummary,
+    model: details.model,
+    usageScope: details.usageScope ?? (details.stage === 'agent' ? 'agent' : undefined),
+    decisionKind: details.decisionKind,
+    validationErrors: details.validationErrors,
+    promptSnippet: details.promptSnippet,
+    responseSnippet: details.responseSnippet,
+    promptTokens: details.promptTokens,
+    completionTokens: details.completionTokens,
+    totalTokens: details.totalTokens,
+    rateLimitHeaders: details.rateLimitHeaders ?? errorDetails?.rateLimitHeaders,
+    status: details.status ?? errorDetails?.status,
+    errorName: errorDetails?.errorName,
+    errorMessage: errorDetails?.errorMessage
+  }).catch((error) => logger.warn('Failed to log agent diagnostic:', error));
+}
+
 async function dispatchPlannerCommand(
   message: Message,
   commands: Collection<string, PrefixCommand>,
@@ -1212,6 +1261,114 @@ async function handleChannelHistoryPlan(
     await message.reply({ content, allowedMentions: { repliedUser: false } });
   }
   return true;
+}
+
+async function executeHistorySearchTool(
+  message: Message,
+  context: BotContext,
+  input: HistorySearchInput
+): Promise<HistorySearchOutput> {
+  if (!message.guildId) throw new Error('서버에서만 대화 기록을 검색할 수 있어요...');
+  const assessment = assessChannelHistoryQuery(input.query);
+  if (assessment.status !== 'ready') throw new Error(assessment.prompt);
+
+  const queryTopic = input.query.trim() || null;
+  const isTopicLookup = Boolean(queryTopic && !isSummaryOnlyHistoryQuery(input.query));
+  const baseLimit = Math.min(input.limit ?? assessment.limit, MAX_HISTORY_MESSAGE_LIMIT);
+  const searchLimit = queryTopic && baseLimit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : baseLimit;
+  const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
+
+  if (input.scope === 'channel') {
+    const targetChannel = resolveTargetGuildTextChannel(message, input.channelRef);
+    if (isLoggingGuild(message, context) && isManagedLogTextChannel(targetChannel) && !canAccessLoggingHistory(message)) {
+      throw new Error('로그 채널 내용은 관리자만 확인할 수 있어요...');
+    }
+    const indexedSearch = queryTopic
+      ? await searchIndexedGuildTextHistory(message, context, input.query, { limit: searchLimit, channelIds: [targetChannel.id] })
+      : { history: [], source: 'disabled' as const };
+    const history = indexedSearch.history.length ? indexedSearch.history : (await fetchChannelHistory(targetChannel, {
+      limit: searchLimit,
+      lookbackHours: searchLookbackHours
+    })).filter((entry) => entry.id !== message.id);
+    const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, input.query) : history;
+    const usedHistory = isTopicLookup
+      ? (filteredHistory.length || !isFuzzyTopicLookupQuery(input.query) ? filteredHistory : history)
+      : history;
+    await context.activityLog.logChannelHistory({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.member?.displayName ?? message.author.username,
+      mode: input.mode,
+      query: input.query,
+      topic: queryTopic,
+      targetChannelId: targetChannel.id,
+      searchSource: indexedSearch.history.length ? indexedSearch.source : 'recent-fetch',
+      searchError: indexedSearch.error,
+      scannedChannels: 1,
+      matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
+      usedMessages: usedHistory.length
+    }).catch((logError) => logger.warn('Failed to log agent history.search result:', logError));
+    return {
+      scope: 'channel',
+      channelId: targetChannel.id,
+      query: input.query,
+      scannedChannels: 1,
+      matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
+      usedMessages: usedHistory.length,
+      evidence: usedHistory.slice(0, 20).map(toHistoryEvidence)
+    };
+  }
+
+  if (isLoggingGuild(message, context) && !canAccessLoggingHistory(message)) {
+    throw new Error('로그 서버의 전체 대화 검색은 관리자만 사용할 수 있어요...');
+  }
+  const searchableChannels = searchableHistoryChannels(message, context);
+  const searchableChannelIds = isLoggingGuild(message, context) ? searchableChannels.map((channel) => channel.id) : undefined;
+  const indexedSearch = queryTopic
+    ? await searchIndexedGuildTextHistory(message, context, input.query, { limit: searchLimit, channelIds: searchableChannelIds })
+    : { history: [], source: 'disabled' as const };
+  const history = indexedSearch.history.length ? indexedSearch.history : await fetchRecentGuildTextHistory(message, context, {
+    limit: searchLimit,
+    lookbackHours: searchLookbackHours
+  });
+  const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, input.query) : history;
+  const usedHistory = isTopicLookup
+    ? (filteredHistory.length || !isFuzzyTopicLookupQuery(input.query) ? filteredHistory : history)
+    : history;
+  await context.activityLog.logChannelHistory({
+    guildId: message.guildId,
+    guildName: message.guild?.name,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userName: message.member?.displayName ?? message.author.username,
+    mode: input.mode,
+    query: input.query,
+    topic: queryTopic,
+    searchSource: indexedSearch.history.length ? indexedSearch.source : 'recent-fetch',
+    searchError: indexedSearch.error,
+    scannedChannels: Math.min(MAX_AUTO_HISTORY_CHANNELS, searchableChannels.length),
+    matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
+    usedMessages: usedHistory.length
+  }).catch((logError) => logger.warn('Failed to log agent history.search result:', logError));
+  return {
+    scope: 'server',
+    query: input.query,
+    scannedChannels: Math.min(MAX_AUTO_HISTORY_CHANNELS, searchableChannels.length),
+    matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
+    usedMessages: usedHistory.length,
+    evidence: usedHistory.slice(0, 20).map(toHistoryEvidence)
+  };
+}
+
+function toHistoryEvidence(entry: Awaited<ReturnType<typeof fetchChannelHistory>>[number]): HistorySearchOutput['evidence'][number] {
+  return {
+    channelId: entry.channelId,
+    authorName: entry.authorName,
+    timestamp: new Date(entry.createdTimestamp).toISOString(),
+    content: entry.content
+  };
 }
 
 async function handleGuildChannelHistoryPlan(
@@ -1486,6 +1643,46 @@ export async function handleMessageCreate(
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
       const pendingHistoryRequest = getPendingChannelHistoryRequest(message);
+      if (context.agentRuntime) {
+        try {
+          const member = message.member as GuildMember | null;
+          const outcome = await context.agentRuntime.run(message, aiPrompt, {
+            prefix,
+            commands: uniqueCommandDefinitions(commands),
+            availableChannels: listTextChannelCandidates(message),
+            userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
+            botVoiceConnected: context.voice.isConnected(message.guildId),
+            maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
+            pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
+            executionContext: { nowMs: message.createdTimestamp, message, botContext: context },
+            onDiagnostic: (details) => logAgentDiagnostic(message, context, details)
+          });
+          switch (outcome.kind) {
+            case 'final':
+            case 'clarify':
+            case 'unavailable':
+            case 'blocked':
+              clearPendingChannelHistoryRequest(message);
+              await replyWithChunks(message, outcome.message);
+              return true;
+            case 'legacy_command':
+              return dispatchPlannerCommand(message, commands, context, confirmations, outcome.query);
+            case 'not_handled':
+              if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
+              await context.aiChat.handlePrompt(message, aiPrompt);
+              return true;
+          }
+        } catch (error) {
+          if (isRateLimitLike(error)) {
+            await logAgentDiagnostic(message, context, { stage: 'agent', event: 'rate_limit', error });
+            await message.reply({ content: 'AI 요청이 잠시 많아요. 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
+            return true;
+          }
+          await logAgentDiagnostic(message, context, { stage: 'agent', event: 'error', error });
+          await context.aiChat.handlePrompt(message, aiPrompt);
+          return true;
+        }
+      }
       if (context.aiCommandPlanner) {
         try {
           const member = message.member as GuildMember | null;
@@ -1577,6 +1774,17 @@ export async function handleMessageCreate(
   return Boolean(queued);
 }
 
+function uniqueCommandDefinitions(commands: Collection<string, PrefixCommand>): Array<{ name: string; aliases: readonly string[]; description: string }> {
+  const seen = new Set<string>();
+  const result: Array<{ name: string; aliases: readonly string[]; description: string }> = [];
+  for (const command of commands.values()) {
+    if (seen.has(command.name)) continue;
+    seen.add(command.name);
+    result.push({ name: command.name, aliases: command.aliases, description: command.description });
+  }
+  return result;
+}
+
 function listTextChannelCandidates(message: Message): Array<{ id: string; name: string; mention: string }> {
   const channels = Array.from(message.guild?.channels.cache?.values?.() ?? [])
     .filter((candidate) => candidate.type === ChannelType.GuildText)
@@ -1606,6 +1814,15 @@ export async function createBot(
   const activityLog = new BotActivityLogService(client, new SqliteBotActivityLogStore(settings.databasePath), settings.loggingGuildId);
   const ai = new AiService(settings, usageStore);
   const aiCommandPlanner = new AiCommandPlanner(ai);
+  const agentTurnContextStore = new AgentTurnContextStore();
+  const agentRuntime = new AgentRuntime(
+    ai,
+    createDefaultToolRegistry({
+      historySearch: (input, executionContext) =>
+        executeHistorySearchTool(executionContext.message as Message, executionContext.botContext as BotContext, input)
+    }),
+    agentTurnContextStore
+  );
   const confirmations = new ConfirmationManager();
   const context: BotContext = {
     settings,
@@ -1613,6 +1830,8 @@ export async function createBot(
     ai,
     aiChat: new AiChatService(settings, ai, memoryStore, activityLog, voiceSettings),
     aiCommandPlanner,
+    agentRuntime,
+    agentTurnContextStore,
     activityLog,
     voiceSettings,
     voice: new VoiceService(

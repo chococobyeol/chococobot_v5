@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearPendingChannelHistoryRequestsForTests, createPrefixCommands, handleMessageCreate } from '../src/bot.js';
 import { ConfirmationManager } from '../src/services/confirmationManager.js';
 import { InMemoryVoiceSettingsStore } from '../src/services/voiceSettingsStore.js';
+import { AgentTurnContextStore } from '../src/services/agentTurnContextStore.js';
 
 function makeMessage(content: string, overrides: Record<string, unknown> = {}) {
   const reply = vi.fn(async () => undefined);
@@ -1338,6 +1339,79 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '아 왜 최근 내용만 찾아');
     expect(context.ai.askMessages).not.toHaveBeenCalled();
     expect(context.activityLog.logChannelHistory).not.toHaveBeenCalled();
+  });
+
+
+  it('clears agent follow-up context when a prefix command is used', async () => {
+    const commands = createPrefixCommands();
+    const agentTurnContextStore = new AgentTurnContextStore();
+    agentTurnContextStore.set({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      lastIntent: 'time',
+      lastToolCalls: [{ tool: 'time.in_zone', input: { timeZone: 'America/New_York' } }],
+      slots: { timeZones: ['America/New_York'] },
+      observations: []
+    });
+    const context = makeContext({ agentTurnContextStore });
+    const message = makeMessage('!도움말');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(agentTurnContextStore.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toBeUndefined();
+  });
+
+  it('invokes AgentRuntime before the legacy planner for non-empty prefix-question prompts', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'final', message: 'agent answer' }))
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '말 안녕' }))
+      }
+    });
+    const message = makeMessage('!? 알려줘');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).toHaveBeenCalledWith(
+      message,
+      '알려줘',
+      expect.objectContaining({ prefix: '!', executionContext: expect.objectContaining({ message, botContext: context }) })
+    );
+    expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'agent answer' }));
+  });
+
+  it('dispatches AgentRuntime legacy_command outcomes through existing safety and command execution', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'legacy_command', query: '말 안녕하세요' }))
+      }
+    });
+    const message = makeMessage('!? 음성채널에서 안녕하세요 라고 말해봐');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.voice.join).toHaveBeenCalledTimes(1);
+    expect(context.voice.speak).toHaveBeenCalledWith('guild-1', '안녕하세요', 'user-1');
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('falls back from AgentRuntime not_handled to chat without natural-language command execution', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'not_handled' }))
+      }
+    });
+    const message = makeMessage('!? 들어와');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.voice.join).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '들어와');
   });
 
   it('falls through to watched-channel TTS when neither prefix nor AI applies', async () => {

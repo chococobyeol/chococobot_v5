@@ -9,7 +9,7 @@ export type AiChatMessage = {
   content: string;
 };
 
-export type AiUsageScope = 'chat' | 'summary' | 'planner';
+export type AiUsageScope = 'chat' | 'summary' | 'planner' | 'agent';
 
 export type RateLimitHeaders = Record<string, string>;
 

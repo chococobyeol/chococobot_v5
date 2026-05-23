@@ -9,12 +9,18 @@ export type AiDiagnosticLogDetails = {
   channelId: string;
   userId: string;
   userName?: string | null;
-  stage: 'planner' | 'chat' | 'summary';
-  event: 'request' | 'response' | 'parse_error' | 'retry' | 'decision' | 'error' | 'rate_limit';
+  stage: 'planner' | 'chat' | 'summary' | 'agent' | 'tool';
+  event: 'request' | 'response' | 'parse_error' | 'retry' | 'decision' | 'error' | 'rate_limit' | 'tool_call' | 'observation' | 'blocked' | 'final' | 'loop_limit';
   model?: string;
   usageScope?: string;
   decisionKind?: string;
   commandSafety?: string;
+  runId?: string;
+  iteration?: number;
+  toolCallId?: string;
+  toolName?: string;
+  policy?: string;
+  observationSummary?: string;
   retryCount?: number;
   validationErrors?: readonly string[];
   promptSnippet?: string;
@@ -314,6 +320,12 @@ export class BotActivityLogService {
           details.usageScope ? `usageScope=${details.usageScope}` : undefined,
           details.decisionKind ? `decision=${details.decisionKind}` : undefined,
           details.commandSafety ? `commandSafety=${details.commandSafety}` : undefined,
+          details.runId ? `runId=${details.runId}` : undefined,
+          typeof details.iteration === 'number' ? `iteration=${details.iteration}` : undefined,
+          details.toolCallId ? `toolCallId=${details.toolCallId}` : undefined,
+          details.toolName ? `toolName=${details.toolName}` : undefined,
+          details.policy ? `policy=${details.policy}` : undefined,
+          details.observationSummary ? `observationSummary=${truncate(details.observationSummary, 500)}` : undefined,
           typeof details.retryCount === 'number' ? `retryCount=${details.retryCount}` : undefined,
           details.validationErrors?.length ? `validationErrors=${truncate(details.validationErrors.join('; '), 500)}` : undefined,
           details.promptSnippet ? `prompt=${truncate(details.promptSnippet, 500)}` : undefined,
