@@ -1031,6 +1031,22 @@ function filterHistoryByQuery(
   return history.filter((entry) => normalizeSearchText(entry.content).includes(normalizedQuery));
 }
 
+function filterUsableHistoryEntries(
+  history: Awaited<ReturnType<typeof fetchChannelHistory>>,
+  currentMessageId?: string
+): Awaited<ReturnType<typeof fetchChannelHistory>> {
+  return history.filter((entry) => entry.id !== currentMessageId && !isInternalBotLogHistoryEntry(entry));
+}
+
+function isInternalBotLogHistoryEntry(entry: Awaited<ReturnType<typeof fetchChannelHistory>>[number]): boolean {
+  if (!entry.isBot) return false;
+  const content = entry.content.trim();
+  if (!content) return false;
+  return /(?:^|\n)guildName=/u.test(content) &&
+    /(?:^|\n)userName=/u.test(content) &&
+    /(?:^|\n)(?:stage|event|command|mode)=/u.test(content);
+}
+
 function isLoggingGuild(message: Message, context: BotContext): boolean {
   return Boolean(message.guildId && message.guildId === context.settings.loggingGuildId);
 }
@@ -1066,9 +1082,10 @@ async function fetchRecentGuildTextHistory(
     )
   );
 
-  const combined = settled
-    .flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
-    .filter((entry) => entry.id !== message.id);
+  const combined = filterUsableHistoryEntries(
+    settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : [])),
+    message.id
+  );
   return combined
     .sort((left, right) => right.createdTimestamp - left.createdTimestamp)
     .slice(0, options.limit)
@@ -1086,13 +1103,13 @@ async function searchIndexedGuildTextHistory(
     return { history: [], source: 'disabled' };
   }
   try {
-    const history = (await searchGuildMessages({
+    const history = filterUsableHistoryEntries(await searchGuildMessages({
       guildId: message.guildId,
       botToken,
       query,
       channelIds: options.channelIds,
       limit: options.limit
-    })).filter((entry) => entry.id !== message.id);
+    }), message.id);
     return { history, source: 'discord-search' };
   } catch (error) {
     logger.warn('Discord indexed message search failed; falling back to recent fetch:', error);
@@ -1407,10 +1424,10 @@ async function handleChannelHistoryPlan(
     const indexedSearch = queryTopic
       ? await searchIndexedGuildTextHistory(message, context, route.query, { limit: searchLimit, channelIds: [targetChannel.id] })
       : { history: [], source: 'disabled' as const };
-    const history = indexedSearch.history.length ? indexedSearch.history : (await fetchChannelHistory(targetChannel, {
+    const history = indexedSearch.history.length ? indexedSearch.history : filterUsableHistoryEntries(await fetchChannelHistory(targetChannel, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
-    })).filter((entry) => entry.id !== message.id);
+    }), message.id);
     const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, route.query) : history;
     const usedHistory = isTopicLookup
       ? (filteredHistory.length ? filteredHistory : history)
@@ -1503,10 +1520,10 @@ async function executeHistorySearchTool(
     const indexedSearch = queryTopic
       ? await searchIndexedGuildTextHistory(message, context, input.query, { limit: searchLimit, channelIds: [targetChannel.id] })
       : { history: [], source: 'disabled' as const };
-    const history = indexedSearch.history.length ? indexedSearch.history : (await fetchChannelHistory(targetChannel, {
+    const history = indexedSearch.history.length ? indexedSearch.history : filterUsableHistoryEntries(await fetchChannelHistory(targetChannel, {
       limit: searchLimit,
       lookbackHours: searchLookbackHours
-    })).filter((entry) => entry.id !== message.id);
+    }), message.id);
     const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, input.query) : history;
     const usedHistory = isTopicLookup
       ? (filteredHistory.length ? filteredHistory : history)

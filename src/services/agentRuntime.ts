@@ -388,6 +388,7 @@ export class AgentRuntime {
       '이전 agent 문맥에 pendingAction이 있으면 현재 짧은 답변을 그 pendingAction과 합쳐 처리해요. cleanup은 legacy_command/clarify/blocked 중 하나로, history는 history.search tool_calls 또는 clarify로 처리해요.',
       'pendingAction cleanup에서 target은 self/channel/other/ambiguous 중 하나이고, count는 삭제 개수가 명확할 때만 넣어요. 아직 부족한 슬롯은 missing에 남겨요.',
       'pendingAction history에서 mode는 qa/summary이고, query는 특정 주제가 없으면 ""예요. 후속 답변은 이전 질문, 현재 사용자 메시지, 현재 채널/서버 문맥을 함께 보고 scope/channelRef/query를 해소해요.',
+      '이전 agent 문맥 lastIntent가 history이고 사용자가 주제 없이 "여기서 찾아"처럼 후속 요청을 하면 이전 slots.topic과 현재/언급 채널을 조합해 history.search를 호출해요.',
       '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 짧은 긍정 답변(예: ㅇ, ㅇㅇ, 응, 네, ok)도 맥락상 승인으로 명확하면 confirm_pending이에요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
       '허용 출력:',
@@ -441,7 +442,22 @@ export class AgentRuntime {
     nowMs: number,
     priorContext: AgentTurnStoredContext | undefined
   ): void {
-    if (envelope.kind === 'not_handled' || envelope.kind === 'legacy_command' || envelope.kind === 'confirm_pending' || (envelope.kind === 'final' && calls.length === 0)) {
+    if (envelope.kind === 'not_handled' || envelope.kind === 'legacy_command' || envelope.kind === 'confirm_pending') {
+      this.contextStore.clear(key);
+      return;
+    }
+    if (envelope.kind === 'final' && calls.length === 0) {
+      if (priorContext && isReusableFollowUpIntent(priorContext.lastIntent) && !priorContext.pendingAction) {
+        this.contextStore.set(key, {
+          lastIntent: priorContext.lastIntent,
+          lastUserPrompt: prompt,
+          lastAgentMessage: envelope.message,
+          lastToolCalls: priorContext.lastToolCalls,
+          slots: priorContext.slots,
+          observations: priorContext.observations
+        }, nowMs);
+        return;
+      }
       this.contextStore.clear(key);
       return;
     }
@@ -471,6 +487,10 @@ export class AgentRuntime {
         : {})
     }, nowMs);
   }
+}
+
+function isReusableFollowUpIntent(intent: string | undefined): boolean {
+  return intent === 'history' || intent === 'web_search' || intent === 'time';
 }
 
 

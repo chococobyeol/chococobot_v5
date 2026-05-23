@@ -135,6 +135,42 @@ describe('AgentRuntime', () => {
     expect(followUpPrompt).toContain('America/New_York');
   });
 
+  it('keeps history context after a no-tool follow-up answer so short retries can reuse the topic', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'channel',
+      channelId: 'delivery',
+      query: '초밥',
+      scannedChannels: 1,
+      matchedMessages: 0,
+      usedMessages: 0,
+      evidence: []
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'history-1', tool: 'history.search', input: { scope: 'channel', channelRef: 'delivery', query: '초밥', mode: 'qa' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '배달 채널에서는 초밥 관련 내용을 찾지 못했어요...' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '해당 채널에도 초밥 관련 내용이 없어요...' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '어떤 내용을 찾을까요...' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), store);
+
+    await runtime.run(makeMessage(), '배달 채널에서 초밥 찾아봐', makeOptions({
+      availableChannels: [{ id: 'delivery', name: '배달', mention: '<#delivery>' }]
+    }));
+    await runtime.run(makeMessage(), '다른 채널에서 찾아볼까', makeOptions());
+    await runtime.run(makeMessage(), '여기서 찾아', makeOptions());
+
+    const retryPrompt = ai.askMessages.mock.calls[3][0].messages[0].content;
+    expect(retryPrompt).toContain('이전 agent 문맥 JSON');
+    expect(retryPrompt).toContain('"topic":"초밥"');
+    expect(retryPrompt).toContain('해당 채널에도 초밥 관련 내용이 없어요');
+  });
+
   it('does not accept final answers without tools or prior context from the bounded agent', async () => {
     const ai = {
       askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({

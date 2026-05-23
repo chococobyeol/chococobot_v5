@@ -1196,6 +1196,73 @@ describe('handleMessageCreate', () => {
     expect(deliveryChannel.messages.fetch).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }));
   });
 
+  it('excludes bot diagnostic log messages from channel-history evidence', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'qa',
+          targetChannelReference: 'channel-1',
+          query: '초밥'
+        }))
+      }
+    });
+    const message = makeMessage('!? 여기서 초밥 찾아봐');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async ({ limit }: { limit: number }) =>
+        [
+          {
+            id: 'bot-log-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: [
+              '봇테스트창-1249316766874861730-AI',
+              'guildName=힘내야지...',
+              'userName=ㅊㅋㅂ',
+              'stage=agent',
+              'event=response',
+              'response={"kind":"tool_calls","calls":[{"tool":"history.search","input":{"query":"초밥"}}]}'
+            ].join('\n'),
+            author: { id: 'bot-1', username: 'ChococoBot', bot: true },
+            member: { displayName: 'ChococoBot' }
+          },
+          {
+            id: 'real-message-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '초밥 맛집은 다음에 다시 얘기하기로 했어요',
+            author: { id: 'user-2', username: 'writer', bot: false },
+            member: { displayName: '작성자' }
+          }
+        ].slice(0, limit) as any
+      )
+    };
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('초밥 맛집은 다음에 다시 얘기하기로 했어요') })
+        ])
+      })
+    );
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.not.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('stage=agent') }),
+          expect.objectContaining({ content: expect.stringContaining('history.search') })
+        ])
+      })
+    );
+    expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
+      matchedMessages: 1,
+      usedMessages: 1
+    }));
+  });
+
   it('routes planner server-wide history targets to guild search instead of resolving them as a channel', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
