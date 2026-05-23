@@ -214,28 +214,9 @@ function clearAgentTurnContext(message: Message, context: BotContext): void {
   context.agentTurnContextStore?.clear({ guildId: message.guildId, channelId: message.channelId, userId: message.author.id });
 }
 
-function channelHistoryModeFromPrompt(prompt: string): 'summary' | 'qa' | null {
-  const normalized = prompt.toLowerCase();
-  if (/요약|정리|summar|찾아|검색|있는지|있었는지|언급|나왔|내용이 있/i.test(normalized)) return 'summary';
-  if (/질문|물어|뭐|무엇|무슨|왜|어떻게|\?|qa|q&a/i.test(normalized)) return 'qa';
-  return null;
-}
-
-function looksLikeChannelHistoryPrompt(prompt: string): boolean {
-  return Boolean(channelHistoryModeFromPrompt(prompt)) && /서버|채널|<#\d+>|#[^\s]+|내용|기록|대화|메모|최근|찾아|검색|언급|있는지|있었는지|나왔/.test(prompt);
-}
-
-function hasExplicitChannelReference(prompt: string): boolean {
-  return /채널|<#\d+>|#[^\s]+|메모|로그|봇테스트|테스트창/.test(prompt);
-}
-
 function isServerWideHistoryTarget(target: string): boolean {
   const normalized = normalizeChannelReference(target);
   return /^(서버전체|전체서버|이서버|현재서버|server|guild|allchannels|all)$/.test(normalized);
-}
-
-function isBotBehaviorComplaint(prompt: string): boolean {
-  return /왜|아니|뭐야|답답|못알아|말귀|최근.*만|자꾸|또/.test(prompt) && /봇|너|검색|찾|요약|최근|채널|대화/.test(prompt);
 }
 
 function findTextChannelFromNaturalReference(message: Message, prompt: string): GuildTextBasedChannel | 'ambiguous' | null {
@@ -912,15 +893,6 @@ function filterHistoryByQuery(
   return history.filter((entry) => normalizeSearchText(entry.content).includes(normalizedQuery));
 }
 
-function isSummaryOnlyHistoryQuery(query: string): boolean {
-  return /요약|정리|최근.*(?:대화|내용)|무슨\s*대화|뭐.*말했|내용\s*요약/i.test(query)
-    && !/찾|검색|있나|있는지|있었는지|나왔|언급|비슷|관련|대한|관한/i.test(query);
-}
-
-function isFuzzyTopicLookupQuery(query: string): boolean {
-  return /비슷|관련|그런\s*거|뭐\s*그런|같은\s*거/i.test(query);
-}
-
 function isLoggingGuild(message: Message, context: BotContext): boolean {
   return Boolean(message.guildId && message.guildId === context.settings.loggingGuildId);
 }
@@ -1189,7 +1161,7 @@ async function handleChannelHistoryPlan(
     }
 
     const queryTopic = route.query.trim() || null;
-    const isTopicLookup = Boolean(queryTopic && !isSummaryOnlyHistoryQuery(route.query));
+    const isTopicLookup = Boolean(queryTopic && route.mode === 'qa');
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
     const indexedSearch = queryTopic
@@ -1201,7 +1173,7 @@ async function handleChannelHistoryPlan(
     })).filter((entry) => entry.id !== message.id);
     const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, route.query) : history;
     const usedHistory = isTopicLookup
-      ? (filteredHistory.length || !isFuzzyTopicLookupQuery(route.query) ? filteredHistory : history)
+      ? (filteredHistory.length ? filteredHistory : history)
       : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
@@ -1278,7 +1250,7 @@ async function executeHistorySearchTool(
   if (assessment.status !== 'ready') throw new Error(assessment.prompt);
 
   const queryTopic = input.query.trim() || null;
-  const isTopicLookup = Boolean(queryTopic && !isSummaryOnlyHistoryQuery(input.query));
+  const isTopicLookup = Boolean(queryTopic && input.mode === 'qa');
   const baseLimit = Math.min(input.limit ?? assessment.limit, MAX_HISTORY_MESSAGE_LIMIT);
   const searchLimit = queryTopic && baseLimit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : baseLimit;
   const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
@@ -1297,7 +1269,7 @@ async function executeHistorySearchTool(
     })).filter((entry) => entry.id !== message.id);
     const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, input.query) : history;
     const usedHistory = isTopicLookup
-      ? (filteredHistory.length || !isFuzzyTopicLookupQuery(input.query) ? filteredHistory : history)
+      ? (filteredHistory.length ? filteredHistory : history)
       : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
@@ -1340,7 +1312,7 @@ async function executeHistorySearchTool(
   });
   const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, input.query) : history;
   const usedHistory = isTopicLookup
-    ? (filteredHistory.length || !isFuzzyTopicLookupQuery(input.query) ? filteredHistory : history)
+    ? (filteredHistory.length ? filteredHistory : history)
     : history;
   await context.activityLog.logChannelHistory({
     guildId: message.guildId,
@@ -1395,7 +1367,7 @@ async function handleGuildChannelHistoryPlan(
     }
 
     const queryTopic = query.trim() || null;
-    const isTopicLookup = Boolean(queryTopic && !isSummaryOnlyHistoryQuery(query));
+    const isTopicLookup = Boolean(queryTopic && mode === 'qa');
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
     const searchableChannels = searchableHistoryChannels(message, context);
@@ -1409,7 +1381,7 @@ async function handleGuildChannelHistoryPlan(
     });
     const filteredHistory = isTopicLookup ? filterHistoryByQuery(history, query) : history;
     const usedHistory = isTopicLookup
-      ? (filteredHistory.length || !isFuzzyTopicLookupQuery(query) ? filteredHistory : history)
+      ? (filteredHistory.length ? filteredHistory : history)
       : history;
     await context.activityLog.logChannelHistory({
       guildId: message.guildId,
@@ -1545,44 +1517,6 @@ async function handlePendingChannelHistoryReply(
   return false;
 }
 
-async function handleDirectChannelHistoryPrompt(
-  message: Message,
-  prompt: string,
-  context: BotContext
-): Promise<boolean> {
-  const mode = channelHistoryModeFromPrompt(prompt);
-  if (!mode || !looksLikeChannelHistoryPrompt(prompt) || isBotBehaviorComplaint(prompt)) return false;
-
-  const targetChannel = findTextChannelFromNaturalReference(message, prompt);
-  if (targetChannel && targetChannel !== 'ambiguous') {
-    clearPendingChannelHistoryRequest(message);
-    return handleChannelHistoryPlan(
-      message,
-      {
-        kind: 'channel-history',
-        mode,
-        targetChannelReference: `<#${targetChannel.id}>`,
-        query: prompt
-      },
-      context
-    );
-  }
-
-  if (targetChannel === 'ambiguous') {
-    setPendingChannelHistoryRequest(message, { mode, query: prompt });
-    await message.reply({ content: '비슷한 채널이 여러 개 있어요... 어느 채널을 요약할지 채널 멘션으로 말해 주세요...', allowedMentions: { repliedUser: false } });
-    return true;
-  }
-
-  if (!hasExplicitChannelReference(prompt)) {
-    clearPendingChannelHistoryRequest(message);
-    return handleGuildChannelHistoryPlan(message, mode, prompt, context);
-  }
-
-  setPendingChannelHistoryRequest(message, { mode, query: prompt });
-  await message.reply({ content: '어느 채널을 요약할지 못 찾았어요... 채널 이름이나 멘션을 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
-  return true;
-}
 
 
 function formatDiscordLocalTime(timestampMs: number): string {
@@ -1705,7 +1639,6 @@ export async function handleMessageCreate(
           switch (plan.kind) {
             case 'chat':
               if (await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
-              if (await handleDirectChannelHistoryPrompt(message, aiPrompt, context)) return true;
               await context.aiChat.handlePrompt(message, aiPrompt);
               return true;
             case 'command':
@@ -1728,10 +1661,6 @@ export async function handleMessageCreate(
               return handleTimePlan(message, plan, context);
             case 'clarify':
               if (pendingHistoryRequest && await handlePendingChannelHistoryReply(message, aiPrompt, context)) return true;
-              if (looksLikeChannelHistoryPrompt(aiPrompt)) {
-                const mode = channelHistoryModeFromPrompt(aiPrompt) ?? 'summary';
-                setPendingChannelHistoryRequest(message, { mode, query: aiPrompt });
-              }
               await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
               return true;
             case 'unavailable':

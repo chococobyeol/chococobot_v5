@@ -574,65 +574,33 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
-  it('remembers a pending channel-history clarification and uses the next channel answer', async () => {
+  it('respects planner chat decisions instead of regex-routing history prompts', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       aiCommandPlanner: {
         plan: vi.fn(async () => ({ kind: 'chat' }))
       }
     });
-    const memoChannel = {
-      id: 'memo-2',
-      name: '메모채널',
-      type: ChannelType.GuildText,
-      messages: {
-        fetch: vi.fn(async () =>
-          [
-            {
-              id: 'memo-message-1',
-              channelId: 'memo-2',
-              createdTimestamp: Date.now(),
-              content: '메모 내용',
-              author: { id: 'user-2', username: 'writer', bot: false },
-              member: { displayName: '작성자' }
-            }
-          ] as any
-        )
-      }
-    };
-    const first = makeMessage('!? 없는채널 내용 요약해줘');
-    const second = makeMessage('!? 메모 채널');
-    first.guild.channels.cache.set('memo-2', memoChannel);
-    second.guild.channels.cache.set('memo-2', memoChannel);
+    const message = makeMessage('!? 없는채널 내용 요약해줘');
 
-    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
-    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
-    expect(first.reply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: expect.stringContaining('어느 채널을 요약할지')
-      })
-    );
-    expect(second.reply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: '채널 기록 답변'
-      })
-    );
-    expect(context.ai.askMessages).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining('채널: #메모채널') })
-        ])
-      })
-    );
-    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(2);
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '없는채널 내용 요약해줘');
+    expect(context.ai.askMessages).not.toHaveBeenCalled();
+    expect(message.reply).not.toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
   });
 
-  it('summarizes recent conversations across text channels when no channel is specified', async () => {
+  it('summarizes recent conversations across text channels when AI plans a server history summary', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       aiCommandPlanner: {
-        plan: vi.fn(async () => ({ kind: 'chat' }))
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '서버 전체',
+          query: '최근 내용 요약해줘'
+        }))
       }
     });
     const now = Date.now();
@@ -736,13 +704,16 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
-  it('does not summarize unrelated recent history when a topic lookup has no matches', async () => {
+  it('lets AI reject unrelated recent history when a topic lookup has no exact matches', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
+      ai: {
+        askMessages: vi.fn(async () => '정성카츠 관련 내용은 찾지 못했어요...')
+      },
       aiCommandPlanner: {
         plan: vi.fn(async () => ({
           kind: 'channel-history',
-          mode: 'summary',
+          mode: 'qa',
           targetChannelReference: '서버 전체',
           query: '정성카츠'
         }))
@@ -767,11 +738,19 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠에 관한 내용은 서버에서 찾지 못했어요...' }));
-    expect(context.ai.askMessages).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '정성카츠 관련 내용은 찾지 못했어요...' }));
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 정성카츠') }),
+          expect.objectContaining({ content: expect.stringContaining('다른 식당 얘기만 했어요') })
+        ])
+      })
+    );
     expect(context.activityLog.logChannelHistory).toHaveBeenCalledWith(expect.objectContaining({
       topic: '정성카츠',
-      matchedMessages: 0
+      matchedMessages: 0,
+      usedMessages: 1
     }));
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
@@ -782,7 +761,7 @@ describe('handleMessageCreate', () => {
       aiCommandPlanner: {
         plan: vi.fn(async () => ({
           kind: 'channel-history',
-          mode: 'summary',
+          mode: 'qa',
           targetChannelReference: '서버 전체',
           query: '파스타 비슷한거'
         }))
@@ -964,12 +943,18 @@ describe('handleMessageCreate', () => {
   it('retries the previous missing server topic in a channel named by the next message', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
+      ai: {
+        askMessages: vi
+          .fn()
+          .mockResolvedValueOnce('초밥 관련 내용은 서버에서 찾지 못했어요...')
+          .mockResolvedValueOnce('채널 기록 답변')
+      },
       aiCommandPlanner: {
         plan: vi
           .fn()
           .mockResolvedValueOnce({
             kind: 'channel-history',
-            mode: 'summary',
+            mode: 'qa',
             targetChannelReference: '서버 전체',
             query: '초밥'
           })
@@ -1016,7 +1001,7 @@ describe('handleMessageCreate', () => {
     second.guild.channels.cache.set('delivery-1', deliveryChannel);
     await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
 
-    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '초밥에 관한 내용은 서버에서 찾지 못했어요...' }));
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '초밥 관련 내용은 서버에서 찾지 못했어요...' }));
     expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
     expect(context.ai.askMessages).toHaveBeenCalledWith(
       expect.objectContaining({

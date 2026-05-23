@@ -17,7 +17,7 @@ export type AgentRuntimeOutcome =
   | { kind: 'clarify'; message: string }
   | { kind: 'unavailable'; message: string }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
-  | { kind: 'legacy_command'; query: string }
+  | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous' }
   | { kind: 'not_handled' };
 
 export type AgentRuntimeDiagnostic = {
@@ -62,7 +62,7 @@ type AgentEnvelope =
   | { kind: 'clarify'; message: string }
   | { kind: 'unavailable'; message: string }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
-  | { kind: 'legacy_command'; query: string }
+  | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous' }
   | { kind: 'not_handled' };
 
 type AgentToolCall = {
@@ -157,7 +157,7 @@ export class AgentRuntime {
       }
       validationFeedback = null;
       if (envelope.kind === 'legacy_command') {
-        const cleanupValidation = validateLegacyCleanupCommand(envelope.query, prompt, priorContext);
+        const cleanupValidation = validateLegacyCleanupCommand(envelope.query, envelope.cleanupTarget);
         if (!cleanupValidation.ok) {
           await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: cleanupValidation.reason });
           if (actionDecisionRetryRequested) {
@@ -255,9 +255,9 @@ export class AgentRuntime {
       '프리픽스 변경, TTS 채널 설정, 기억삭제처럼 기존 명령이 있는 단일 실행 요청도 blocked가 아니라 legacy_command로 넘기세요.',
       '읽기 요청과 실행/삭제/설정/음성 요청이 섞여 있으면 blocked로 답하고 아무 것도 실행하지 마세요.',
       '채팅/메시지 삭제 요청에서 그냥 "채팅 3개"처럼 대상이 생략되면 요청자 본인 메시지라고 단정하지 말고 clarify로 누구 채팅인지 물어봐요.',
-      '요청자가 "내 채팅/내꺼/내 메시지"라고 명확히 말했거나 이전 clarify 후속으로 본인 것이라고 답한 경우에만 {"kind":"legacy_command","query":"청소 N"}를 사용해요.',
+      '요청자가 "내 채팅/내꺼/내 메시지"라고 명확히 말했거나 이전 clarify 후속으로 본인 것이라고 답한 경우에만 {"kind":"legacy_command","query":"청소 N","cleanupTarget":"self"}를 사용해요.',
       '특정 다른 사람의 메시지만 지우는 요청은 청소로 처리하지 마세요. 봇은 요청자 본인 메시지 청소 또는 관리자용 채널 전체 대청소만 지원해요.',
-      '대청소/전체/채널 전체처럼 채널 메시지 삭제가 명확하면 {"kind":"legacy_command","query":"대청소 N"}를 사용하고 기존 관리자/확인 경로에 맡겨요.',
+      '대청소/전체/채널 전체처럼 채널 메시지 삭제가 명확하면 {"kind":"legacy_command","query":"대청소 N","cleanupTarget":"channel"}를 사용하고 기존 관리자/확인 경로에 맡겨요.',
       '채팅/메시지 삭제 요청에 개수나 대상이 부족하면 clarify로 자연스럽게 되물어봐요.',
       '이전 agent 문맥이 clarify이면 현재 짧은 답변(예: 내꺼, 전체, 3개)을 이전 요청과 합쳐 legacy_command/clarify/blocked 중 하나로 처리해요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
@@ -268,6 +268,8 @@ export class AgentRuntime {
       '{"kind":"unavailable","message":"..."}',
       '{"kind":"blocked","message":"...","blockedTools":["command.cleanup","voice.speak"]}',
       '{"kind":"legacy_command","query":"말 안녕"}',
+      '{"kind":"legacy_command","query":"청소 3","cleanupTarget":"self"}',
+      '{"kind":"legacy_command","query":"대청소 3","cleanupTarget":"channel"}',
       '{"kind":"not_handled"}',
       '미국 시간대 질문은 최소 Eastern/Central/Mountain/Pacific을 각각 time.in_zone으로 호출해요. IANA: America/New_York, America/Chicago, America/Denver, America/Los_Angeles.',
       '이전 맥락이 시간대 목록이면 "그 4군데" 같은 후속 요청에 같은 timeZone 슬롯을 재사용해요.',
@@ -339,41 +341,32 @@ export class AgentRuntime {
 
 
 
-type CleanupValidationResult = { ok: true } | { ok: false; reason: 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported' };
+type CleanupValidationResult = { ok: true } | { ok: false; reason: 'cleanup_target_missing' | 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported' };
 
-function validateLegacyCleanupCommand(query: string, prompt: string, priorContext?: AgentTurnStoredContext): CleanupValidationResult {
+function validateLegacyCleanupCommand(query: string, cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'): CleanupValidationResult {
   const commandName = query.trim().replace(/^[!?.~]\s*/, '').split(/\s+/)[0]?.toLowerCase();
-  if (!['청소', 'clean', 'clean-mine', 'clear', '내청소'].includes(commandName ?? '')) return { ok: true };
-  const currentText = prompt.toLowerCase();
-  if (mentionsOtherUserCleanup(currentText) || mentionsChannelWideCleanup(currentText)) return { ok: false, reason: 'other_user_cleanup_unsupported' };
-  if (mentionsRequesterCleanup(currentText)) return { ok: true };
-
-  const priorRequestText = priorContext?.lastUserPrompt?.toLowerCase() ?? '';
-  if (priorContext?.lastIntent === 'clarify' && mentionsRequesterCleanup(currentText) && priorRequestText) return { ok: true };
-  if (mentionsOtherUserCleanup(priorRequestText) || mentionsChannelWideCleanup(priorRequestText)) return { ok: false, reason: 'other_user_cleanup_unsupported' };
-  if (mentionsRequesterCleanup(priorRequestText)) return { ok: true };
-  return { ok: false, reason: 'cleanup_target_ambiguous' };
+  if (['청소', 'clean', 'clean-mine', 'clear', '내청소'].includes(commandName ?? '')) {
+    if (cleanupTarget === 'self') return { ok: true };
+    if (cleanupTarget === 'other') return { ok: false, reason: 'other_user_cleanup_unsupported' };
+    if (cleanupTarget === 'ambiguous') return { ok: false, reason: 'cleanup_target_ambiguous' };
+    return { ok: false, reason: 'cleanup_target_missing' };
+  }
+  if (['대청소', 'clean-all', 'purge', 'bulk-clear'].includes(commandName ?? '')) {
+    if (cleanupTarget === undefined || cleanupTarget === 'channel') return { ok: true };
+    return { ok: false, reason: 'cleanup_target_ambiguous' };
+  }
+  return { ok: true };
 }
 
-function mentionsRequesterCleanup(value: string): boolean {
-  return /내\s*(?:가\s*)?(?:채팅|메시지|메세지|글|말)|내꺼|내\s*것|내\s*최근|본인|제\s*(?:채팅|메시지|메세지)|my\s+(?:messages?|chat)/i.test(value);
-}
-
-function mentionsChannelWideCleanup(value: string): boolean {
-  return /대청소|전체|모든|전부|채널\s*(?:전체)?|서버|다\s*지워|싹|purge|bulk|all/i.test(value);
-}
-
-function mentionsOtherUserCleanup(value: string): boolean {
-  return /남의|다른\s*사람|타인|걔|쟤|그\s*사람|<@!?\d+>|\b\w+님(?:의)?\s*(?:채팅|메시지|메세지|글|말)/i.test(value);
-}
-
-function buildCleanupTargetFeedback(reason: 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported', priorContext: AgentTurnStoredContext | undefined, displayName?: string): string {
+function buildCleanupTargetFeedback(reason: 'cleanup_target_missing' | 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported', priorContext: AgentTurnStoredContext | undefined, displayName?: string): string {
   return [
     reason === 'other_user_cleanup_unsupported'
-      ? '방금 legacy_command가 특정 다른 사람 또는 채널 전체 삭제 요청을 청소로 처리하려 했어요. 청소는 요청자 본인 메시지 삭제에만 사용하세요.'
-      : '방금 legacy_command가 대상이 불명확한 채팅 삭제 요청을 청소로 처리하려 했어요. 그냥 “채팅 N개”는 요청자 본인 메시지라고 단정하지 마세요.',
-    '요청자 본인 메시지인지 명확하지 않으면 clarify JSON으로 누구 채팅을 지울지 자연스럽게 물어보세요.',
-    '특정 다른 사람 메시지만 지우는 요청은 지원하지 않으며, 채널 전체 삭제가 명확한 경우에만 대청소 N으로 넘기세요.',
+      ? '방금 legacy_command가 특정 다른 사람 메시지 삭제를 청소로 처리하려 했어요. 특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.'
+      : '방금 cleanup legacy_command에 안전한 cleanupTarget 판단이 없거나 모호했어요.',
+    '사용자 의미를 다시 판단해서, 요청자 본인 메시지 삭제가 명확하면 cleanupTarget=self와 함께 청소 N을 내세요. 이 판단은 원문 단어가 아니라 대화 문맥까지 포함한 의미 판단이어야 해요.',
+    '채널 전체 삭제가 명확하면 cleanupTarget=channel과 함께 대청소 N을 내세요.',
+    '대상이 불명확하면 legacy_command를 내지 말고 clarify JSON으로 누구 채팅을 지울지 자연스럽게 물어보세요.',
+    '특정 다른 사람 메시지만 지우는 요청이면 blocked JSON으로 지원하지 않는다고 안내하세요.',
     priorContext?.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext?.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     displayName ? `요청자 표시 이름은 ${displayName}예요.` : undefined
@@ -385,7 +378,7 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     '현재 사용자 메시지는 이전 clarify 질문에 대한 후속 답변일 수 있어요.',
     priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
-    '현재 답변과 이전 요청을 합쳐 명확해졌다면 legacy_command JSON을 작성하세요. 아직 부족하면 clarify JSON으로 추가 질문하세요. 일반 대화가 확실할 때만 not_handled를 쓰세요.'
+    '현재 답변과 이전 요청을 합쳐 명확해졌다면 legacy_command JSON을 작성하세요. 청소/대청소 legacy_command에는 cleanupTarget도 같이 넣으세요. 아직 부족하면 clarify JSON으로 추가 질문하세요. 일반 대화가 확실할 때만 not_handled를 쓰세요.'
   ].filter(Boolean).join('\n');
 }
 
@@ -406,8 +399,8 @@ function buildLegacyActionDecisionFeedback(blockedTools: readonly string[], disp
   return [
     `이전 응답은 ${blockedTools.join(', ')}를 blocked/tool_calls로 처리했지만, 기존 prefix 명령으로 넘길 수 있는 단일 실행 요청일 수 있어요.`,
     '사용자 요청을 직접 다시 판단하세요. 명확한 단일 기존 명령이면 legacy_command JSON을 작성하고 query는 지원 prefix 명령 목록의 명령/별칭과 인자를 사용해 직접 생성하세요.',
-    '채팅/메시지 삭제에서 대상이 생략되면 요청자 본인 메시지라고 단정하지 마세요. 내 채팅/내꺼가 명확할 때만 청소 N을 사용하고, 그냥 채팅 N개는 clarify로 누구 채팅인지 물어보세요.',
-    '특정 다른 사람 메시지만 지우는 요청은 지원하지 않아요. 요청자 본인 청소 또는 관리자용 대청소만 가능하다고 안내하세요.',
+    '채팅/메시지 삭제에서 대상이 생략되면 요청자 본인 메시지라고 단정하지 마세요. 내 채팅/내꺼가 문맥상 명확할 때만 cleanupTarget=self와 함께 청소 N을 사용하고, 그냥 채팅 N개는 clarify로 누구 채팅인지 물어보세요.',
+    '특정 다른 사람 메시지만 지우는 요청은 지원하지 않아요. 요청자 본인 청소 또는 관리자용 대청소만 가능하다고 안내하세요. 대청소는 cleanupTarget=channel을 넣으세요.',
     '읽기 요청과 실행 요청이 섞였거나 기존 명령으로 안전하게 표현할 수 없으면 blocked JSON으로 답하세요.',
     '비자동 도구를 tool_calls로 다시 호출하지 마세요.',
     displayName ? `요청자 표시 이름은 ${displayName}예요. 필요하면 clarify 문장에 반영하세요.` : undefined
@@ -459,8 +452,14 @@ function parseAgentEnvelope(response: string): ParseResult {
     }
     case 'legacy_command': {
       const query = typeof parsed.query === 'string' ? parsed.query.trim() : '';
+      const cleanupTarget = parsed.cleanupTarget === 'self' || parsed.cleanupTarget === 'channel' || parsed.cleanupTarget === 'other' || parsed.cleanupTarget === 'ambiguous'
+        ? parsed.cleanupTarget
+        : undefined;
       if (!query) return { ok: false, errors: ['legacy_command.query must be non-empty'] };
-      return { ok: true, envelope: { kind: 'legacy_command', query } };
+      const envelope: AgentEnvelope = cleanupTarget
+        ? { kind: 'legacy_command', query, cleanupTarget }
+        : { kind: 'legacy_command', query };
+      return { ok: true, envelope };
     }
     case 'not_handled':
       return { ok: true, envelope: { kind: 'not_handled' } };

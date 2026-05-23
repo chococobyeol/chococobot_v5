@@ -201,13 +201,13 @@ describe('AgentRuntime', () => {
           message: '채팅 삭제는 차단된 기능입니다.',
           blockedTools: ['command.cleanup']
         }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 10' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 10', cleanupTarget: 'self' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '내 채팅 10개 지워줘', makeOptions());
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 10' });
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 10', cleanupTarget: 'self' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
@@ -220,13 +220,13 @@ describe('AgentRuntime', () => {
           message: '전체 채팅 삭제는 차단된 기능입니다.',
           blockedTools: ['command.mass_cleanup']
         }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '대청소 5' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '전체 채팅 5개 지워줘', makeOptions());
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '대청소 5' });
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
@@ -238,13 +238,13 @@ describe('AgentRuntime', () => {
           kind: 'tool_calls',
           calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { count: 3 } }]
         }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '내 채팅 3개 지워줘', makeOptions());
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3' });
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
@@ -310,25 +310,25 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'clarify', message: '누구 채팅 3개를 지울까요? 본인 메시지라면 내꺼라고 말해 주세요.' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
     expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('그냥 "채팅 3개"처럼 대상이 생략되면');
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('그냥 “채팅 N개”는 요청자 본인 메시지라고 단정하지 마세요');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('대상이 불명확하면 legacy_command를 내지 말고 clarify JSON으로 누구 채팅을 지울지 자연스럽게 물어보세요');
   });
 
   it('allows explicit requester cleanup to become a legacy cleanup command', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '내 채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3' });
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' });
   });
 
   it('does not allow another user cleanup to be rewritten as requester cleanup', async () => {
     const ai = {
       askMessages: vi
         .fn()
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'other' }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.', blockedTools: ['command.cleanup'] }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
@@ -348,7 +348,7 @@ describe('AgentRuntime', () => {
           message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
         }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' }))
     };
     const store = new AgentTurnContextStore();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
@@ -356,7 +356,7 @@ describe('AgentRuntime', () => {
     await runtime.run(makeMessage(), '채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
     const outcome = await runtime.run(makeMessage(), '내꺼', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3' });
+    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' });
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('이전 agent 문맥 JSON');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('이전 사용자 요청: 채팅 3개 지워봐');
