@@ -34,24 +34,9 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
 }
 
 
-function normalizeAiChatTone(content: string): string {
-  const normalized = content
-    .trim()
-    .replace(/[!！]+/g, '...')
-    .replace(/[?？]+/g, '...')
-    .replace(/…+/g, '...')
-    .replace(/\s+\.\.\./g, '...')
-    .replace(/\.{4,}/g, '...')
-    .replace(/안녕하세요\.\.\.\s*어떤 도움이 필요하신가요\.{0,3}/g, '안녕하세요...')
-    .replace(/안녕하세요\.\.\.\s*무엇을 도와드릴까요\.{0,3}/g, '안녕하세요...')
-    .replace(/안녕하세요\s*어떤 도움이 필요하신가요\.{0,3}/g, '안녕하세요...')
-    .replace(/안녕하세요\s*무엇을 도와드릴까요\.{0,3}/g, '안녕하세요...')
-    .replace(/무엇을 도와드릴까요\.{0,3}/g, '무엇을 도와드릴까요...')
-    .replace(/어떤 도움이 필요하신가요\.{0,3}/g, '무엇을 도와드릴까요...')
-    .replace(/[🙂-🙿😀-🫿☀-⛿✀-➿]/gu, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-  return normalized || '응답이 비어 있어요...';
+function prepareAiChatReply(content: string): string {
+  const trimmed = content.trim();
+  return trimmed || '응답이 비어 있어요...';
 }
 
 function formatUserTurn(turn: AiMemoryTurn): AiChatMessage {
@@ -176,7 +161,7 @@ export class AiChatService {
           messages
         });
         const rawAnswer = typeof detailed === 'string' ? detailed : detailed.content;
-        const answer = normalizeAiChatTone(rawAnswer);
+        const answer = prepareAiChatReply(rawAnswer);
         if (typeof detailed !== 'string') {
           await this.logAiDiagnostic(message, {
             stage: 'chat',

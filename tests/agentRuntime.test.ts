@@ -70,6 +70,49 @@ describe('AgentRuntime', () => {
     ]);
   });
 
+  it('prompts tool-call answers to keep the bot conversation tone and stores context for follow-ups', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'seoul', tool: 'time.in_zone', input: { timeZone: 'Asia/Seoul', label: '서울' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '서울은 지금 새벽 3시 15분이야. 다른 지역도 볼까...' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    const outcome = await runtime.run(makeMessage(), '서울 지금 몇 시야', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '서울은 지금 새벽 3시 15분이야. 다른 지역도 볼까...' });
+    const secondPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(secondPrompt).toContain('관찰값을 본 뒤 한국어로 자연스럽게 final');
+    expect(secondPrompt).toContain('사용자가 이어 말할 수 있는 한 가지 맥락');
+    expect(secondPrompt).toContain('느낌표, 물음표, 이모지 없이 보통 ... 또는 해요');
+    expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toMatchObject({
+      lastAgentMessage: '서울은 지금 새벽 3시 15분이야. 다른 지역도 볼까...',
+      slots: { timeZones: ['Asia/Seoul'] }
+    });
+  });
+
+  it('does not rewrite tool-answer prose in code after the AI produces final JSON', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'viewer', tool: 'time.viewer', input: {} }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '지금은 <t:1779473700:t> 기준이야. 이어서 볼까?' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '지금 몇 시야', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '지금은 <t:1779473700:t> 기준이야. 이어서 볼까?' });
+  });
+
   it('feeds prior time-zone context into a follow-up turn', async () => {
     const ai = {
       askMessages: vi
