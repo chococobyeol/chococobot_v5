@@ -109,6 +109,10 @@ function includeInvokingCleanupCommandDefault(defaultTarget: number): number {
   return defaultTarget + CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT;
 }
 
+function excludeInvokingCleanupCommandCount(count: number): number {
+  return Math.max(0, count - CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT);
+}
+
 
 function isValidTimeZone(timeZone: string): boolean {
   try {
@@ -325,6 +329,9 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           defaultTarget: includeInvokingCleanupCommandDefault(context.settings.cleanMineDefaultTarget),
           maxTarget: includeInvokingCleanupCommandLimit(context.settings.cleanMineMaxLimit)
         });
+        const visibleRequested = excludeInvokingCleanupCommandCount(result.requested);
+        const visibleMatched = excludeInvokingCleanupCommandCount(result.matched);
+        const visibleDeleted = excludeInvokingCleanupCommandCount(result.deleted);
         if (message.guildId) {
           await context.activityLog.logCleanupResult({
             guildId: message.guildId,
@@ -334,9 +341,9 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             userName: requesterDisplayName(message),
             commandName: '청소',
             scope: 'own',
-            requested: result.requested,
-            deleted: result.deleted,
-            matched: result.matched,
+            requested: visibleRequested,
+            deleted: visibleDeleted,
+            matched: visibleMatched,
             skippedOld: result.skippedOld,
             exhausted: result.exhausted
           });
@@ -361,6 +368,9 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           defaultTarget: includeInvokingCleanupCommandDefault(context.settings.cleanAllDefaultTarget),
           maxTarget: includeInvokingCleanupCommandLimit(context.settings.cleanAllMaxLimit)
         });
+        const visibleRequested = excludeInvokingCleanupCommandCount(result.requested);
+        const visibleMatched = excludeInvokingCleanupCommandCount(result.matched);
+        const visibleDeleted = excludeInvokingCleanupCommandCount(result.deleted);
         if (message.guildId) {
           await context.activityLog.logCleanupResult({
             guildId: message.guildId,
@@ -370,18 +380,18 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
             userName: requesterDisplayName(message),
             commandName: '대청소',
             scope: 'purge',
-            requested: result.requested,
-            deleted: result.deleted,
-            matched: result.matched,
+            requested: visibleRequested,
+            deleted: visibleDeleted,
+            matched: visibleMatched,
             skippedOld: result.skippedOld,
             exhausted: result.exhausted
           });
         }
-        if (result.deleted === 0) {
+        if (visibleDeleted === 0) {
           await message.reply({ content: '삭제할 메시지를 찾지 못했어요...', allowedMentions: { repliedUser: false } });
         } else {
           await channel.send({
-            content: formatPurgeCleanupResult(message, result.deleted),
+            content: formatPurgeCleanupResult(message, visibleDeleted),
             allowedMentions: { parse: [], repliedUser: false }
           });
         }

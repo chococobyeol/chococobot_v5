@@ -191,6 +191,29 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps the safe blocked answer when a legacy-action repair retry returns invalid JSON', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '음성 채널에 들어가서 말하기는 한 번에 처리할 수 없어요.',
+          blockedTools: ['voice.speak']
+        }))
+        .mockResolvedValueOnce('응답이 비어 있어요...')
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '음성채널에 들어와서 안녕이라고 말해', makeOptions());
+
+    expect(outcome).toEqual({
+      kind: 'blocked',
+      message: '음성 채널에 들어가서 말하기는 한 번에 처리할 수 없어요.',
+      blockedTools: ['voice.speak']
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+  });
+
 
   it('asks the model to repair explicit requester cleanup decisions into legacy commands', async () => {
     const ai = {

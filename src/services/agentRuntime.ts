@@ -95,6 +95,7 @@ export class AgentRuntime {
     let totalToolCalls = 0;
     let blockedOnce = false;
     let actionDecisionRetryRequested = false;
+    let validationFailureFallback: AgentRuntimeOutcome | null = null;
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
       const messages = this.buildMessages(message, prompt, options, priorContext, observations, validationFeedback);
@@ -133,13 +134,13 @@ export class AgentRuntime {
       const parsed = parseAgentEnvelope(response);
       if (!parsed.ok) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'parse_error', runId, iteration, validationErrors: parsed.errors, responseSnippet: response.slice(0, 500) });
-        if (validationFeedback) return { kind: 'not_handled' };
+        if (validationFeedback) return validationFailureFallback ?? { kind: 'not_handled' };
         validationFeedback = ['이전 응답은 사용할 수 없어요.', `오류: ${parsed.errors.join('; ')}`, '허용된 JSON 객체 하나로만 다시 답하세요.'].join('\n');
         continue;
       }
 
       const envelope = parsed.envelope;
-      if (envelope.kind === 'blocked' && shouldRetryLegacyActionDecision(envelope.blockedTools) && !actionDecisionRetryRequested) {
+      if (envelope.kind === 'blocked' && shouldRetryLegacyActionDecision(envelope.blockedTools, priorContext) && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({
           stage: 'agent',
           event: 'retry',
@@ -149,6 +150,7 @@ export class AgentRuntime {
           validationErrors: envelope.blockedTools
         });
         actionDecisionRetryRequested = true;
+        validationFailureFallback = envelope;
         validationFeedback = buildLegacyActionDecisionFeedback(envelope.blockedTools, options.requesterDisplayName);
         continue;
       }
@@ -161,6 +163,11 @@ export class AgentRuntime {
       if (envelope.kind === 'not_handled' && (priorContext?.lastIntent === 'clarify' || priorContext?.pendingAction) && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'clarify_follow_up_required' });
         actionDecisionRetryRequested = true;
+        validationFailureFallback = {
+          kind: 'blocked',
+          message: '메시지 삭제 요청의 대상이 아직 명확하지 않아요. 본인 메시지 삭제나 관리자용 전체 채널 삭제만 가능해요.',
+          blockedTools: ['command.cleanup']
+        };
         validationFeedback = buildClarifyFollowUpFeedback(priorContext);
         continue;
       }
@@ -182,6 +189,11 @@ export class AgentRuntime {
             return { kind: 'blocked', message: '채팅 삭제 대상이 명확하지 않아 아무 작업도 실행하지 않았어요.', blockedTools: ['command.cleanup'] };
           }
           actionDecisionRetryRequested = true;
+          validationFailureFallback = {
+            kind: 'blocked',
+            message: '채팅 삭제 대상이 명확하지 않아 아무 작업도 실행하지 않았어요.',
+            blockedTools: ['command.cleanup']
+          };
           validationFeedback = buildCleanupTargetFeedback(cleanupValidation.reason, priorContext, options.requesterDisplayName);
           continue;
         }
@@ -205,9 +217,10 @@ export class AgentRuntime {
       if (nonReadOnly.length > 0) {
         const blockedTools = envelope.calls.filter((call) => this.registry.get(call.tool)?.policy !== 'read_only_auto').map((call) => call.tool);
         const mixed = policies.some((policy) => policy === 'read_only_auto') && nonReadOnly.length > 0;
-        if (!mixed && shouldRetryLegacyActionDecision(blockedTools) && !actionDecisionRetryRequested) {
+        if (!mixed && shouldRetryLegacyActionDecision(blockedTools, priorContext) && !actionDecisionRetryRequested) {
           await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'legacy_action_decision_required', validationErrors: blockedTools });
           actionDecisionRetryRequested = true;
+          validationFailureFallback = { kind: 'blocked', message: '그 작업은 자동 실행할 수 없어요... 아무 작업도 실행하지 않았어요.', blockedTools };
           validationFeedback = buildLegacyActionDecisionFeedback(blockedTools, options.requesterDisplayName);
           continue;
         }
@@ -442,7 +455,8 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
   ].filter(Boolean).join('\n');
 }
 
-function shouldRetryLegacyActionDecision(blockedTools: readonly string[]): boolean {
+function shouldRetryLegacyActionDecision(blockedTools: readonly string[], priorContext?: AgentTurnStoredContext): boolean {
+  if (priorContext?.pendingAction && blockedTools.includes('command.cleanup')) return false;
   return blockedTools.some((tool) => LEGACY_ACTION_TOOL_NAMES.has(tool));
 }
 

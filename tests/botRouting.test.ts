@@ -179,9 +179,9 @@ describe('handleMessageCreate', () => {
       userName: '테스터',
       commandName: '청소',
       scope: 'own',
-      requested: 4,
-      deleted: 4,
-      matched: 4,
+      requested: 3,
+      deleted: 3,
+      matched: 3,
       skippedOld: 0,
       exhausted: true
     });
@@ -222,7 +222,7 @@ describe('handleMessageCreate', () => {
       'chat-1'
     ]);
     expect(cleanupChannel.send).toHaveBeenCalledWith({
-      content: '서버닉님의 요청으로 메시지 4개를 삭제했어요...',
+      content: '서버닉님의 요청으로 메시지 3개를 삭제했어요...',
       allowedMentions: { parse: [], repliedUser: false }
     });
     expect(context.activityLog.logCleanupResult).toHaveBeenCalledWith({
@@ -233,9 +233,9 @@ describe('handleMessageCreate', () => {
       userName: '서버닉',
       commandName: '대청소',
       scope: 'purge',
-      requested: 4,
-      deleted: 4,
-      matched: 4,
+      requested: 3,
+      deleted: 3,
+      matched: 3,
       skippedOld: 0,
       exhausted: true
     });
