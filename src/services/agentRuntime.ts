@@ -226,6 +226,13 @@ export class AgentRuntime {
         this.updateTurnContext(key, webSearchFailure, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return webSearchFailure;
       }
+      if (isUnverifiedAuthorityDecision(envelope, observations, toolCalls)) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'unverified_authority_decision' });
+        if (actionDecisionRetryRequested) return { kind: 'not_handled', reason: 'final_without_observation' };
+        actionDecisionRetryRequested = true;
+        validationFeedback = buildUnverifiedAuthorityFeedback();
+        continue;
+      }
       if (envelope.kind === 'not_handled' && hasUsableObservation(observations)) {
         const fallback = buildObservationBasedFallbackOutcome(observations);
         if (observationAnswerRetryRequested) {
@@ -530,6 +537,14 @@ function buildPriorContextFollowUpFeedback(priorContext: AgentTurnStoredContext)
   ].filter(Boolean).join('\n');
 }
 
+function buildUnverifiedAuthorityFeedback(): string {
+  return [
+    '권한/관리자/정책 여부를 도구 관찰 없이 단정하지 마세요.',
+    '설정/삭제/관리 작업이면 적절한 confirmation_required tool_calls를 작성해서 코드의 확인/권한 경로가 처리하게 하세요.',
+    '도구로 처리할 일이 아닌 일반 질문이면 not_handled를 쓰세요.'
+  ].join('\n');
+}
+
 function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
   if (!isRecord(raw)) return undefined;
   if (raw.kind === 'history') return parseHistoryPendingAction(raw);
@@ -665,6 +680,18 @@ function parseEnvelopeKind(parsed: Record<string, unknown>): string {
     return alias;
   }
   return '';
+}
+
+function isUnverifiedAuthorityDecision(
+  envelope: AgentEnvelope,
+  observations: readonly AgentToolObservation[],
+  toolCalls: readonly AgentToolCall[]
+): boolean {
+  if (observations.length || toolCalls.length) return false;
+  if (envelope.kind === 'blocked' && envelope.blockedTools.length === 0) return true;
+  if (envelope.kind !== 'final' && envelope.kind !== 'blocked' && envelope.kind !== 'unavailable') return false;
+  const message = 'message' in envelope ? envelope.message : '';
+  return /(권한|permission|admin)/iu.test(message);
 }
 
 function findRepeatedSuccessfulToolCalls(

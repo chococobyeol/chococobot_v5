@@ -261,6 +261,35 @@ describe('AgentRuntime', () => {
     expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toBeUndefined();
   });
 
+  it('retries unobserved permission claims so setting requests go through the confirmation tool path', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'blocked',
+          message: '해당 작업은 권한이 필요합니다',
+          blockedTools: []
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'ai-channel', tool: 'settings.ai_channel', input: { action: 'set', channelRef: 'channel-1' } }]
+        }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '이 채널 ai 대화채널로 설정해봐', makeOptions());
+
+    expect(outcome).toMatchObject({
+      kind: 'confirmation_required',
+      intent: 'settings.ai_channel',
+      commandQuery: 'ai채널 channel-1'
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    const retryPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(retryPrompt).toContain('권한/관리자/정책 여부를 도구 관찰 없이 단정하지 마세요');
+    expect(retryPrompt).toContain('confirmation_required tool_calls');
+  });
+
   it('allows contextual final answers when shared conversation memory is present', async () => {
     const ai = {
       askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({

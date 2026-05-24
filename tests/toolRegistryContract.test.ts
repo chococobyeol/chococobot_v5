@@ -190,6 +190,8 @@ describe('ToolRegistry observation contract', () => {
     expect(massCleanup?.inputSchema).toContain('no evidence field');
     expect(runtimeContext?.description).toContain('userVoiceChannel is requester-only');
     expect(runtimeContext?.description).toContain('botVoiceConnected/botVoiceChannel');
+    expect(registry.get('settings.ai_channel')?.description).toContain('Do not pre-block for permissions');
+    expect(registry.get('settings.tts_channel')?.description).toContain('confirmation/admin path checks authority');
   });
 
   it('rejects coerced integer fields for read-only tools', async () => {

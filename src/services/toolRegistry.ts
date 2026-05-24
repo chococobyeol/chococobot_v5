@@ -762,7 +762,7 @@ function aiChannelSettingsTool(): AgentToolDefinition<{ action: 'set' | 'clear';
 function channelSettingsTool(name: 'settings.tts_channel' | 'settings.ai_channel', description: string, fieldPrefix: string): AgentToolDefinition<{ action: 'set' | 'clear'; channelRef?: string }, never> {
   return {
     name,
-    description: `${description} Requires action=set with channelRef, or action=clear.`,
+    description: `${description} Requires action=set with channelRef, or action=clear. Do not pre-block for permissions; confirmation/admin path checks authority.`,
     inputSchema: "{ action: 'set'|'clear'; channelRef?: string }",
     policy: 'confirmation_required',
     retryable: false,
