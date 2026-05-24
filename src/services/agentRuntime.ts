@@ -12,7 +12,8 @@ const MAX_RETRIES = 1;
 const MAX_PROMPT_CHARS = 1800;
 const MAX_OBSERVATION_CHARS = 1400;
 const MAX_CONVERSATION_CONTEXT_CHARS = 1200;
-const MAX_SYSTEM_CHARS = 5200;
+const MAX_SYSTEM_CHARS = 5199;
+const MAX_PROMPT_CHANNELS = 16;
 const AGENT_OUTPUT_CONTRACT = [
   '너는 Discord 봇 초코코봇의 bounded agent runtime이에요.',
   '반드시 JSON 객체 하나만 출력하세요. 마크다운/코드펜스/설명 문장 금지.',
@@ -26,7 +27,8 @@ const AGENT_OUTPUT_CONTRACT = [
   'ctx.userVoice는 사용자의 음성 채널이고 봇의 위치가 아니에요. ctx.botVoiceConnected=false면 봇이 음성 채널에 있다고 말하지 마세요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
-  '필수 구조화 필드가 부족하면 clarify와 pendingAction을 사용해요.',
+  '필수 구조화 필드가 부족하면 clarify+pendingAction. cleanup.missing은 target/count만 허용.',
+  'cleanup evidence는 내부 안전 근거예요. 사용자에게 증거/evidence를 묻지 말고, 채널 전체 삭제는 evidence 없는 command.mass_cleanup을 쓰세요.',
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
   '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요. 예: {"kind":"not_handled"}',
   'final 스타일: 한국어 초코코봇 말투, 짧고 자연스럽게 답해요. 봇 이름을 직접 말할 때는 초코코봇이라고 써요. 느낌표/물음표/이모지 금지. 문장 끝에 해요나 ...를 접미어처럼 억지로 덧붙이지 마세요.',
@@ -289,7 +291,7 @@ export class AgentRuntime {
         validationFeedback = [
           '도구 호출 안전 검증에 실패했어요.',
           `오류: ${unsafeCallObservations.map((observation) => observation.message).filter(Boolean).join('; ')}`,
-          '도구 입력을 고치거나 clarify/blocked로 답하세요. command.cleanup.evidence는 사용자 요청 또는 이어받은 문맥에 실제로 있는 문구여야 해요.'
+          '도구 입력을 고치거나 clarify/blocked로 답하세요. command.cleanup.evidence는 사용자 요청 또는 이어받은 문맥에 실제로 있는 문구여야 하며, 사용자에게 증거를 알려 달라고 묻지 마세요.'
         ].join('\n');
         continue;
       }
@@ -413,8 +415,8 @@ export class AgentRuntime {
       options.pendingHistory ? `pendingHistory=${JSON.stringify(options.pendingHistory)}` : undefined,
       options.pendingConfirmation ? `pendingConfirmation=${JSON.stringify(options.pendingConfirmation)}` : undefined,
       `web=${formatWebSearchPolicy(options.webSearch)}`,
-      `tools=${formatToolCatalogForPrompt(this.registry.list())}`,
-      `ctx=${formatRuntimeContextForPrompt(message, options)}`
+      `ctx=${formatRuntimeContextForPrompt(message, options)}`,
+      `tools=${formatToolCatalogForPrompt(this.registry.list())}`
     ].filter(Boolean).join('\n');
     const system = [
       AGENT_OUTPUT_CONTRACT,
@@ -509,6 +511,7 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
     '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 command.cleanup 또는 command.mass_cleanup tool_calls JSON을, history는 history.search tool_calls JSON을 작성하세요.',
+    'cleanup에서 evidence는 사용자에게 물어보는 값이 아니에요. command.cleanup.evidence는 originalPrompt/현재 답변에 실제로 있는 문구를 그대로 쓰고, command.mass_cleanup에는 evidence를 넣지 마세요.',
     '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요.',
     '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
     '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 삭제 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
@@ -544,9 +547,9 @@ function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
   const cleanupEvidence = typeof raw.cleanupEvidence === 'string' && raw.cleanupEvidence.trim()
     ? raw.cleanupEvidence.trim()
     : undefined;
-  const missing = Array.isArray(raw.missing)
-    ? raw.missing.filter((item): item is 'target' | 'count' => item === 'target' || item === 'count')
-    : [];
+  const rawMissing = Array.isArray(raw.missing) ? raw.missing : [];
+  if (rawMissing.some((item) => item !== 'target' && item !== 'count')) return undefined;
+  const missing = rawMissing.filter((item): item is 'target' | 'count' => item === 'target' || item === 'count');
   return {
     kind: 'cleanup',
     originalPrompt,
@@ -567,9 +570,9 @@ function parseHistoryPendingAction(raw: Record<string, unknown>): AgentPendingAc
   const query = typeof raw.query === 'string' ? raw.query.trim() : '';
   const mode = raw.mode === 'qa' || raw.mode === 'summary' ? raw.mode : undefined;
   if (!mode) return undefined;
-  const missing = Array.isArray(raw.missing)
-    ? raw.missing.filter((item): item is 'scope' | 'channel' => item === 'scope' || item === 'channel')
-    : [];
+  const rawMissing = Array.isArray(raw.missing) ? raw.missing : [];
+  if (rawMissing.some((item) => item !== 'scope' && item !== 'channel')) return undefined;
+  const missing = rawMissing.filter((item): item is 'scope' | 'channel' => item === 'scope' || item === 'channel');
   return {
     kind: 'history',
     originalPrompt,
@@ -626,6 +629,9 @@ function parseAgentEnvelope(response: string): ParseResult {
       const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
       if (!message) return { ok: false, errors: ['clarify.message must be non-empty'] };
       const pendingAction = parsePendingAction(parsed.pendingAction);
+      if (parsed.pendingAction !== undefined && !pendingAction) {
+        return { ok: false, errors: ['clarify.pendingAction is invalid or uses unsupported missing fields; cleanup missing may only include target/count and must not ask for evidence'] };
+      }
       return { ok: true, envelope: pendingAction ? { kind, message, pendingAction } : { kind, message } };
     }
     case 'blocked': {
@@ -732,7 +738,7 @@ function validateToolCallSafety(
       code: 'validation_error',
       field: 'evidence',
       message: 'command.cleanup.evidence must be exact text from the current user request or stored follow-up context',
-      hint: 'Use only a literal phrase the user actually wrote as cleanup evidence, or ask a clarify question when the target is ambiguous.',
+      hint: 'Use only a literal phrase the user actually wrote as cleanup evidence. Never ask the user to provide evidence; clarify only target/count ambiguity or block unsupported targets.',
       error: 'command.cleanup.evidence must match user text'
     });
   }
@@ -854,6 +860,7 @@ function inferIntent(calls: readonly AgentToolCall[], envelope: AgentRuntimeOutc
 }
 
 function formatRuntimeContextForPrompt(message: Message, options: AgentRuntimeOptions): string {
+  const channels = selectPromptChannels(message.channelId, options.availableChannels);
   return JSON.stringify({
     channel: `<#${message.channelId}>`,
     prefix: options.prefix,
@@ -865,9 +872,26 @@ function formatRuntimeContextForPrompt(message: Message, options: AgentRuntimeOp
     botVoiceChannel: options.botVoiceConnected && options.botVoiceChannel
       ? { id: options.botVoiceChannel.id, name: options.botVoiceChannel.name ?? undefined }
       : null,
-    channels: options.availableChannels.map((channel) => ({ id: channel.id, name: channel.name, mention: channel.mention })),
+    channels: channels.map((channel) => ({ id: channel.id, name: channel.name, mention: channel.mention })),
+    channelCount: options.availableChannels.length,
+    channelsTruncated: options.availableChannels.length > channels.length,
     now: `<t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`
   });
+}
+
+function selectPromptChannels(
+  currentChannelId: string,
+  channels: readonly { id: string; name: string; mention: string }[]
+): readonly { id: string; name: string; mention: string }[] {
+  const selected: { id: string; name: string; mention: string }[] = [];
+  const current = channels.find((channel) => channel.id === currentChannelId);
+  if (current) selected.push(current);
+  for (const channel of channels) {
+    if (selected.length >= MAX_PROMPT_CHANNELS) break;
+    if (channel.id === currentChannelId) continue;
+    selected.push(channel);
+  }
+  return selected;
 }
 
 function formatToolCatalogForPrompt(tools: ReturnType<ToolRegistry['list']>): string {

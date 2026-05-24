@@ -1285,6 +1285,49 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('"missing":["count"]');
   });
 
+
+  it('rejects cleanup clarify turns that ask the user for internal evidence', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '몇 개를 지울까요?',
+          pendingAction: {
+            kind: 'cleanup',
+            originalPrompt: '여기 채팅 다 지워봐',
+            target: 'channel',
+            missing: ['count']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '증거를 알려줘',
+          pendingAction: {
+            kind: 'cleanup',
+            originalPrompt: '여기 채팅 다 지워봐',
+            target: 'channel',
+            count: 100,
+            missing: ['evidence']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cleanup', tool: 'command.mass_cleanup', input: { target: 'channel', count: 100 } }]
+        }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    await runtime.run(makeMessage(), '여기 채팅 다 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
+    const outcome = await runtime.run(makeMessage(), '100개', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toMatchObject({ kind: 'confirmation_required', commandQuery: '대청소 100' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('cleanup missing may only include target/count');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('사용자에게 증거');
+  });
+
   it('keeps requester cleanup evidence in AI-owned slots until count is supplied', async () => {
     const ai = {
       askMessages: vi

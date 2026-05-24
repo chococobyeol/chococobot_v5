@@ -245,7 +245,11 @@ describe('AiChatService', () => {
         }),
         expect.objectContaining({
           role: 'system',
-          content: expect.stringContaining('몰라요...처럼 답하고')
+          content: expect.stringContaining('현재 답변 생성 외에 말할 상태가 없으면 정확히 몰라요...라고만 답해요')
+        }),
+        expect.objectContaining({
+          role: 'system',
+          content: expect.stringContaining('채팅하고 있어요, 답변하고 있어요처럼 상태를 둘러대지 마세요')
         }),
         expect.objectContaining({
           role: 'system',
@@ -257,6 +261,107 @@ describe('AiChatService', () => {
         })
       ])
     }));
+  });
+
+  it('does not send vacuous current-chat activity as a status answer', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = {
+      askMessagesDetailed: vi.fn(async () => ({
+        content: '채팅에 답변하고 있어요',
+        model: 'openai/gpt-oss-120b',
+        usageScope: 'chat',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        rateLimitHeaders: {},
+        status: 200
+      }))
+    } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(settings, ai, memory, activityLog);
+    const message = makeMessage('channel-1', '!? 뭐해');
+
+    await service.handlePrompt(message, '뭐해');
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '몰라요...' })
+    );
+    expect(memory.getGuildSnapshot('guild-1', 8).recentTurns.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: '몰라요...'
+    });
+  });
+
+  it('normalizes indirect unknown status answers to the exact requested wording', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = {
+      askMessagesDetailed: vi.fn(async () => ({
+        content: '현재 답변 생성 외에는 알 수 없어요...',
+        model: 'openai/gpt-oss-120b',
+        usageScope: 'chat',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        rateLimitHeaders: {},
+        status: 200
+      }))
+    } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(settings, ai, memory, activityLog);
+    const message = makeMessage('channel-1', '!? 뭐해');
+
+    await service.handlePrompt(message, '뭐해');
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '몰라요...' })
+    );
+  });
+
+  it('does not send a bot voice-channel claim when runtime context says disconnected', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = {
+      askMessagesDetailed: vi.fn(async () => ({
+        content: '저는 현재 음성 채널에 연결돼 있어요...',
+        model: 'openai/gpt-oss-120b',
+        usageScope: 'chat',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        rateLimitHeaders: {},
+        status: 200
+      }))
+    } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(
+      settings,
+      ai,
+      memory,
+      activityLog,
+      undefined,
+      () => ({ botVoice: { connected: false }, userVoiceChannel: null })
+    );
+    const message = makeMessage('channel-1', '!? 니가 있는곳');
+
+    await service.handlePrompt(message, '니가 있는곳');
+
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '몰라요...' })
+    );
   });
 
   it('does not rewrite assistant prose to force the bot command-response tone', async () => {

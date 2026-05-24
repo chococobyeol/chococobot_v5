@@ -42,9 +42,59 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
 }
 
 
-function prepareAiChatReply(content: string): string {
+function prepareAiChatReply(content: string, runtimeContext?: AiChatRuntimeContext): string {
   const trimmed = content.trim();
-  return trimmed || '응답이 비어 있어요...';
+  if (!trimmed) return '응답이 비어 있어요...';
+  return sanitizeUngroundedStatusReply(trimmed, runtimeContext);
+}
+
+function sanitizeUngroundedStatusReply(content: string, runtimeContext?: AiChatRuntimeContext): string {
+  if (isVacuousBotStatusReply(content)) return '몰라요...';
+  if (isUnknownReply(content)) return '몰라요...';
+  if (runtimeContext?.botVoice?.connected === false && claimsBotVoiceConnection(content)) return '몰라요...';
+  return content;
+}
+
+function isVacuousBotStatusReply(content: string): boolean {
+  const compact = content.replace(/[\s.。…!！?？]/g, '');
+  return [
+    '채팅에답변하고있어요',
+    '채팅에답하고있어요',
+    '답변하고있어요',
+    '답하고있어요',
+    '채팅하고있어요',
+    '그냥채팅하고있어요',
+    '그냥여기있어요',
+    '여기있어요',
+    '여기는지금보시는채팅창이에요',
+    '현재채팅창에있어요'
+  ].includes(compact);
+}
+
+function isUnknownReply(content: string): boolean {
+  const compact = content.replace(/[\s.。…!！?？]/g, '');
+  return [
+    '몰라요',
+    '모르겠어요',
+    '잘모르겠어요',
+    '잘모름',
+    '알수없어요',
+    '알수없습니다'
+  ].includes(compact)
+    || compact.includes('현재답변생성외에')
+    || compact.includes('현재답변외에')
+    || compact.includes('지금은알수없')
+    || compact.includes('제가알수없');
+}
+
+function claimsBotVoiceConnection(content: string): boolean {
+  const compact = content.replace(/\s+/g, '');
+  if (compact.includes('않') || compact.includes('아니')) return false;
+  return compact.includes('음성채널에연결')
+    || compact.includes('음성채널에접속')
+    || compact.includes('음성채널에있')
+    || compact.includes('음성채널입니다')
+    || compact.includes('음성채널은');
 }
 
 function truncateMemoryText(content: string, limit: number): string {
@@ -92,7 +142,8 @@ function formatStatusGroundingTurn(): AiChatMessage {
     content: [
       '상태/행동 질문 답변 규칙:',
       '사용자가 뭐해, 뭐 하고 있어, 어디 있어, 니 상태처럼 봇의 현재 상태나 행동을 물으면 제공된 실시간 실행 문맥과 최근 대화만 근거로 답해요.',
-      '실제 작업, 위치, 상태를 알 수 없으면 꾸며내지 말고 몰라요...처럼 답하고, 추가로 설명이 필요하면 지금은 이 채팅에 답하는 것 말고는 알 수 없어요...처럼 짧게 덧붙여요.',
+      '실제 작업, 위치, 상태를 알 수 없거나 현재 답변 생성 외에 말할 상태가 없으면 정확히 몰라요...라고만 답해요.',
+      '현재 채팅에 답변 중이라는 사실만으로 채팅하고 있어요, 답변하고 있어요처럼 상태를 둘러대지 마세요.',
       '근거 없이 그냥 여기 있어요, 음성 채널에 있어요 같은 상태를 만들지 마세요.'
     ].join('\n')
   };
@@ -217,7 +268,7 @@ export class AiChatService {
           messages
         });
         const rawAnswer = typeof detailed === 'string' ? detailed : detailed.content;
-        const answer = prepareAiChatReply(rawAnswer);
+        const answer = prepareAiChatReply(rawAnswer, runtimeContext);
         if (typeof detailed !== 'string') {
           await this.logAiDiagnostic(message, {
             stage: 'chat',
