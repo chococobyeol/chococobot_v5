@@ -12,6 +12,11 @@ const MEMORY_CONTEXT_MAX_CHARS = 1200;
 const MEMORY_CONTEXT_TURN_MAX_CHARS = 240;
 const MEMORY_CONTEXT_SUMMARY_MAX_CHARS = 500;
 
+export type AiChatRuntimeContext = {
+  userVoiceChannel?: { id: string; name?: string | null } | null;
+  botVoice?: { connected: boolean; channel?: { id: string; name?: string | null } | null };
+};
+
 export function parseAiChatTrigger(content: string, prefix: string): string | null {
   const trigger = `${prefix}?`;
   if (!content.startsWith(trigger)) return null;
@@ -80,6 +85,25 @@ function formatCurrentUserTurn(message: Message, prompt: string): AiChatMessage 
   };
 }
 
+function formatRuntimeContextTurn(context: AiChatRuntimeContext): AiChatMessage {
+  const botVoice = context.botVoice?.connected
+    ? `연결됨${context.botVoice.channel ? `: <#${context.botVoice.channel.id}>${context.botVoice.channel.name ? ` (${context.botVoice.channel.name})` : ''}` : ''}`
+    : '연결 안 됨';
+  const userVoice = context.userVoiceChannel
+    ? `<#${context.userVoiceChannel.id}>${context.userVoiceChannel.name ? ` (${context.userVoiceChannel.name})` : ''}`
+    : '(사용자가 음성 채널에 없음)';
+  return {
+    role: 'system',
+    content: [
+      '실시간 실행 문맥:',
+      `봇 실제 음성 연결 상태: ${botVoice}`,
+      `사용자 음성 채널: ${userVoice}`,
+      '사용자 음성 채널은 봇의 위치가 아니에요.',
+      '봇 실제 음성 연결 상태가 "연결 안 됨"이면 봇이 음성 채널에 있다고 말하지 마세요.'
+    ].join('\n')
+  };
+}
+
 function buildMemorySummaryPrompt(summary: string, turns: AiMemoryTurn[]): string {
   const existing = summary ? `기존 요약:\n${summary}` : '기존 요약: (없음)';
   const turnText = turns
@@ -129,7 +153,8 @@ export class AiChatService {
     private readonly ai: AiService,
     private readonly memory: AiMemoryStore,
     private readonly activityLog: BotActivityLogService,
-    private readonly userSettings?: Pick<VoiceSettingsStore, 'getUserTimeZone'>
+    private readonly userSettings?: Pick<VoiceSettingsStore, 'getUserTimeZone'>,
+    private readonly runtimeContextProvider?: (message: Message) => AiChatRuntimeContext | undefined
   ) {}
 
   handlePrompt(message: Message, prompt: string): Promise<boolean> {
@@ -168,6 +193,8 @@ export class AiChatService {
             '보는 사람의 로컬 시간이 필요한 경우 <t:...:t> 형식을 그대로 사용해요.'
           ].join('\n')
         });
+        const runtimeContext = this.runtimeContextProvider?.(message);
+        if (runtimeContext) messages.push(formatRuntimeContextTurn(runtimeContext));
         messages.push(formatCurrentUserTurn(message, prompt));
 
         const detailed = await this.askDetailedOrText({

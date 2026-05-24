@@ -25,7 +25,7 @@ import {
   type VoiceStopOutput
 } from './services/toolRegistry.js';
 import { createWebSearchProvider, type WebSearchMode, type WebSearchProvider } from './services/webSearchService.js';
-import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
+import { AiChatService, parseAiChatTrigger, type AiChatRuntimeContext } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { ConfirmationManager, type ConfirmationScope, type PendingConfirmation } from './services/confirmationManager.js';
 import {
@@ -285,17 +285,6 @@ function findTextChannelFromNaturalReference(message: Message, prompt: string): 
   if (matches.length === 1) return matches[0]!;
   if (matches.length > 1) return 'ambiguous';
   return null;
-}
-
-function isAiChannelSettingIntent(prompt: string): boolean {
-  const normalized = prompt.replace(/\s+/g, '');
-  return /(?:ai|에이아이)/iu.test(normalized) &&
-    /(?:대화|채팅)?채널/iu.test(normalized) &&
-    /(?:설정|등록|지정|바꿔|변경|해제|끄기|꺼|초기화)/iu.test(normalized);
-}
-
-function isAiChannelClearIntent(prompt: string): boolean {
-  return /(?:해제|끄기|꺼|초기화|clear|unset|disable|off)/iu.test(prompt);
 }
 
 function requireGuildMember(message: Message): GuildMember {
@@ -998,6 +987,26 @@ function conversationContextFor(context: BotContext, message: Message): string |
   if (typeof aiChat.getConversationContext !== 'function') return undefined;
   const conversationContext = aiChat.getConversationContext(message.guildId).trim();
   return conversationContext || undefined;
+}
+
+function botVoiceChannelFor(context: BotContext, message: Message): { id: string; name?: string | null } | null {
+  if (!message.guildId || !context.voice.isConnected(message.guildId)) return null;
+  const channelId = context.voice.getConnectedChannelId(message.guildId);
+  if (!channelId) return null;
+  const channel = message.guild?.channels.cache.get(channelId);
+  return { id: channelId, name: channel?.name ?? null };
+}
+
+function aiChatRuntimeContextFor(context: BotContext, message: Message): AiChatRuntimeContext {
+  const member = message.member as GuildMember | null;
+  const botVoiceChannel = botVoiceChannelFor(context, message);
+  return {
+    userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
+    botVoice: {
+      connected: Boolean(botVoiceChannel),
+      channel: botVoiceChannel
+    }
+  };
 }
 
 function formatDiscordDisplayTime(timestamp: number): string {
@@ -2004,16 +2013,6 @@ async function handleNaturalLanguageRoute(
   }
 }
 
-function isReadOnlyHistoryFallbackPrompt(prompt: string): boolean {
-  const normalized = prompt.trim();
-  if (!normalized) return false;
-  if (/(삭제|지워|청소|대청소|프리픽스|prefix|기억\s*삭제|초기화|들어와|입장|나가|퇴장|말해|읽어줘|tts|음성|설정|바꿔|변경)/iu.test(normalized)) {
-    return false;
-  }
-  return /(?:채널|서버|대화|내용|기록|메시지|채팅|히스토리)[\s\S]*(?:요약|정리|찾아|검색|알려|있나|있어|뭐|내용)/iu.test(normalized)
-    || /(?:요약해|요약해봐|찾아봐|검색해)[\s\S]*(?:채널|서버|대화|내용|기록|메시지|채팅|히스토리)/iu.test(normalized);
-}
-
 async function handlePendingChannelHistoryReply(
   message: Message,
   prompt: string,
@@ -2144,6 +2143,7 @@ async function handleAiCommandPlannerPrompt(
       availableChannels: listTextChannelCandidates(message),
       userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
       botVoiceConnected: context.voice.isConnected(message.guildId),
+      botVoiceChannel: botVoiceChannelFor(context, message),
       maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
       pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
       pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
@@ -2201,7 +2201,7 @@ async function handleAiCommandPlannerPrompt(
   }
 }
 
-async function handleReadOnlyHistoryFallbackPrompt(
+async function handleReadOnlyPlannerFallbackPrompt(
   message: Message,
   prompt: string,
   prefix: string,
@@ -2210,7 +2210,7 @@ async function handleReadOnlyHistoryFallbackPrompt(
   pendingHistoryRequest: PendingChannelHistoryRequest | undefined,
   pendingConfirmation: PendingConfirmation | undefined
 ): Promise<boolean> {
-  if (!message.guildId || !context.aiCommandPlanner || !isReadOnlyHistoryFallbackPrompt(prompt)) return false;
+  if (!message.guildId || !context.aiCommandPlanner) return false;
   try {
     const member = message.member as GuildMember | null;
     const plan = await context.aiCommandPlanner.plan(message, prompt, {
@@ -2219,6 +2219,7 @@ async function handleReadOnlyHistoryFallbackPrompt(
       availableChannels: listTextChannelCandidates(message),
       userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
       botVoiceConnected: context.voice.isConnected(message.guildId),
+      botVoiceChannel: botVoiceChannelFor(context, message),
       maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
       pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
       pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
@@ -2278,32 +2279,6 @@ async function dispatchConfirmedPendingCommand(
   return dispatchCommandQuery(message, commands, context, pending.commandQuery);
 }
 
-async function handleAiChannelSettingPrompt(
-  message: Message,
-  prompt: string,
-  commands: Collection<string, PrefixCommand>,
-  context: BotContext,
-  confirmations: ConfirmationManager
-): Promise<boolean> {
-  if (!isAiChannelSettingIntent(prompt)) return false;
-  if (isAiChannelClearIntent(prompt)) {
-    return dispatchPlannerCommand(message, commands, context, confirmations, 'ai채널 해제');
-  }
-
-  const targetChannel = findTextChannelFromNaturalReference(message, prompt);
-  if (targetChannel === 'ambiguous') {
-    await message.reply({ content: '비슷한 채널이 여러 개 있어요... 정확한 채널 멘션으로 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
-    return true;
-  }
-
-  const useCurrentChannel = /(?:이|현재|여기)\s*(?:대화|채팅)?\s*채널/iu.test(prompt);
-  const channel = targetChannel ?? (useCurrentChannel ? requireGuildTextChannel(message) : null);
-  if (!channel) return false;
-
-  return dispatchPlannerCommand(message, commands, context, confirmations, `ai채널 <#${channel.id}>`);
-}
-
-
 async function handleAiPrompt(
   message: Message,
   prompt: string,
@@ -2316,7 +2291,6 @@ async function handleAiPrompt(
   if (!message.guildId) return false;
   const pendingConfirmation = latestConfirmationForMessage(message, confirmations);
   const pendingHistoryRequest = getPendingChannelHistoryRequest(message);
-  if (!pendingConfirmation && await handleAiChannelSettingPrompt(message, prompt, commands, context, confirmations)) return true;
   if (context.agentRuntime) {
     try {
       const member = message.member as GuildMember | null;
@@ -2327,6 +2301,7 @@ async function handleAiPrompt(
         availableChannels: listTextChannelCandidates(message),
         userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
         botVoiceConnected: context.voice.isConnected(message.guildId),
+        botVoiceChannel: botVoiceChannelFor(context, message),
         maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
         pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
         pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
@@ -2348,6 +2323,7 @@ async function handleAiPrompt(
             availableChannels: listTextChannelCandidates(message),
             userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
             botVoiceConnected: context.voice.isConnected(message.guildId),
+            botVoiceChannel: botVoiceChannelFor(context, message),
             webSearch: {
               mode: getGuildWebSearchMode(context, message.guildId),
               provider: context.settings.webSearchProvider,
@@ -2373,13 +2349,11 @@ async function handleAiPrompt(
         case 'confirm_pending':
           if (pendingConfirmation) return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
           if (await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
-          if (await handleReadOnlyHistoryFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
           await context.aiChat.handlePrompt(message, prompt);
           return true;
         case 'not_handled':
           if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
           if (await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
-          if (await handleReadOnlyHistoryFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
           await context.aiChat.handlePrompt(message, prompt);
           return true;
       }
@@ -2396,7 +2370,7 @@ async function handleAiPrompt(
         decisionKind: isNativeToolCallLeakError(error) ? 'agent_native_tool_call_leak' : undefined
       });
       if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
-      if (await handleReadOnlyHistoryFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
+      if (isNativeToolCallLeakError(error) && await handleReadOnlyPlannerFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
       await context.aiChat.handlePrompt(message, prompt);
       return true;
     }
@@ -2525,24 +2499,25 @@ export async function createBot(
     agentTurnContextStore
   );
   const confirmations = new ConfirmationManager();
+  const voice = new VoiceService(
+    new TtsService(settings.ttsVoice, settings.ttsMaxChars),
+    voiceSettings,
+    settings.ttsVoicePresets,
+    settings.ttsEngine as 'edge' | 'gtts',
+    settings.voiceIdleLeaveMs
+  );
   const context: BotContext = {
     settings,
     usageStore,
     ai,
-    aiChat: new AiChatService(settings, ai, memoryStore, activityLog, voiceSettings),
+    aiChat: new AiChatService(settings, ai, memoryStore, activityLog, voiceSettings, (message) => aiChatRuntimeContextFor(context, message)),
     aiCommandPlanner,
     agentRuntime,
     agentTurnContextStore,
     webSearchProvider,
     activityLog,
     voiceSettings,
-    voice: new VoiceService(
-      new TtsService(settings.ttsVoice, settings.ttsMaxChars),
-      voiceSettings,
-      settings.ttsVoicePresets,
-      settings.ttsEngine as 'edge' | 'gtts',
-      settings.voiceIdleLeaveMs
-    )
+    voice
   };
   const commands = createPrefixCommands();
 

@@ -337,6 +337,46 @@ describe('AiChatService', () => {
     ]));
   });
 
+
+  it('grounds chat replies with actual bot voice connection state', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = {
+      askMessagesDetailed: vi.fn(async () => ({
+        content: '저는 지금 음성 채널에는 연결돼 있지 않아요...',
+        model: 'openai/gpt-oss-120b',
+        usageScope: 'chat',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        rateLimitHeaders: {},
+        status: 200
+      }))
+    } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(settings, ai, memory, activityLog, undefined, () => ({
+      userVoiceChannel: { id: 'voice-user', name: '음성테스트' },
+      botVoice: { connected: false, channel: null }
+    }));
+
+    await service.handlePrompt(makeMessage('channel-1', '!? 니가 있는곳'), '니가 있는곳');
+
+    const callMessages = ai.askMessagesDetailed.mock.calls[0][0].messages as Array<{ role: string; content: string }>;
+    expect(callMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'system',
+        content: expect.stringContaining('봇 실제 음성 연결 상태: 연결 안 됨')
+      })
+    ]));
+    expect(callMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: expect.stringContaining('사용자 음성 채널은 봇의 위치가 아니에요') })
+    ]));
+  });
+
   it('remembers non-chat AI exchanges so chat fallback can see tool/runtime replies', async () => {
     const settings = makeSettings();
     const memory = new InMemoryAiMemoryStore();

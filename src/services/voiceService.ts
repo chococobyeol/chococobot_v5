@@ -98,6 +98,10 @@ export class VoiceService {
     return this.states.has(guildId);
   }
 
+  getConnectedChannelId(guildId: string): string | undefined {
+    return this.states.get(guildId)?.connection.joinConfig.channelId ?? undefined;
+  }
+
   setWatchedChannel(guildId: string, channelId: string, enabled: boolean): void {
     this.voiceSettings.setWatchedChannelId(guildId, enabled ? channelId : undefined);
   }

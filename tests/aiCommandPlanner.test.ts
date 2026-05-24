@@ -232,6 +232,22 @@ describe('AiCommandPlanner', () => {
     expect(messages[1].content).toContain('짬뽕지존');
   });
 
+
+  it('labels user voice separately from bot voice in planner context', () => {
+    const messages = buildPlannerMessages(makeMessage(), '니가 있는곳', {
+      prefix: '!',
+      commands: makeCommands(1),
+      availableChannels: [{ id: 'channel-1', name: 'general', mention: '<#channel-1>' }],
+      userVoiceChannel: { id: 'voice-user', name: '음성테스트' },
+      botVoiceConnected: false,
+      botVoiceChannel: null
+    });
+
+    expect(messages[0].content).toContain('봇 실제 음성 연결 상태: 연결 안 됨');
+    expect(messages[0].content).toContain('사용자 음성 채널은 봇의 위치가 아니며');
+    expect(messages[0].content).toContain('음성테스트');
+  });
+
   it('includes shared conversation memory for follow-up planning', () => {
     const messages = buildPlannerMessages(makeMessage(), '어떤 음성채널인데', {
       prefix: '!',

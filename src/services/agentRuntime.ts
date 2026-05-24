@@ -23,6 +23,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '도구가 필요하면 tool_calls만 사용하고 도구 상세 목록의 name/policy/input schema를 그대로 따르세요.',
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
+  'ctx.userVoice는 사용자의 음성 채널이고 봇의 위치가 아니에요. ctx.botVoiceConnected=false면 봇이 음성 채널에 있다고 말하지 마세요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify와 pendingAction을 사용해요.',
@@ -71,6 +72,7 @@ export type AgentRuntimeOptions = {
   availableChannels: readonly { id: string; name: string; mention: string }[];
   userVoiceChannel?: { id: string; name?: string | null } | null;
   botVoiceConnected?: boolean;
+  botVoiceChannel?: { id: string; name?: string | null } | null;
   maxCompletionTokens?: number;
   pendingHistory?: { mode: 'summary' | 'qa'; query: string } | null;
   pendingConfirmation?: { preview: string; commandQuery: string; intent: string; normalizedArgs: string } | null;
@@ -860,6 +862,9 @@ function formatRuntimeContextForPrompt(message: Message, options: AgentRuntimeOp
       ? { id: options.userVoiceChannel.id, name: options.userVoiceChannel.name ?? undefined }
       : null,
     botVoiceConnected: Boolean(options.botVoiceConnected),
+    botVoiceChannel: options.botVoiceConnected && options.botVoiceChannel
+      ? { id: options.botVoiceChannel.id, name: options.botVoiceChannel.name ?? undefined }
+      : null,
     channels: options.availableChannels.map((channel) => ({ id: channel.id, name: channel.name, mention: channel.mention })),
     now: `<t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`
   });

@@ -115,7 +115,8 @@ function makeContext(overrides: Record<string, unknown> = {}) {
       getWatchedChannelId: vi.fn((guildId: string) => voiceSettings.getWatchedChannelId(guildId)),
       getUserTtsEngine: vi.fn(() => 'edge'),
       getUserVoicePreset: vi.fn(() => 'sunhi'),
-      isConnected: vi.fn(() => false)
+      isConnected: vi.fn(() => false),
+      getConnectedChannelId: vi.fn(() => undefined)
     },
     activityLog: {
       logCommand: vi.fn(async () => undefined),
@@ -196,13 +197,20 @@ describe('handleMessageCreate', () => {
     expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
   });
 
-  it('runs AI-channel natural command requests through the confirmation path', async () => {
+  it('runs AI-planned AI-channel requests from the configured AI channel through confirmation', async () => {
     const commands = createPrefixCommands();
-    const context = makeContext();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: 'ai채널 해제' }))
+      }
+    });
     const confirmations = new ConfirmationManager();
     context.voiceSettings.setAiChannelId('guild-1', 'channel-1');
     context.agentRuntime = {
-      run: vi.fn(async () => ({ kind: 'confirm_pending' }))
+      run: vi
+        .fn()
+        .mockResolvedValueOnce({ kind: 'not_handled' })
+        .mockResolvedValueOnce({ kind: 'confirm_pending' })
     } as any;
     const adminMember = {
       displayName: '관리자',
@@ -213,11 +221,12 @@ describe('handleMessageCreate', () => {
     const first = makeMessage('이 대화채널을 ai 채팅채널 해제 해줘', { member: adminMember });
     await handleMessageCreate(first, commands, context as any, confirmations);
 
-    expect(context.agentRuntime.run).not.toHaveBeenCalledWith(
+    expect(context.agentRuntime.run).toHaveBeenCalledWith(
       first,
       '이 대화채널을 ai 채팅채널 해제 해줘',
       expect.objectContaining({ prefix: '!' })
     );
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalled();
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
     expect(context.voiceSettings.getAiChannelId('guild-1')).toBe('channel-1');
     expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('AI 확인 안내') }));
@@ -230,11 +239,17 @@ describe('handleMessageCreate', () => {
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
-  it('routes natural AI-channel setting phrases to confirmation before changing the channel', async () => {
+  it('routes AI-planned AI-channel setting commands to confirmation before changing the channel', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       agentRuntime: {
-        run: vi.fn(async () => ({ kind: 'confirm_pending' }))
+        run: vi
+          .fn()
+          .mockResolvedValueOnce({ kind: 'not_handled' })
+          .mockResolvedValueOnce({ kind: 'confirm_pending' })
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: 'ai채널 <#ai-channel>' }))
       }
     });
     const confirmations = new ConfirmationManager();
@@ -253,7 +268,8 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(first, commands, context as any, confirmations);
 
-    expect(context.agentRuntime.run).not.toHaveBeenCalled();
+    expect(context.agentRuntime.run).toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalled();
     expect(context.voiceSettings.getAiChannelId('guild-1')).toBeUndefined();
     expect(confirmations.latestForActor({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toMatchObject({
       commandQuery: 'ai채널 <#ai-channel>'

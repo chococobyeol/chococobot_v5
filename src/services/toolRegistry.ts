@@ -18,6 +18,7 @@ export type AgentToolRuntimeContext = {
   availableChannels?: readonly { id: string; name: string; mention: string }[];
   userVoiceChannel?: { id: string; name?: string | null } | null;
   botVoiceConnected?: boolean;
+  botVoiceChannel?: { id: string; name?: string | null } | null;
   webSearch?: { mode: string; provider: string; providerStatus: string; resultCount: number };
 };
 

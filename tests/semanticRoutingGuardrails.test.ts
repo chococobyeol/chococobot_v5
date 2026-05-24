@@ -26,7 +26,10 @@ const forbiddenSemanticParsers = [
   'matchesPlannerPattern',
   'promptMatchesAgentHint',
   'selectPlannerPromptSections',
-  'selectAgentToolDetails'
+  'selectAgentToolDetails',
+  'isReadOnlyHistoryFallbackPrompt',
+  'isAiChannelSettingIntent',
+  'isAiChannelClearIntent'
 ];
 
 describe('AI routing guardrails', () => {

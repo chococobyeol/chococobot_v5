@@ -224,6 +224,24 @@ describe('AgentRuntime', () => {
     expect(retryPrompt).toContain('해당 채널에도 초밥 관련 내용이 없어요');
   });
 
+
+  it('labels user voice separately from the bot voice connection in agent context', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await runtime.run(makeMessage(), '니가 있는곳', makeOptions({
+      userVoiceChannel: { id: 'voice-user', name: '음성테스트' },
+      botVoiceConnected: false,
+      botVoiceChannel: null
+    }));
+
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('ctx.userVoice는 사용자의 음성 채널이고 봇의 위치가 아니에요');
+    expect(prompt).toContain('"botVoiceConnected":false');
+    expect(prompt).toContain('"botVoiceChannel":null');
+    expect(prompt).toContain('음성테스트');
+  });
+
   it('does not accept final answers without tools or prior context from the bounded agent', async () => {
     const ai = {
       askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({

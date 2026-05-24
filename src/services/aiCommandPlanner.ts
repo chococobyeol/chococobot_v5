@@ -27,6 +27,7 @@ export type AiCommandPlannerOptions = {
   availableChannels: readonly { id: string; name: string; mention: string }[];
   userVoiceChannel?: { id: string; name?: string | null } | null;
   botVoiceConnected?: boolean;
+  botVoiceChannel?: { id: string; name?: string | null } | null;
   maxCompletionTokens?: number;
   pendingHistory?: { mode: 'summary' | 'qa'; query: string } | null;
   pendingConfirmation?: { preview: string; commandQuery: string; intent: string; normalizedArgs: string } | null;
@@ -182,6 +183,9 @@ function buildPlannerContextSection(message: Message, options: AiCommandPlannerO
   const userVoice = options.userVoiceChannel
     ? `<#${options.userVoiceChannel.id}>${options.userVoiceChannel.name ? ` (${options.userVoiceChannel.name})` : ''}`
     : '(사용자가 음성 채널에 없음)';
+  const botVoice = options.botVoiceConnected
+    ? `연결됨${options.botVoiceChannel ? `: <#${options.botVoiceChannel.id}>${options.botVoiceChannel.name ? ` (${options.botVoiceChannel.name})` : ''}` : ''}`
+    : '연결 안 됨';
   const createdTimestamp = Number.isFinite(message.createdTimestamp) ? message.createdTimestamp : Date.now();
   return [
     '현재 실행 문맥:',
@@ -189,7 +193,8 @@ function buildPlannerContextSection(message: Message, options: AiCommandPlannerO
     `현재 프리픽스: ${options.prefix}`,
     `현재 사용자 메시지 작성 시각: <t:${Math.floor(createdTimestamp / 1000)}:t>`,
     `사용자 음성 채널: ${userVoice}`,
-    `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
+    `봇 실제 음성 연결 상태: ${botVoice}`,
+    '사용자 음성 채널은 봇의 위치가 아니며, 봇 실제 음성 연결 상태가 연결 안 됨이면 봇이 음성 채널에 있다고 말하지 마세요.',
     options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
     options.conversationContext ? `최근 대화 기억:\n${truncate(options.conversationContext, MAX_CONVERSATION_CONTEXT_CHARS)}` : undefined
   ].filter(Boolean).join('\n');
