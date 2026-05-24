@@ -43,4 +43,23 @@ describe('tool authoring guide', () => {
       expect(doc).toContain(required);
     }
   });
+
+  it('documents internal safety fields and compatibility confirmation boundaries', () => {
+    const doc = guide();
+
+    for (const required of [
+      'internal safety evidence',
+      'command.cleanup.evidence',
+      'must not ask the user for “evidence,”',
+      'pendingAction.missing',
+      'target',
+      'count',
+      'compatibility executor must perform the same permission',
+      'A confirmation payload is a proposed action, not a',
+      'migration debt',
+      'execution-time permission check'
+    ]) {
+      expect(doc).toContain(required);
+    }
+  });
 });

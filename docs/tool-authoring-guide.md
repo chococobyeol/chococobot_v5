@@ -42,6 +42,11 @@ When admin permission is required, enforce it before execution or before creatin
 executable confirmation. A missing admin permission should become a structured blocked
 observation, not a best-effort command string.
 
+If a tool still uses a direct-prefix compatibility bridge through `commandQuery`, the
+compatibility executor must perform the same permission, confirmation, and bounds
+checks again at execution time. A confirmation payload is a proposed action, not a
+permission grant.
+
 ## 4. Input schema and required fields
 
 Every tool needs a compact `inputSchema` and a validator. Prefer explicit required
@@ -54,6 +59,14 @@ fields and small enums over prose rules. Examples:
 Validation must reject missing, ambiguous, out-of-bounds, or wrongly typed fields. The
 AI may clarify or retry with corrected structured input; code must not infer omitted
 semantic intent by scanning arbitrary user prose.
+
+Some fields are internal safety evidence, not user-facing slots. For example,
+`command.cleanup.evidence` is a literal quote proving that the requester meant their
+own messages; the assistant must not ask the user for “evidence,” and
+`pendingAction.missing` for cleanup must only contain user-answerable slots such as
+`target` or `count`. If the evidence cannot be grounded in the current or stored user
+text, validation should reject the tool call and tell the model to clarify the actual
+ambiguous user-facing field or block the unsupported request.
 
 ## 5. Validation error code/field/hint pattern
 
@@ -122,7 +135,10 @@ The runtime owns the loop contract:
    `not_handled` after useful tool evidence exists.
 
 A tool must not require extra system-prompt exception paragraphs to work. Put the
-contract in the tool definition, validator, policy, and tests.
+contract in the tool definition, validator, policy, and tests. If a tool currently
+needs a prompt exception to behave safely, treat that as migration debt: move the rule
+into the schema, validator, observation hint, pending-action contract, or adapter
+precondition before adding more prompt prose.
 
 ## 9. Required tests for new tools
 
@@ -132,7 +148,13 @@ Add tests before or with each new tool:
   confirmation observation shape.
 - Runtime tests proving the AI-routed request uses the structured tool path and that
   final answers are grounded in observations.
+- Slot-continuation tests for multi-turn tools, proving `pendingAction` preserves only
+  user-answerable missing fields and never exposes internal safety fields such as
+  cleanup evidence.
 - Safety tests for admin/confirmation blocks and adapter preconditions.
+- Permission tests proving admin-only confirmation payloads cannot bypass the final
+  execution-time permission check, especially when a legacy `commandQuery` bridge is
+  still used.
 - Prompt contract tests if a change risks reintroducing tool-specific prompt bloat.
 - Legacy retirement tests when migrating an old direct command: the migrated AI-routed
   path must use structured tool calls or confirmation observations, never fallback
@@ -151,6 +173,8 @@ Do not add:
 - Prompt-only tool behavior that is not backed by schema, policy, and tests.
 - Prose keyword classifiers such as `isVoiceIntent`, `mentionsCleanupTarget`, or
   hidden regex routers for natural-language meaning.
+- User-facing clarification for internal safety fields, for example asking “증거를
+  알려줘” to fill `command.cleanup.evidence`.
 - Vague validation errors without stable `code`, `field`, and `hint` data.
 - Unbounded retries after a successful observation or repeated validation failure.
 - Hidden fallback command conversion where arbitrary AI-routed requests are converted
