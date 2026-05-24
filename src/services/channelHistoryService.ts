@@ -30,6 +30,7 @@ export type ChannelHistoryEntry = {
 export type ChannelHistoryFetchOptions = {
   limit?: number;
   lookbackHours?: number;
+  maxResults?: number;
 };
 
 export type GuildMessageSearchOptions = {
@@ -68,24 +69,15 @@ export function assessChannelHistoryQuery(query: string): ChannelHistoryAssessme
   const limit = explicitLimit ?? DEFAULT_HISTORY_MESSAGE_LIMIT;
   const lookbackHours = explicitLookbackHours ?? DEFAULT_HISTORY_LOOKBACK_HOURS;
 
-  if (limit > MAX_HISTORY_MESSAGE_LIMIT || lookbackHours > MAX_HISTORY_LOOKBACK_HOURS) {
+  if (
+    (explicitLimit !== undefined && explicitLimit > MAX_HISTORY_MESSAGE_LIMIT) ||
+    (explicitLookbackHours !== undefined && explicitLookbackHours > MAX_HISTORY_LOOKBACK_HOURS)
+  ) {
     return {
       status: 'refused',
       limit: Math.min(limit, MAX_HISTORY_MESSAGE_LIMIT),
       lookbackHours: Math.min(lookbackHours, MAX_HISTORY_LOOKBACK_HOURS),
       prompt: `한 번에 ${MAX_HISTORY_MESSAGE_LIMIT}개 또는 ${MAX_HISTORY_LOOKBACK_HOURS / 24}일을 넘는 요청은 처리할 수 없어요... 더 좁게 다시 물어봐 주세요...`
-    };
-  }
-
-  if (
-    (explicitLimit !== undefined && explicitLimit > DEFAULT_HISTORY_MESSAGE_LIMIT) ||
-    (explicitLookbackHours !== undefined && explicitLookbackHours > DEFAULT_HISTORY_LOOKBACK_HOURS)
-  ) {
-    return {
-      status: 'needs-narrowing',
-      limit,
-      lookbackHours,
-      prompt: `최근 ${DEFAULT_HISTORY_MESSAGE_LIMIT}개 또는 ${DEFAULT_HISTORY_LOOKBACK_HOURS}시간 이내처럼 범위를 더 좁혀서 물어봐 주세요...`
     };
   }
 
@@ -106,26 +98,35 @@ export async function fetchChannelHistory(
     Math.max(1, Math.floor(options.lookbackHours ?? DEFAULT_HISTORY_LOOKBACK_HOURS)),
     MAX_HISTORY_LOOKBACK_HOURS
   );
+  const maxResults = Math.min(
+    Math.max(limit, Math.floor(options.maxResults ?? MAX_HISTORY_MESSAGE_LIMIT)),
+    MAX_HISTORY_MESSAGE_LIMIT
+  );
   const cutoffTimestamp = Date.now() - lookbackHours * 60 * 60 * 1000;
 
   const collected: ChannelHistoryEntry[] = [];
   let before: Snowflake | undefined;
+  let scanned = 0;
   let exhausted = false;
 
-  while (collected.length < limit && !exhausted) {
-    const fetched = collectionToArray(await channel.messages.fetch({ limit: Math.min(100, limit - collected.length), before }));
+  while (collected.length < maxResults && !exhausted) {
+    const fetched = collectionToArray(await channel.messages.fetch({ limit: Math.min(100, maxResults - collected.length), before }));
     if (fetched.length === 0) break;
 
-    const filtered = fetched
-      .filter((message) => message.createdTimestamp >= cutoffTimestamp)
-      .map((message) => toHistoryEntry(message));
-
-    collected.push(...filtered);
+    for (const message of fetched) {
+      scanned += 1;
+      if (scanned <= limit || message.createdTimestamp >= cutoffTimestamp) {
+        collected.push(toHistoryEntry(message));
+        if (collected.length >= maxResults) break;
+      }
+    }
     before = fetched[fetched.length - 1]?.id;
-    exhausted = fetched.length < 100 || before === undefined || fetched[fetched.length - 1]!.createdTimestamp < cutoffTimestamp;
+    exhausted = fetched.length < 100 ||
+      before === undefined ||
+      (scanned >= limit && fetched[fetched.length - 1]!.createdTimestamp < cutoffTimestamp);
   }
 
-  return collected.slice(0, limit).sort((left, right) => left.createdTimestamp - right.createdTimestamp);
+  return collected.sort((left, right) => left.createdTimestamp - right.createdTimestamp);
 }
 
 export async function searchGuildMessages(options: GuildMessageSearchOptions): Promise<ChannelHistoryEntry[]> {
@@ -239,17 +240,17 @@ function findExplicitCount(text: string): number | undefined {
   const countMatch = text.match(/(\d{1,4})\s*(?:개|messages?|msgs?|메시지|개\s*정도|개\s*만|건)/i);
   if (countMatch) return Number.parseInt(countMatch[1]!, 10);
 
-  const allMatch = text.match(/(?:최근|last)\s*(\d{1,4})/i);
+  const allMatch = text.match(/(?:최근|last)\s*(\d{1,4})(?!\s*(?:시간|hours?|hrs?|h|일|days?|d))/i);
   if (allMatch) return Number.parseInt(allMatch[1]!, 10);
 
   return undefined;
 }
 
 function findExplicitLookbackHours(text: string): number | undefined {
-  const hourMatch = text.match(/(\d{1,3})\s*(?:시간|hours?|hrs?|h)\b/i);
+  const hourMatch = text.match(/(\d{1,3})\s*(?:시간|hours?|hrs?|h)(?![a-z])/i);
   if (hourMatch) return Number.parseInt(hourMatch[1]!, 10);
 
-  const dayMatch = text.match(/(\d{1,3})\s*(?:일|days?|d)\b/i);
+  const dayMatch = text.match(/(\d{1,3})\s*(?:일|days?|d)(?![a-z])/i);
   if (dayMatch) return Number.parseInt(dayMatch[1]!, 10) * 24;
 
   return undefined;

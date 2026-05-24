@@ -30,11 +30,18 @@ describe('assessChannelHistoryQuery', () => {
     );
   });
 
-  it('asks for narrowing on broad but acceptable requests and refuses hard ceiling overruns', () => {
+  it('accepts broad requests within hard ceilings and refuses hard ceiling overruns', () => {
     expect(assessChannelHistoryQuery('최근 300개 요약해줘')).toEqual(
       expect.objectContaining({
-        status: 'needs-narrowing',
+        status: 'ready',
         limit: 300
+      })
+    );
+    expect(assessChannelHistoryQuery('최근 3일 요약해줘')).toEqual(
+      expect.objectContaining({
+        status: 'ready',
+        limit: 100,
+        lookbackHours: 72
       })
     );
 
@@ -44,11 +51,17 @@ describe('assessChannelHistoryQuery', () => {
         prompt: expect.stringContaining('500개')
       })
     );
+    expect(assessChannelHistoryQuery('최근 8일 요약해줘')).toEqual(
+      expect.objectContaining({
+        status: 'refused',
+        prompt: expect.stringContaining('7일')
+      })
+    );
   });
 });
 
 describe('fetchChannelHistory', () => {
-  it('fetches direct channel history in chronological order within the lookback window', async () => {
+  it('fetches direct channel history in chronological order when entries match count or lookback', async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
 
@@ -67,9 +80,50 @@ describe('fetchChannelHistory', () => {
 
     expect(channel.messages.fetch).toHaveBeenCalled();
     expect(history).toEqual([
+      expect.objectContaining({ id: '1', content: 'too old', isBot: false }),
       expect.objectContaining({ id: '2', content: 'still kept', isBot: true }),
       expect.objectContaining({ id: '3', content: 'oldest kept', isBot: false })
     ]);
+  });
+
+  it('keeps messages beyond the count while they are inside lookback and drops entries outside both bounds', async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    const channel = {
+      id: 'channel-1',
+      messages: {
+        fetch: vi.fn(async () => [
+          makeHistoryMessage('4', now - 1 * 60 * 60 * 1000, 'within count and lookback'),
+          makeHistoryMessage('3', now - 2 * 60 * 60 * 1000, 'within count and lookback too'),
+          makeHistoryMessage('2', now - 3 * 60 * 60 * 1000, 'beyond count but in lookback'),
+          makeHistoryMessage('1', now - 26 * 60 * 60 * 1000, 'outside count and lookback')
+        ])
+      }
+    } as any;
+
+    const history = await fetchChannelHistory(channel, { limit: 2, lookbackHours: 24 });
+
+    expect(history.map((entry) => entry.id)).toEqual(['2', '3', '4']);
+  });
+
+  it('caps expanded OR results at maxResults', async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    const channel = {
+      id: 'channel-1',
+      messages: {
+        fetch: vi.fn(async () => Array.from({ length: 10 }, (_, index) =>
+          makeHistoryMessage(String(10 - index), now - index * 60 * 1000, `message ${index}`)
+        ))
+      }
+    } as any;
+
+    const history = await fetchChannelHistory(channel, { limit: 2, lookbackHours: 24, maxResults: 3 });
+
+    expect(history).toHaveLength(3);
+    expect(channel.messages.fetch).toHaveBeenCalledWith({ limit: 3, before: undefined });
   });
 });
 

@@ -1087,12 +1087,15 @@ async function fetchRecentGuildTextHistory(
 ): Promise<Awaited<ReturnType<typeof fetchChannelHistory>>> {
   const channels = searchableHistoryChannels(message, context)
     .slice(0, MAX_AUTO_HISTORY_CHANNELS);
-  const perChannelLimit = Math.max(1, Math.min(options.limit, Math.ceil(options.limit / Math.max(1, Math.min(channels.length, 5)))));
+  const distributionChannelCount = Math.max(1, Math.min(channels.length, 5));
+  const perChannelLimit = Math.max(1, Math.min(options.limit, Math.ceil(options.limit / distributionChannelCount)));
+  const perChannelMaxResults = Math.max(perChannelLimit, Math.ceil(MAX_HISTORY_MESSAGE_LIMIT / distributionChannelCount));
   const settled = await Promise.allSettled(
     channels.map((channel) =>
       fetchChannelHistory(channel, {
         limit: perChannelLimit,
-        lookbackHours: options.lookbackHours
+        lookbackHours: options.lookbackHours,
+        maxResults: perChannelMaxResults
       })
     )
   );
@@ -1103,7 +1106,7 @@ async function fetchRecentGuildTextHistory(
   );
   return combined
     .sort((left, right) => right.createdTimestamp - left.createdTimestamp)
-    .slice(0, options.limit)
+    .slice(0, MAX_HISTORY_MESSAGE_LIMIT)
     .sort((left, right) => left.createdTimestamp - right.createdTimestamp);
 }
 
