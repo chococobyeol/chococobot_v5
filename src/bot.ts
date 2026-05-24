@@ -1252,7 +1252,7 @@ function buildConfirmationPromptMessages(preview: string, commandQuery: string, 
     {
       role: 'system',
       content: [
-        '너는 Discord 봇 ChococoBot의 확인 안내 문구 작성자예요.',
+        '너는 Discord 봇 초코코봇의 확인 안내 문구 작성자예요.',
         '사용자에게 보낼 자연스러운 한국어 확인 질문 한 개만 작성해요.',
         '고정 템플릿처럼 쓰지 말고 상황에 맞게 말투를 자연스럽게 바꿔요.',
         '내부 확인 토큰, UUID, 처리 흐름, JSON, 코드펜스는 절대 쓰지 마세요.',

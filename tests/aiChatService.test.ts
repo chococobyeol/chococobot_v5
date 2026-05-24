@@ -144,7 +144,9 @@ describe('AiChatService', () => {
     expect(secondMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: '둘째 답변' })
     );
-    expect(memory.getGuildSnapshot('guild-1', 8).unsummarizedCount).toBe(4);
+    const snapshot = memory.getGuildSnapshot('guild-1', 8);
+    expect(snapshot.unsummarizedCount).toBe(4);
+    expect(snapshot.recentTurns.filter((turn) => turn.role === 'assistant').map((turn) => turn.userName)).toEqual(['초코코봇', '초코코봇']);
   });
 
   it('can process different-channel requests without waiting on one another', async () => {
