@@ -44,6 +44,8 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).toContain('이미 성공한 같은 입력의 도구는 다시 호출하지 말고');
     expect(prompt).toContain('일반 대화처럼 도구가 필요 없으면 not_handled');
     expect(prompt).toContain('runtime.context');
+    expect(prompt).toContain('history.search');
+    expect(prompt).toContain('voice.speak');
     expect(prompt).not.toContain('지원 prefix 명령:');
     expect(prompt).not.toContain('{"kind":"legacy_command","query":"..."}');
     expect(prompt.length).toBeLessThan(5200);
@@ -67,6 +69,21 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).toContain('{"kind":"not_handled"}');
     expect(prompt).toContain('{"kind":"tool_calls"');
     expect(prompt).toContain('history.search');
+    expect(prompt).toContain("mode: 'qa'|'summary'");
+  });
+
+  it('does not hide runtime tool schemas by scanning ordinary chat prose', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await runtime.run(makeMessage(), '그냥 안녕', makeOptions());
+
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('history.search');
+    expect(prompt).toContain('runtime.context [read_only_auto] input={}');
+    expect(prompt).toContain("history.search [read_only_auto] input={ scope: 'server'|'channel'");
+    expect(prompt).toContain('voice.speak [safe_action_auto] input={ text: string }');
+    expect(prompt).not.toContain('그냥 안녕');
   });
 
   it('does not reintroduce long migrated-feature legacy_command exception blocks', async () => {

@@ -22,7 +22,11 @@ const forbiddenSemanticParsers = [
   'routeChannelHistory',
   'hasBroadScope',
   'containsAny',
-  'isExplicitWebSearchPrompt'
+  'isExplicitWebSearchPrompt',
+  'matchesPlannerPattern',
+  'promptMatchesAgentHint',
+  'selectPlannerPromptSections',
+  'selectAgentToolDetails'
 ];
 
 describe('AI routing guardrails', () => {

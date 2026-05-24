@@ -131,63 +131,90 @@ function toDiagnosticUsage(detailed: AiDetailedResponse): Pick<
 }
 
 export function buildPlannerMessages(message: Message, prompt: string, options: AiCommandPlannerOptions, validationFeedback?: string | null): PlannerPromptMessages {
-  const catalog = formatCommandCatalog(options.commands);
-  const channels = formatChannelCatalog(options.availableChannels);
-  const userVoice = options.userVoiceChannel
-    ? `<#${options.userVoiceChannel.id}>${options.userVoiceChannel.name ? ` (${options.userVoiceChannel.name})` : ''}`
-    : '(사용자가 음성 채널에 없음)';
-  const systemPrompt = truncate(
-    [
-      '너는 Discord 봇 ChococoBot의 안전한 AI 명령 라우터예요.',
-      '사용자 메시지는 기본적으로 AI 채팅이에요. 명령 실행 의도가 명확하고 조건이 충분할 때만 command를 선택해요.',
-      '대기 중인 확인 작업이 실제로 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 짧은 긍정 답변(예: ㅇ, ㅇㅇ, 응, 네, ok)도 맥락상 승인으로 명확하면 confirm_pending이에요. pendingConfirmation이 없거나 승인이 아니면 confirm_pending을 쓰지 마세요.',
-      '애매하면 clarify로 구체적인 선택지를 물어봐요. 실행할 수 없는 조건이면 unavailable로 자연스럽게 안내해요.',
-      '출력은 반드시 JSON 하나만 쓰세요. 마크다운, 설명 문장, 코드펜스는 쓰지 마세요.',
-      '허용 출력 형식:',
-      '{"kind":"chat"}',
-      '{"kind":"command","query":"도움말"}',
-      '{"kind":"confirm_pending"}',
-      '{"kind":"clarify","message":"채팅으로 답할까요, 음성으로 말할까요?"}',
-      '{"kind":"unavailable","message":"음성으로 말하려면 먼저 음성 채널에 들어가 있어야 해요..."}',
-      '{"kind":"channel-history","mode":"summary","targetChannelReference":"<#1234567890>","query":"메모 채널 내용 요약해줘"}',
-      '{"kind":"time","target":"viewer","offsetSeconds":0}',
-      '{"kind":"time","target":"viewer","offsetSeconds":18000}',
-      '{"kind":"time","target":"zone","timeZone":"Europe/Budapest","label":"헝가리","offsetSeconds":0}',
-      '현재 시간, 내 시간, 몇시, 몇분, 몇 시간 뒤/후, 특정 지역 시간 질문은 chat이 아니라 time을 선택해요.',
-      'target=viewer는 Discord가 보는 사람 로컬 시간으로 보여줘야 할 때 사용해요. target=zone은 헝가리/뉴욕처럼 특정 지역 시간이 명시된 경우 IANA timeZone을 넣어요.',
-      'offsetSeconds는 현재 사용자 메시지 작성 시각으로부터 더할 초 단위 정수예요. 예: 5시간 후=18000, 30분 뒤=1800, 지금=0.',
-      '지역명은 IANA time zone으로 바꿔요. 예: 헝가리/부다페스트=Europe/Budapest, 뉴욕=America/New_York, LA=America/Los_Angeles, 한국=Asia/Seoul.',
-      'channel-history의 targetChannelReference는 반드시 아래 참조 가능한 텍스트 채널 목록의 mention 또는 정확한 이름을 그대로 복사해요. 없는 채널명은 만들지 말고 clarify로 어느 채널인지 물어봐요.',
-      '사용자가 서버/채널 대화에서 특정 주제, 단어, 언급, 식당명, 사람, 사건을 찾아보라고 하면 일반 chat이 아니라 channel-history를 선택하고 mode=qa를 사용해요.',
-      '채널을 지정하지 않은 "이 서버에 ~ 있는지 찾아봐" 같은 주제 확인은 mode=qa, "최근 무슨 대화 했지"처럼 전체 흐름 요약은 mode=summary로 targetChannelReference를 "서버 전체"로 두고 channel-history를 선택해요.',
-      '이전 채널 기록 요청이 있으면 후속 발화도 문맥으로 해석해요. 예: "#배달 여기서 봐줘"는 이전 query를 그 채널에서 다시 검색, "왜 없지? 짬뽕지존은?"은 query를 "짬뽕지존"으로 바꿔 서버 전체에서 다시 검색해요.',
-      '말해봐/라고 해봐는 무조건 TTS가 아니에요. 음성채널, TTS, 읽어줘처럼 음성 의도가 명확할 때만 말 명령을 선택해요.',
-      '음성 명령인데 사용자가 음성 채널에 없으면 command가 아니라 unavailable을 선택해요.',
-      '채팅/메시지 삭제에서 대상이 생략되면 요청자 본인 메시지라고 단정하지 말고 clarify로 누구 채팅인지 물어봐요. 특정 다른 사람 메시지만 지우는 요청은 지원하지 않는다고 안내해요.',
-      '삭제, 프리픽스 변경, 기억 삭제, TTS 채널 변경, AI 채팅 채널 변경은 명확해도 query만 만들고 실제 확인은 코드가 처리해요. 청소는 요청자 본인 메시지가 명확할 때만, 대청소는 채널 전체 삭제가 명확할 때만 query로 만들어요.',
-      '말투는 짧고 공손한 한국어로 해요. 필요할 때만 ...를 써요. 이모지는 쓰지 않아요.',
-      '지원 명령:',
-      catalog || '(없음)',
-      '참조 가능한 텍스트 채널:',
-      channels || '(없음)',
-      `현재 채널: <#${message.channelId}>`,
-      `사용자 음성 채널: ${userVoice}`,
-      `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
-      `현재 프리픽스: ${options.prefix}`,
-      `현재 사용자 메시지 작성 시각: <t:${Math.floor(message.createdTimestamp / 1000)}:t>`,
-      options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
-      options.pendingConfirmation ? `대기 중인 확인 작업 JSON: ${JSON.stringify(options.pendingConfirmation)}` : undefined,
-      validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined
-    ]
-      .filter(Boolean)
-      .join('\n'),
-    MAX_SYSTEM_PROMPT_CHARS
-  );
+  const promptSections = buildPlannerPromptSections(message, options, validationFeedback);
+  const systemPrompt = truncate(promptSections.join('\n'), MAX_SYSTEM_PROMPT_CHARS);
 
   return [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: truncate(prompt, MAX_PLANNER_PROMPT_CHARS) }
   ];
+}
+
+function buildPlannerPromptSections(message: Message, options: AiCommandPlannerOptions, validationFeedback?: string | null): string[] {
+  const sections = [
+    buildPlannerCoreSection(),
+    buildPlannerOutputSection(),
+    buildPlannerContextSection(message, options),
+    options.pendingConfirmation ? buildPendingConfirmationSection(options.pendingConfirmation) : undefined,
+    buildCapabilityCardsSection(options),
+    validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined
+  ];
+  return sections.filter((section): section is string => Boolean(section));
+}
+
+function buildPlannerCoreSection(): string {
+  return [
+    '너는 Discord 봇 ChococoBot의 안전한 AI 명령 라우터예요.',
+    '사용자 메시지는 기본적으로 AI 채팅이에요. 실행/조회 의도와 조건이 명확할 때만 command, channel-history, time, confirm_pending을 선택해요.',
+    '대기 중인 확인 작업이 없으면 confirm_pending을 쓰지 마세요. 애매하면 clarify, 실행할 수 없으면 unavailable을 선택해요.',
+    '출력은 반드시 JSON 객체 하나만 쓰세요. 마크다운, 설명 문장, 코드펜스는 쓰지 마세요.',
+    '말투는 짧고 공손한 한국어로 해요. 필요할 때만 ...를 쓰고 이모지는 쓰지 않아요.'
+  ].join('\n');
+}
+
+function buildPlannerOutputSection(): string {
+  return [
+    '허용 출력 형식:',
+    '{"kind":"chat"}',
+    '{"kind":"command","query":"도움말"}',
+    '{"kind":"confirm_pending"}',
+    '{"kind":"channel-history","mode":"summary|qa","targetChannelReference":"<#1234567890>|정확한 채널명|서버 전체","query":"요청 내용"}',
+    '{"kind":"time","target":"viewer","offsetSeconds":0}',
+    '{"kind":"time","target":"zone","timeZone":"Europe/Budapest","label":"헝가리","offsetSeconds":0}',
+    '{"kind":"clarify","message":"어느 채널을 말하는 건가요..."}',
+    '{"kind":"unavailable","message":"음성으로 말하려면 먼저 음성 채널에 들어가 있어야 해요..."}'
+  ].join('\n');
+}
+
+function buildPlannerContextSection(message: Message, options: AiCommandPlannerOptions): string {
+  const userVoice = options.userVoiceChannel
+    ? `<#${options.userVoiceChannel.id}>${options.userVoiceChannel.name ? ` (${options.userVoiceChannel.name})` : ''}`
+    : '(사용자가 음성 채널에 없음)';
+  const createdTimestamp = Number.isFinite(message.createdTimestamp) ? message.createdTimestamp : Date.now();
+  return [
+    '현재 실행 문맥:',
+    `현재 채널: <#${message.channelId}>`,
+    `현재 프리픽스: ${options.prefix}`,
+    `현재 사용자 메시지 작성 시각: <t:${Math.floor(createdTimestamp / 1000)}:t>`,
+    `사용자 음성 채널: ${userVoice}`,
+    `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
+    options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined
+  ].filter(Boolean).join('\n');
+}
+
+function buildPendingConfirmationSection(pendingConfirmation: NonNullable<AiCommandPlannerOptions['pendingConfirmation']>): string {
+  return [
+    '확인 대기 기능:',
+    '대기 중인 확인 작업이 실제로 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요.',
+    '짧은 긍정 답변(예: ㅇ, ㅇㅇ, 응, 네, ok)도 맥락상 승인으로 명확하면 confirm_pending이에요.',
+    `대기 중인 확인 작업 JSON: ${JSON.stringify(pendingConfirmation)}`
+  ].join('\n');
+}
+
+function buildCapabilityCardsSection(options: AiCommandPlannerOptions): string {
+  return [
+    '기능 판단 카드:',
+    '- time: 현재 시간/내 시간/몇시/상대 시간/지역 시간은 time. 지역명은 IANA timeZone으로 변환. viewer는 보는 사람 로컬 표시, zone은 특정 지역.',
+    '- channel-history: 서버/채널 대화 요약은 mode=summary, 특정 주제/단어/언급/사건 검색은 mode=qa. 채널 미지정 전체 흐름은 targetChannelReference="서버 전체".',
+    '- channel-history targetChannelReference는 아래 참조 가능한 텍스트 채널 mention/정확한 이름 또는 "서버 전체"만 사용. 없는 채널명은 만들지 말고 clarify.',
+    '- voice/tts: 음성채널/TTS/읽어줘처럼 음성 의도가 명확할 때만 command. 사용자가 음성 채널에 없으면 unavailable.',
+    '- command: 삭제, 프리픽스 변경, 기억 삭제, TTS 채널 변경, AI 채팅 채널 변경은 query만 만들고 확인/권한/실행은 코드가 처리.',
+    '- cleanup: 대상 생략 시 본인 메시지라고 단정하지 말고 clarify. 청소는 요청자 본인 메시지가 명확할 때만, 대청소는 채널 전체 삭제가 명확할 때만 query.',
+    '지원 명령:',
+    formatCommandCatalog(options.commands) || '(없음)',
+    '참조 가능한 텍스트 채널:',
+    formatChannelCatalog(options.availableChannels) || '(없음)'
+  ].join('\n');
 }
 
 export function formatCommandCatalog(commands: Collection<string, PrefixCommand>): string {

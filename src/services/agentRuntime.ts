@@ -2,7 +2,7 @@ import type { Message } from 'discord.js';
 import type { AiDetailedResponse, AiService } from './aiService.js';
 import { extractErrorDetails, type AiChatMessage } from './aiService.js';
 import type { AgentPendingAction, AgentTurnContextStore, AgentTurnStoredContext } from './agentTurnContextStore.js';
-import type { AgentToolExecutionContext, AgentToolObservation, AgentToolPolicy, ToolRegistry } from './toolRegistry.js';
+import type { AgentToolDefinition, AgentToolExecutionContext, AgentToolObservation, AgentToolPolicy, ToolRegistry } from './toolRegistry.js';
 import type { WebSearchMode, WebSearchProviderName, WebSearchProviderStatus } from './webSearchService.js';
 
 const MAX_ITERATIONS = 4;
@@ -19,7 +19,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '허용 kind: tool_calls, final, clarify, unavailable, blocked, confirm_pending, not_handled.',
   'provider/native tool call을 사용하지 마세요. 도구 호출도 JSON 텍스트 {"kind":"tool_calls","calls":[...]}로만 출력하세요.',
   '도구 계약: AI는 의미를 판단해 허용 출력 중 하나를 고르고, 코드는 schema/policy/safety/loop만 검증해요.',
-  '도구가 필요하면 tool_calls만 사용하고 tool 목록의 name/policy/input schema를 그대로 따르세요.',
+  '도구가 필요하면 tool_calls만 사용하고 도구 상세 목록의 name/policy/input schema를 그대로 따르세요.',
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
@@ -841,9 +841,11 @@ function formatRuntimeContextForPrompt(message: Message, options: AgentRuntimeOp
 }
 
 function formatToolCatalogForPrompt(tools: ReturnType<ToolRegistry['list']>): string {
-  return tools
-    .map((tool) => `${tool.name} [${tool.policy}] input=${tool.inputSchema} :: ${truncate(tool.description, 96)}`)
-    .join(' | ');
+  return tools.map(formatToolDetailForPrompt).join(' | ');
+}
+
+function formatToolDetailForPrompt(tool: AgentToolDefinition): string {
+  return `${tool.name} [${tool.policy}] input=${tool.inputSchema} :: ${truncate(tool.description, 72)}`;
 }
 
 function formatWebSearchPolicy(webSearch: AgentRuntimeOptions['webSearch']): string {

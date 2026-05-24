@@ -192,9 +192,9 @@ describe('AiCommandPlanner', () => {
     expect(diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'parse_error' }), expect.objectContaining({ event: 'retry' })]));
   });
 
-  it('keeps planner payloads within configured caps', () => {
+  it('keeps planner payloads within configured caps for relevant sections', () => {
     const limits = plannerLimits();
-    const messages = buildPlannerMessages(makeMessage(), '가'.repeat(5000), {
+    const messages = buildPlannerMessages(makeMessage(), `${'가'.repeat(5000)} 최근 대화 요약하고 청소 명령도 확인해줘`, {
       prefix: '!',
       commands: makeCommands(40),
       availableChannels: Array.from({ length: 50 }, (_, index) => ({
@@ -210,8 +210,8 @@ describe('AiCommandPlanner', () => {
 
     expect(system.length).toBeLessThanOrEqual(limits.maxSystemPromptChars);
     expect(system).toContain('없는 채널명은 만들지 말고 clarify');
-    expect(system).toContain('특정 주제, 단어, 언급');
-    expect(system).toContain('targetChannelReference를 "서버 전체"');
+    expect(system).toContain('특정 주제/단어/언급');
+    expect(system).toContain('targetChannelReference="서버 전체"');
     expect(system).not.toContain('이전 채널 기록 요청: mode=');
     expect(user.length).toBeLessThanOrEqual(limits.maxPlannerPromptChars);
     expect(commandLines.length).toBeLessThanOrEqual(limits.maxCommands);
@@ -229,7 +229,40 @@ describe('AiCommandPlanner', () => {
     });
 
     expect(messages[0].content).toContain('이전 채널 기록 요청: mode=summary, query=짬뽕');
-    expect(messages[0].content).toContain('짬뽕지존');
+    expect(messages[1].content).toContain('짬뽕지존');
+  });
+
+  it('keeps ordinary chat planner prompts compact without prose-based section routing', () => {
+    const messages = buildPlannerMessages(makeMessage(), '그냥 안녕 뭐해', {
+      prefix: '!',
+      commands: makeCommands(10),
+      availableChannels: [{ id: 'channel-1', name: 'general', mention: '<#channel-1>' }]
+    });
+
+    const system = messages[0].content;
+
+    expect(system).toContain('기능 판단 카드');
+    expect(system).toContain('IANA timeZone');
+    expect(system).toContain('참조 가능한 텍스트 채널');
+    expect(system).not.toContain('그냥 안녕 뭐해');
+    expect(system.length).toBeLessThan(4200);
+  });
+
+  it('does not change planner system guidance by scanning user prose', () => {
+    const timeMessages = buildPlannerMessages(makeMessage(), '헝가리 몇시야', {
+      prefix: '!',
+      commands: makeCommands(1),
+      availableChannels: [{ id: 'channel-1', name: 'general', mention: '<#channel-1>' }]
+    });
+    const historyMessages = buildPlannerMessages(makeMessage(), '최근 대화 요약해봐', {
+      prefix: '!',
+      commands: makeCommands(1),
+      availableChannels: [{ id: 'channel-1', name: 'general', mention: '<#channel-1>' }]
+    });
+
+    expect(timeMessages[0].content).toEqual(historyMessages[0].content);
+    expect(timeMessages[1].content).toBe('헝가리 몇시야');
+    expect(historyMessages[1].content).toBe('최근 대화 요약해봐');
   });
 
 });
