@@ -237,7 +237,9 @@ describe('AgentRuntime', () => {
     }));
 
     const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    expect(prompt).toContain('ctx.userVoice는 사용자의 음성 채널이고 봇의 위치가 아니에요');
+    expect(prompt).not.toContain('ctx.userVoice는 사용자의 음성 채널이고 봇의 위치가 아니에요');
+    expect(prompt).toContain('requester_voice_channel_not_bot_location');
+    expect(prompt).toContain('botVoiceConnected_and_botVoiceChannel_are_bot_location_source_of_truth');
     expect(prompt).toContain('"botVoiceConnected":false');
     expect(prompt).toContain('"botVoiceChannel":null');
     expect(prompt).toContain('음성테스트');
@@ -1325,7 +1327,8 @@ describe('AgentRuntime', () => {
     expect(outcome).toMatchObject({ kind: 'confirmation_required', commandQuery: '대청소 100' });
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('cleanup missing may only include target/count');
-    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('사용자에게 증거');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('must not ask for evidence');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('never ask user for evidence');
   });
 
   it('keeps requester cleanup evidence in AI-owned slots until count is supplied', async () => {

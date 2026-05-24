@@ -2324,6 +2324,10 @@ async function handleAiPrompt(
             userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
             botVoiceConnected: context.voice.isConnected(message.guildId),
             botVoiceChannel: botVoiceChannelFor(context, message),
+            voiceSemantics: {
+              userVoice: 'requester_voice_channel_not_bot_location',
+              botVoice: 'botVoiceConnected_and_botVoiceChannel_are_bot_location_source_of_truth'
+            },
             webSearch: {
               mode: getGuildWebSearchMode(context, message.guildId),
               provider: context.settings.webSearchProvider,

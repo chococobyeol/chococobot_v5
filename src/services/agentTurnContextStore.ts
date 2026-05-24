@@ -9,7 +9,12 @@ export type AgentCleanupPendingAction = {
   originalPrompt: string;
   target?: 'self' | 'channel' | 'other' | 'ambiguous';
   count?: number;
+  /**
+   * AI-owned internal safety quote proving requester-owned cleanup intent.
+   * Never expose this as a user-facing missing slot; ask only for target/count.
+   */
   cleanupEvidence?: string;
+  /** Only user-answerable cleanup slots are allowed here. */
   missing: Array<'target' | 'count'>;
 };
 

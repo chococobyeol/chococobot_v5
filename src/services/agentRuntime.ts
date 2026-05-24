@@ -24,11 +24,9 @@ const AGENT_OUTPUT_CONTRACT = [
   '도구가 필요하면 tool_calls만 사용하고 도구 상세 목록의 name/policy/input schema를 그대로 따르세요.',
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
-  'ctx.userVoice는 사용자의 음성 채널이고 봇의 위치가 아니에요. ctx.botVoiceConnected=false면 봇이 음성 채널에 있다고 말하지 마세요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
-  '필수 구조화 필드가 부족하면 clarify+pendingAction. cleanup.missing은 target/count만 허용.',
-  'cleanup evidence는 내부 안전 근거예요. 사용자에게 증거/evidence를 묻지 말고, 채널 전체 삭제는 evidence 없는 command.mass_cleanup을 쓰세요.',
+  '필수 구조화 필드가 부족하면 clarify+pendingAction을 사용하되, missing에는 사용자가 답할 수 있는 필드만 넣어요.',
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
   '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요. 예: {"kind":"not_handled"}',
   'final 스타일: 한국어 초코코봇 말투, 짧고 자연스럽게 답해요. 봇 이름을 직접 말할 때는 초코코봇이라고 써요. 느낌표/물음표/이모지 금지. 문장 끝에 해요나 ...를 접미어처럼 억지로 덧붙이지 마세요.',
@@ -868,6 +866,10 @@ function formatRuntimeContextForPrompt(message: Message, options: AgentRuntimeOp
     userVoice: options.userVoiceChannel
       ? { id: options.userVoiceChannel.id, name: options.userVoiceChannel.name ?? undefined }
       : null,
+    voiceSemantics: {
+      userVoice: 'requester_voice_channel_not_bot_location',
+      botVoice: 'botVoiceConnected_and_botVoiceChannel_are_bot_location_source_of_truth'
+    },
     botVoiceConnected: Boolean(options.botVoiceConnected),
     botVoiceChannel: options.botVoiceConnected && options.botVoiceChannel
       ? { id: options.botVoiceChannel.id, name: options.botVoiceChannel.name ?? undefined }

@@ -176,6 +176,22 @@ describe('ToolRegistry observation contract', () => {
     });
   });
 
+  it('keeps cleanup evidence and voice-location rules in tool contracts', () => {
+    const registry = createDefaultToolRegistry();
+    const cleanup = registry.get('command.cleanup');
+    const massCleanup = registry.get('command.mass_cleanup');
+    const runtimeContext = registry.get('runtime.context');
+
+    expect(cleanup?.description).toContain('AI-owned internal safety quote');
+    expect(cleanup?.description).toContain('never a user-facing clarification slot');
+    expect(cleanup?.inputSchema).toContain('literal quote from current/stored user text');
+    expect(cleanup?.inputSchema).toContain('never ask user for evidence');
+    expect(massCleanup?.description).toContain('channel-wide cleanup');
+    expect(massCleanup?.inputSchema).toContain('no evidence field');
+    expect(runtimeContext?.description).toContain('userVoiceChannel is requester-only');
+    expect(runtimeContext?.description).toContain('botVoiceConnected/botVoiceChannel');
+  });
+
   it('rejects coerced integer fields for read-only tools', async () => {
     const registry = createDefaultToolRegistry();
 

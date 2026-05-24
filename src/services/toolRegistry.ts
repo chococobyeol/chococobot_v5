@@ -16,9 +16,16 @@ export type AgentToolRuntimeContext = {
   currentChannelId?: string;
   requesterDisplayName?: string;
   availableChannels?: readonly { id: string; name: string; mention: string }[];
+  /** Requester voice channel only; this must not be treated as the bot location. */
   userVoiceChannel?: { id: string; name?: string | null } | null;
+  /** Source of truth for whether the bot is currently in voice. */
   botVoiceConnected?: boolean;
+  /** Source of truth for the bot voice-channel location when connected. */
   botVoiceChannel?: { id: string; name?: string | null } | null;
+  voiceSemantics?: {
+    userVoice: 'requester_voice_channel_not_bot_location';
+    botVoice: 'botVoiceConnected_and_botVoiceChannel_are_bot_location_source_of_truth';
+  };
   webSearch?: { mode: string; provider: string; providerStatus: string; resultCount: number };
 };
 
@@ -363,7 +370,7 @@ export function createDefaultToolRegistry(handlers: ToolRegistryHandlers = {}): 
 function runtimeContextTool(): AgentToolDefinition<Record<string, never>, { now: number; context?: AgentToolRuntimeContext }> {
   return {
     name: 'runtime.context',
-    description: 'Read compact runtime context: current channel, prefix, available text channels, requester voice channel, bot voice connection, and web-search mode.',
+    description: 'Read compact runtime context. userVoiceChannel is requester-only; botVoiceConnected/botVoiceChannel are the bot voice-location source of truth.',
     inputSchema: '{}',
     policy: 'read_only_auto',
     retryable: false,
@@ -673,8 +680,8 @@ function userTimezoneTool(handlers: ToolRegistryHandlers): AgentToolDefinition<U
 function cleanupTool(): AgentToolDefinition<{ target: 'self'; count: number; evidence: string }, never> {
   return {
     name: 'command.cleanup',
-    description: 'Request deletion of the requester own recent messages. Requires structured target=self, count, and exact evidence that the requester meant their own messages.',
-    inputSchema: "{ target: 'self'; count: number; evidence: string }",
+    description: 'Request deletion of requester own recent messages. evidence is AI-owned internal safety quote from user text, never a user-facing clarification slot.',
+    inputSchema: "{ target: 'self'; count: number; evidence: string } // evidence must be a literal quote from current/stored user text; never ask user for evidence",
     policy: 'confirmation_required',
     retryable: false,
     validate(input) {
@@ -697,8 +704,8 @@ function cleanupTool(): AgentToolDefinition<{ target: 'self'; count: number; evi
 function massCleanupTool(): AgentToolDefinition<{ target: 'channel'; count: number }, never> {
   return {
     name: 'command.mass_cleanup',
-    description: 'Request deletion of recent channel messages. Requires structured target=channel and count; existing confirmation/admin path executes after approval.',
-    inputSchema: "{ target: 'channel'; count: number }",
+    description: 'Request deletion of recent channel messages. Use for channel-wide cleanup; no evidence field exists, confirmation/admin path checks before execution.',
+    inputSchema: "{ target: 'channel'; count: number } // channel-wide cleanup has no evidence field",
     policy: 'confirmation_required',
     retryable: false,
     validate(input) {

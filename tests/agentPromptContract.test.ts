@@ -46,6 +46,11 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).toContain('runtime.context');
     expect(prompt).toContain('history.search');
     expect(prompt).toContain('voice.speak');
+    expect(prompt).toContain('requester_voice_channel_not_bot_location');
+    expect(prompt).toContain('literal quote from current/stored user text');
+    expect(prompt).toContain('channel-wide cleanup has no evidence field');
+    expect(prompt).not.toContain('ctx.userVoice는 사용자의 음성 채널이고 봇의 위치가 아니에요');
+    expect(prompt).not.toContain('cleanup evidence는 내부 안전 근거예요');
     expect(prompt).not.toContain('지원 prefix 명령:');
     expect(prompt).not.toContain('{"kind":"legacy_command","query":"..."}');
     expect(prompt.length).toBeLessThan(5200);
