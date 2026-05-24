@@ -245,6 +245,10 @@ describe('AiChatService', () => {
         }),
         expect.objectContaining({
           role: 'system',
+          content: expect.stringContaining('몰라요...처럼 답하고')
+        }),
+        expect.objectContaining({
+          role: 'system',
           content: expect.stringContaining('근거 없이 그냥 여기 있어요')
         }),
         expect.objectContaining({
