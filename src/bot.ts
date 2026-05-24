@@ -35,7 +35,8 @@ import {
   MAX_HISTORY_MESSAGE_LIMIT,
   assessChannelHistoryQuery,
   fetchChannelHistory,
-  searchGuildMessages
+  searchGuildMessages,
+  type ChannelHistoryEntry
 } from './services/channelHistoryService.js';
 import { SqliteBotActivityLogStore } from './services/botActivityLogStore.js';
 import { SqliteAiMemoryStore } from './services/aiMemoryStore.js';
@@ -284,6 +285,17 @@ function findTextChannelFromNaturalReference(message: Message, prompt: string): 
   if (matches.length === 1) return matches[0]!;
   if (matches.length > 1) return 'ambiguous';
   return null;
+}
+
+function isAiChannelSettingIntent(prompt: string): boolean {
+  const normalized = prompt.replace(/\s+/g, '');
+  return /(?:ai|에이아이)/iu.test(normalized) &&
+    /(?:대화|채팅)?채널/iu.test(normalized) &&
+    /(?:설정|등록|지정|바꿔|변경|해제|끄기|꺼|초기화)/iu.test(normalized);
+}
+
+function isAiChannelClearIntent(prompt: string): boolean {
+  return /(?:해제|끄기|꺼|초기화|clear|unset|disable|off)/iu.test(prompt);
 }
 
 function requireGuildMember(message: Message): GuildMember {
@@ -1585,7 +1597,7 @@ async function executeHistorySearchTool(
       scannedChannels: 1,
       matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
       usedMessages: usedHistory.length,
-      evidence: usedHistory.slice(0, 20).map(toHistoryEvidence)
+      evidence: selectLatestHistoryEvidence(usedHistory)
     };
   }
 
@@ -1626,7 +1638,7 @@ async function executeHistorySearchTool(
     scannedChannels: Math.min(MAX_AUTO_HISTORY_CHANNELS, searchableChannels.length),
     matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
     usedMessages: usedHistory.length,
-    evidence: usedHistory.slice(0, 20).map(toHistoryEvidence)
+    evidence: selectLatestHistoryEvidence(usedHistory)
   };
 }
 
@@ -1827,6 +1839,13 @@ function toHistoryEvidence(entry: Awaited<ReturnType<typeof fetchChannelHistory>
     timestamp: new Date(entry.createdTimestamp).toISOString(),
     content: entry.content
   };
+}
+
+export function selectLatestHistoryEvidence(
+  history: readonly ChannelHistoryEntry[],
+  limit = 20
+): HistorySearchOutput['evidence'] {
+  return history.slice(-limit).map(toHistoryEvidence);
 }
 
 async function handleGuildChannelHistoryPlan(
@@ -2115,6 +2134,10 @@ async function handleAiCommandPlannerPrompt(
       case 'command':
         return dispatchPlannerCommand(message, commands, context, confirmations, plan.query);
       case 'confirm_pending':
+        if (!pendingConfirmation) {
+          await context.aiChat.handlePrompt(message, prompt);
+          return true;
+        }
         return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
       case 'channel-history':
         if (isServerWideHistoryTarget(plan.targetChannelReference)) {
@@ -2227,6 +2250,31 @@ async function dispatchConfirmedPendingCommand(
   return dispatchCommandQuery(message, commands, context, pending.commandQuery);
 }
 
+async function handleAiChannelSettingPrompt(
+  message: Message,
+  prompt: string,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  confirmations: ConfirmationManager
+): Promise<boolean> {
+  if (!isAiChannelSettingIntent(prompt)) return false;
+  if (isAiChannelClearIntent(prompt)) {
+    return dispatchPlannerCommand(message, commands, context, confirmations, 'ai채널 해제');
+  }
+
+  const targetChannel = findTextChannelFromNaturalReference(message, prompt);
+  if (targetChannel === 'ambiguous') {
+    await message.reply({ content: '비슷한 채널이 여러 개 있어요... 정확한 채널 멘션으로 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
+    return true;
+  }
+
+  const useCurrentChannel = /(?:이|현재|여기)\s*(?:대화|채팅)?\s*채널/iu.test(prompt);
+  const channel = targetChannel ?? (useCurrentChannel ? requireGuildTextChannel(message) : null);
+  if (!channel) return false;
+
+  return dispatchPlannerCommand(message, commands, context, confirmations, `ai채널 <#${channel.id}>`);
+}
+
 
 async function handleAiPrompt(
   message: Message,
@@ -2240,6 +2288,7 @@ async function handleAiPrompt(
   if (!message.guildId) return false;
   const pendingConfirmation = latestConfirmationForMessage(message, confirmations);
   const pendingHistoryRequest = getPendingChannelHistoryRequest(message);
+  if (!pendingConfirmation && await handleAiChannelSettingPrompt(message, prompt, commands, context, confirmations)) return true;
   if (context.agentRuntime) {
     try {
       const member = message.member as GuildMember | null;
@@ -2292,9 +2341,14 @@ async function handleAiPrompt(
           clearPendingChannelHistoryRequest(message);
           return dispatchPlannerCommand(message, commands, context, confirmations, outcome.commandQuery);
         case 'confirm_pending':
-          return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
+          if (pendingConfirmation) return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
+          if (await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
+          if (await handleReadOnlyHistoryFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
+          await context.aiChat.handlePrompt(message, prompt);
+          return true;
         case 'not_handled':
           if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
+          if (await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
           if (await handleReadOnlyHistoryFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
           await context.aiChat.handlePrompt(message, prompt);
           return true;

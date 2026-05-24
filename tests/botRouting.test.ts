@@ -1,6 +1,6 @@
 import { ChannelType, Collection } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearPendingChannelHistoryRequestsForTests, createPrefixCommands, handleMessageCreate } from '../src/bot.js';
+import { clearPendingChannelHistoryRequestsForTests, createPrefixCommands, handleMessageCreate, selectLatestHistoryEvidence } from '../src/bot.js';
 import { ConfirmationManager } from '../src/services/confirmationManager.js';
 import { InMemoryVoiceSettingsStore } from '../src/services/voiceSettingsStore.js';
 import { AgentTurnContextStore } from '../src/services/agentTurnContextStore.js';
@@ -195,23 +195,13 @@ describe('handleMessageCreate', () => {
     expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
   });
 
-  it('runs AI-channel natural command requests through the agent confirmation path', async () => {
+  it('runs AI-channel natural command requests through the confirmation path', async () => {
     const commands = createPrefixCommands();
     const context = makeContext();
     const confirmations = new ConfirmationManager();
     context.voiceSettings.setAiChannelId('guild-1', 'channel-1');
     context.agentRuntime = {
-      run: vi
-        .fn()
-        .mockResolvedValueOnce({
-          kind: 'confirmation_required',
-          message: 'AI 채널 변경 전 확인이 필요해요...',
-          intent: 'settings.ai_channel',
-          preview: 'Confirm settings.ai_channel',
-          commandQuery: 'ai채널 해제',
-          payload: { action: 'clear' }
-        })
-        .mockResolvedValueOnce({ kind: 'confirm_pending' })
+      run: vi.fn(async () => ({ kind: 'confirm_pending' }))
     } as any;
     const adminMember = {
       displayName: '관리자',
@@ -222,7 +212,7 @@ describe('handleMessageCreate', () => {
     const first = makeMessage('이 대화채널을 ai 채팅채널 해제 해줘', { member: adminMember });
     await handleMessageCreate(first, commands, context as any, confirmations);
 
-    expect(context.agentRuntime.run).toHaveBeenCalledWith(
+    expect(context.agentRuntime.run).not.toHaveBeenCalledWith(
       first,
       '이 대화채널을 ai 채팅채널 해제 해줘',
       expect.objectContaining({ prefix: '!' })
@@ -231,12 +221,91 @@ describe('handleMessageCreate', () => {
     expect(context.voiceSettings.getAiChannelId('guild-1')).toBe('channel-1');
     expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('AI 확인 안내') }));
 
-    const second = makeMessage('ㅇㅇ', { id: 'message-2', member: adminMember });
+    const second = makeMessage('!? ㅇㅇ', { id: 'message-2', member: adminMember });
     await handleMessageCreate(second, commands, context as any, confirmations);
 
     expect(context.voiceSettings.getAiChannelId('guild-1')).toBeUndefined();
     expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'AI 채팅 채널 설정을 해제했어요...' }));
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('routes natural AI-channel setting phrases to confirmation before changing the channel', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'confirm_pending' }))
+      }
+    });
+    const confirmations = new ConfirmationManager();
+    const adminMember = {
+      displayName: '관리자',
+      permissions: { has: vi.fn(() => true) },
+      voice: { channel: { id: 'voice-1' } }
+    };
+
+    const first = makeMessage('!? ai대화 채널을 ai 대화채널로 설정해봐', { member: adminMember });
+    first.guild.channels.cache.set('ai-channel', {
+      id: 'ai-channel',
+      name: 'ai대화',
+      type: ChannelType.GuildText
+    });
+
+    await handleMessageCreate(first, commands, context as any, confirmations);
+
+    expect(context.agentRuntime.run).not.toHaveBeenCalled();
+    expect(context.voiceSettings.getAiChannelId('guild-1')).toBeUndefined();
+    expect(confirmations.latestForActor({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toMatchObject({
+      commandQuery: 'ai채널 <#ai-channel>'
+    });
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('AI 확인 안내') }));
+
+    const second = makeMessage('!? ㅇㅇ', { id: 'message-2', member: adminMember });
+    second.guild.channels.cache.set('ai-channel', {
+      id: 'ai-channel',
+      name: 'ai대화',
+      type: ChannelType.GuildText
+    });
+    await handleMessageCreate(second, commands, context as any, confirmations);
+
+    expect(context.voiceSettings.getAiChannelId('guild-1')).toBe('ai-channel');
+    expect(second.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '<#ai-channel>를 AI 채팅 채널로 설정했어요...' }));
+  });
+
+  it('does not execute confirm_pending when no pending confirmation exists', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({ kind: 'confirm_pending' }))
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'chat' }))
+      }
+    });
+    const message = makeMessage('!? 넌 누군데');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).not.toHaveBeenCalledWith(expect.objectContaining({ content: '확인할 대기 작업을 찾지 못했어요...' }));
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '넌 누군데');
+  });
+
+  it('selects the newest history evidence when agent history observations are capped', () => {
+    const now = Date.now();
+    const history = Array.from({ length: 25 }, (_, index) => ({
+      id: `message-${index + 1}`,
+      channelId: 'channel-1',
+      authorId: `user-${index + 1}`,
+      authorName: `User ${index + 1}`,
+      content: `message ${index + 1}`,
+      createdTimestamp: now + index,
+      isBot: false
+    }));
+
+    const evidence = selectLatestHistoryEvidence(history, 20);
+
+    expect(evidence).toHaveLength(20);
+    expect(evidence[0]).toMatchObject({ content: 'message 6' });
+    expect(evidence.at(-1)).toMatchObject({ content: 'message 25' });
   });
 
   it('deletes the cleanup command message plus the requested number of user messages without posting a public success message', async () => {

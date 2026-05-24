@@ -1359,7 +1359,27 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({ kind: 'confirm_pending' });
     expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('pendingConfirmation=');
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('명확히 승인하면 confirm_pending');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('명확한 승인일 때만 confirm_pending');
+  });
+
+  it('rejects confirm_pending when no pending confirmation exists', async () => {
+    const diagnostics: unknown[] = [];
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'confirm_pending' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), 'ai채널 설정해줘', makeOptions({ onDiagnostic: (event: unknown) => diagnostics.push(event) }));
+
+    expect(outcome).toEqual({ kind: 'not_handled' });
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'retry', decisionKind: 'spurious_confirm_pending' })
+    ]));
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('confirm_pending은 사용할 수 없어요');
   });
 
   it('retries not_handled pending confirmation replies through AI instead of code keywords', async () => {

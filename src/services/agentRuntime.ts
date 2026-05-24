@@ -24,7 +24,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify와 pendingAction을 사용해요.',
-  '대기 중 확인 작업을 사용자가 명확히 승인하면 confirm_pending을 선택해요.',
+  'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
   '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요. 예: {"kind":"not_handled"}',
   'final 스타일: 한국어 ChococoBot 말투, 짧게 확인+다음 맥락 하나, 느낌표/물음표/이모지 없이 ... 또는 해요로 종료.',
   'outputs={"tool_calls":{"calls":[{"id":"call_1","tool":"registered.tool","input":{}}]},"final":{"message":"..."},"clarify":{"message":"...","pendingAction":{"kind":"cleanup|history","originalPrompt":"...","missing":["field"]}},"unavailable":{"message":"...","reason":"web_search_unavailable?"},"blocked":{"message":"...","blockedTools":["tool.name"]},"confirm_pending":{},"not_handled":{}}'
@@ -172,6 +172,16 @@ export class AgentRuntime {
       }
 
       const envelope = parsed.envelope;
+      if (envelope.kind === 'confirm_pending' && !options.pendingConfirmation) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'spurious_confirm_pending' });
+        if (actionDecisionRetryRequested) return { kind: 'not_handled' };
+        actionDecisionRetryRequested = true;
+        validationFeedback = [
+          '현재 대기 중인 확인 작업이 없으므로 confirm_pending은 사용할 수 없어요.',
+          '설정/삭제/실행 의도라면 적절한 tool_calls JSON을 쓰고, 일반 대화면 not_handled를 쓰세요.'
+        ].join('\n');
+        continue;
+      }
       if (envelope.kind === 'not_handled' && options.pendingConfirmation && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'pending_confirmation_decision_required' });
         actionDecisionRetryRequested = true;
