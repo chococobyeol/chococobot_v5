@@ -337,6 +337,42 @@ describe('AiChatService', () => {
     ]));
   });
 
+  it('remembers non-chat AI exchanges so chat fallback can see tool/runtime replies', async () => {
+    const settings = makeSettings();
+    const memory = new InMemoryAiMemoryStore();
+    const ai = {
+      askMessagesDetailed: vi.fn(async () => ({
+        content: '방금 웹 검색 설정이 비활성화됐다고 말한 거예요...',
+        model: 'openai/gpt-oss-120b',
+        usageScope: 'chat',
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        rateLimitHeaders: {},
+        status: 200
+      }))
+    } as any;
+    const activityLog = {
+      logCommand: vi.fn(async () => undefined),
+      logError: vi.fn(async () => undefined),
+      logAiDiagnostic: vi.fn(async () => undefined)
+    } as any;
+    const service = new AiChatService(settings, ai, memory, activityLog);
+
+    await service.rememberExchange(
+      makeMessage('channel-1', '!? 정성카츠 주소 찾아봐'),
+      '정성카츠 주소를 인터넷에 찾아봐',
+      '웹 검색 기능이 비활성화돼 있어 정성카츠 주소를 찾아드릴 수 없어요.'
+    );
+    await service.handlePrompt(makeMessage('channel-1', '!? 왜 비활성화돼있지?'), '왜 비활성화돼있지?');
+
+    const callMessages = ai.askMessagesDetailed.mock.calls[0][0].messages as Array<{ role: string; content: string }>;
+    expect(callMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'user', content: expect.stringContaining('정성카츠 주소를 인터넷에 찾아봐') }),
+      expect.objectContaining({ role: 'assistant', content: '웹 검색 기능이 비활성화돼 있어 정성카츠 주소를 찾아드릴 수 없어요.' })
+    ]));
+  });
+
   it('keeps prompt-injection text as user content while replies remain mention-safe', async () => {
     const settings = makeSettings();
     const memory = new InMemoryAiMemoryStore();

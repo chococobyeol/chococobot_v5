@@ -199,6 +199,12 @@ export class AgentRuntime {
         validationFeedback = buildClarifyFollowUpFeedback(priorContext);
         continue;
       }
+      if (envelope.kind === 'not_handled' && priorContext && isReusableFollowUpIntent(priorContext.lastIntent) && !actionDecisionRetryRequested) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'prior_context_follow_up_required' });
+        actionDecisionRetryRequested = true;
+        validationFeedback = buildPriorContextFollowUpFeedback(priorContext);
+        continue;
+      }
       if (envelope.kind === 'not_handled' && priorContext?.pendingAction) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: 'pending_action_not_resolved' });
         this.updateTurnContext(key, { kind: 'clarify', message: 'pending action unresolved', pendingAction: priorContext.pendingAction }, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
@@ -499,6 +505,20 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요.',
     '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
     '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 삭제 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
+  ].filter(Boolean).join('\n');
+}
+
+function buildPriorContextFollowUpFeedback(priorContext: AgentTurnStoredContext): string {
+  return [
+    '현재 사용자 메시지는 직전 agent 응답에 대한 후속 대화일 수 있어요.',
+    priorContext.lastIntent ? `이전 의도: ${priorContext.lastIntent}` : undefined,
+    priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
+    priorContext.lastAgentMessage ? `직전 봇 응답: ${priorContext.lastAgentMessage}` : undefined,
+    priorContext.lastToolCalls.length ? `이전 도구 호출 JSON: ${JSON.stringify(priorContext.lastToolCalls)}` : undefined,
+    priorContext.observations.length ? `이전 도구 관찰 JSON: ${JSON.stringify(priorContext.observations).slice(0, 900)}` : undefined,
+    '현재 사용자 메시지와 이전 문맥을 함께 보고 답할 수 있으면 final/clarify/unavailable/blocked 중 하나로 답하세요.',
+    '특히 web_search_unavailable 후속 질문이면 현재 web 정책 JSON의 mode/providerStatus를 근거로 왜 검색할 수 없는지 설명하고, 사용자가 켤 수 있는 명령이 있으면 짧게 안내하세요.',
+    '이전 문맥과 무관한 일반 대화가 확실할 때만 not_handled를 쓰세요.'
   ].filter(Boolean).join('\n');
 }
 

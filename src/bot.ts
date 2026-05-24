@@ -985,6 +985,13 @@ async function replyWithChunks(message: Message, content: string): Promise<void>
   }
 }
 
+async function rememberAiExchange(context: BotContext, message: Message, prompt: string, answer: string): Promise<void> {
+  const aiChat = context.aiChat as AiChatService & { rememberExchange?: (message: Message, prompt: string, answer: string) => Promise<void> };
+  if (typeof aiChat.rememberExchange !== 'function') return;
+  await aiChat.rememberExchange(message, prompt, answer)
+    .catch((error) => logger.warn('Failed to remember AI exchange:', error));
+}
+
 function formatDiscordDisplayTime(timestamp: number): string {
   return `<t:${Math.floor(timestamp / 1000)}:t>`;
 }
@@ -1521,6 +1528,7 @@ async function handleChannelHistoryPlan(
       messages: buildChannelHistoryMessages(message, usedHistory, route.mode, route.query, queryTopic)
     });
     await replyWithChunks(message, answer);
+    await rememberAiExchange(context, message, route.query, answer);
   } catch (error) {
     logger.error(error);
     await context.activityLog.logAiDiagnostic({
@@ -1928,6 +1936,7 @@ async function handleGuildChannelHistoryPlan(
     if (queryTopic) setPendingChannelHistoryRequest(message, { mode, query });
     else clearPendingChannelHistoryRequest(message);
     await replyWithChunks(message, answer);
+    await rememberAiExchange(context, message, query, answer);
   } catch (error) {
     logger.error(error);
     await context.activityLog.logAiDiagnostic({
@@ -2054,9 +2063,15 @@ function buildTimePlanReply(message: Message, plan: Extract<import('./services/a
   return `${label} 시간은 ${formatTimeInZone(timestampMs, plan.timeZone!)}이에요...`;
 }
 
+function buildTimeMemoryPrompt(plan: Extract<import('./services/aiCommandPlanner.js').AiCommandPlan, { kind: 'time' }>): string {
+  if (plan.target === 'viewer') return `time viewer offsetSeconds=${plan.offsetSeconds ?? 0}`;
+  return `time zone=${plan.timeZone ?? ''} label=${plan.label ?? ''} offsetSeconds=${plan.offsetSeconds ?? 0}`;
+}
+
 async function handleTimePlan(message: Message, plan: Extract<import('./services/aiCommandPlanner.js').AiCommandPlan, { kind: 'time' }>, context: BotContext): Promise<boolean> {
   const answer = buildTimePlanReply(message, plan);
   await message.reply({ content: answer, allowedMentions: { parse: [], repliedUser: false } });
+  await rememberAiExchange(context, message, buildTimeMemoryPrompt(plan), answer);
   await context.activityLog.logCommand({
     guildId: message.guildId!,
     guildName: message.guild?.name,
@@ -2158,9 +2173,11 @@ async function handleAiCommandPlannerPrompt(
       case 'clarify':
         if (pendingHistoryRequest && await handlePendingChannelHistoryReply(message, prompt, context)) return true;
         await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+        await rememberAiExchange(context, message, prompt, plan.message);
         return true;
       case 'unavailable':
         await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+        await rememberAiExchange(context, message, prompt, plan.message);
         return true;
     }
   } catch (error) {
@@ -2219,6 +2236,7 @@ async function handleReadOnlyHistoryFallbackPrompt(
       case 'clarify':
       case 'unavailable':
         await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+        await rememberAiExchange(context, message, prompt, plan.message);
         return true;
       case 'chat':
       case 'command':
@@ -2336,6 +2354,7 @@ async function handleAiPrompt(
         case 'blocked':
           clearPendingChannelHistoryRequest(message);
           await replyWithChunks(message, outcome.message);
+          await rememberAiExchange(context, message, prompt, outcome.message);
           return true;
         case 'confirmation_required':
           clearPendingChannelHistoryRequest(message);

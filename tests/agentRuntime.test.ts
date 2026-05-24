@@ -810,6 +810,45 @@ describe('AgentRuntime', () => {
     expect(JSON.stringify(stored)).not.toContain('최신 Node.js 소식');
   });
 
+  it('retries not_handled with prior web-search context before falling back', async () => {
+    const store = new AgentTurnContextStore();
+    const firstAi = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'unavailable',
+        reason: 'web_search_unavailable',
+        message: '웹 검색 서버 주소가 설정되지 않아 확인할 수 없어요...'
+      }))
+    };
+    const firstRuntime = new AgentRuntime(firstAi as any, createDefaultToolRegistry(), store);
+
+    await firstRuntime.run(makeMessage(), '정성카츠 주소를 인터넷에 찾아봐', makeOptions({
+      webSearch: { mode: 'automatic', provider: 'searxng', providerStatus: 'missing_config', resultCount: 3 }
+    }));
+
+    const diagnostics: unknown[] = [];
+    const followUpAi = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '방금 말한 건 SearXNG 서버 주소가 설정되지 않았다는 뜻이에요...' }))
+    };
+    const followUpRuntime = new AgentRuntime(followUpAi as any, createDefaultToolRegistry(), store);
+
+    const outcome = await followUpRuntime.run(makeMessage(), '왜 비활성화돼있지?', makeOptions({
+      webSearch: { mode: 'automatic', provider: 'searxng', providerStatus: 'missing_config', resultCount: 3 },
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({ kind: 'final', message: '방금 말한 건 SearXNG 서버 주소가 설정되지 않았다는 뜻이에요...' });
+    expect(followUpAi.askMessages).toHaveBeenCalledTimes(2);
+    const retryPrompt = followUpAi.askMessages.mock.calls[1][0].messages[0].content;
+    expect(retryPrompt).toContain('직전 봇 응답: 웹 검색 서버 주소가 설정되지 않아 확인할 수 없어요...');
+    expect(retryPrompt).toContain('"providerStatus":"missing_config"');
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'retry', decisionKind: 'prior_context_follow_up_required' })
+    ]));
+  });
+
   it('executes voice.speak through the common tool path', async () => {
     const voiceSpeak = vi.fn(async () => ({ message: '음성으로 말했어요...', text: '안녕', autoJoined: true, channelId: 'voice-1' }));
     const ai = {

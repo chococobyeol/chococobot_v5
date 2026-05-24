@@ -229,6 +229,37 @@ export class AiChatService {
     return this.enqueue(this.channelQueues, key, task);
   }
 
+  async rememberExchange(message: Message, prompt: string, answer: string): Promise<void> {
+    if (!message.guildId || message.author.bot) return;
+    await this.withGuildLock(message.guildId, async () => {
+      const at = new Date();
+      const userName = message.member?.displayName ?? message.author.username;
+      this.memory.appendTurn({
+        guildId: message.guildId!,
+        channelId: message.channelId,
+        userId: message.author.id,
+        userName,
+        messageId: message.id,
+        role: 'user',
+        content: prompt,
+        importance: 0,
+        createdAt: at
+      });
+      this.memory.appendTurn({
+        guildId: message.guildId!,
+        channelId: message.channelId,
+        userId: message.client.user?.id ?? '__bot__',
+        userName: message.client.user?.username ?? 'ChococoBot',
+        messageId: null,
+        role: 'assistant',
+        content: prepareAiChatReply(answer),
+        importance: 0,
+        createdAt: at
+      });
+      await this.maybeCompactGuildMemory(message.guildId!, message.author.id);
+    });
+  }
+
   resetGuildMemory(guildId: string): Promise<void> {
     return this.withGuildLock(guildId, async () => {
       this.memory.resetGuildMemory(guildId);

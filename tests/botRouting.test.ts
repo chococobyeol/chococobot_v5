@@ -84,6 +84,7 @@ function makeContext(overrides: Record<string, unknown> = {}) {
     voiceSettings,
     aiChat: {
       handlePrompt: vi.fn(async () => true),
+      rememberExchange: vi.fn(async () => undefined),
       resetGuildMemory: vi.fn(async () => undefined)
     },
     webSearchProvider: {
