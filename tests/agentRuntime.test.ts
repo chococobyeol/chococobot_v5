@@ -141,8 +141,9 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'final', message: '서울은 지금 새벽 3시 15분이야. 다른 지역도 볼까...' });
     const secondPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
     expect(secondPrompt).toContain('final 스타일: 한국어 ChococoBot 말투');
-    expect(secondPrompt).toContain('다음 맥락 하나');
-    expect(secondPrompt).toContain('느낌표/물음표/이모지 없이 ... 또는 해요');
+    expect(secondPrompt).toContain('짧고 자연스럽게 답해요');
+    expect(secondPrompt).toContain('문장 끝에 해요나 ...를 접미어처럼 억지로 덧붙이지 마세요');
+    expect(secondPrompt).not.toContain('... 또는 해요');
     expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toMatchObject({
       lastAgentMessage: '서울은 지금 새벽 3시 15분이야. 다른 지역도 볼까...',
       slots: { timeZones: ['Asia/Seoul'] }
