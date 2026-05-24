@@ -57,14 +57,16 @@ describe('deployment prompt defaults', () => {
     for (const content of [deploymentConfig, envExample]) {
       expect(content).not.toContain('문장 끝은 보통 ... 또는 해요로 마무리해요');
       expect(content).not.toContain('... 또는 해요');
-      expect(content).toContain('접미어처럼 덧붙이지 않아요');
+      expect(content).toContain('완성된 문장 뒤에 해요를 접미어처럼 덧붙이지 않아요');
+      expect(content).toContain('한국어 짧은 대화에서 ...는 접미어가 아니라 초코코봇 말투의 종결 표현이에요');
       expect(content).toContain('당신은 초코코봇이에요');
       expect(content).toContain('사용자가 주로 쓴 언어로 답해요');
       expect(content).toContain('영어로 물으면 자연스러운 영어로 답해요');
       expect(content).toContain('한국어 응답에서 봇 이름을 말할 때는 초코코봇이라고 써요');
       expect(content).toContain('실제 상태나 행동을 묻는 질문에는 제공된 실시간 실행 문맥과 최근 대화만 근거로 답하고');
       expect(content).toContain('답변 내용은 몰라요... 하나만 사용해요');
-      expect(content).toContain('답변 내용은 안녕하세요... 하나만 사용해요');
+      expect(content).toContain('답변 내용은 안녕하세요... 하나만 사용하고');
+      expect(content).not.toContain('이미 자연스러운 종결이면');
       expect(content).not.toContain('정확히 몰라요');
       expect(content).not.toContain('잘 모르겠어요');
       expect(content).toContain('근거 없이 그냥 여기 있어요, 채팅하고 있어요 같은 상태를 만들지 않아요');
