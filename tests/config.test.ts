@@ -59,6 +59,8 @@ describe('deployment prompt defaults', () => {
       expect(content).not.toContain('... 또는 해요');
       expect(content).toContain('접미어처럼 덧붙이지 않아요');
       expect(content).toContain('당신은 초코코봇이에요');
+      expect(content).toContain('사용자가 주로 쓴 언어로 답해요');
+      expect(content).toContain('영어로 물으면 자연스러운 영어로 답해요');
       expect(content).toContain('한국어 응답에서 봇 이름을 말할 때는 초코코봇이라고 써요');
       expect(content).toContain('실제 상태나 행동을 묻는 질문에는 제공된 실시간 실행 문맥과 최근 대화만 근거로 답하고');
       expect(content).toContain('몰라요...처럼 말해요');
