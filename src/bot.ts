@@ -58,7 +58,7 @@ const MAX_TTS_COMMAND_CHARS = 500;
 const CLEANUP_COMMAND_MESSAGE_EXTRA_COUNT = 1;
 const PENDING_CHANNEL_HISTORY_TTL_MS = 5 * 60 * 1000;
 const MAX_AUTO_HISTORY_CHANNELS = 20;
-const CONFIRMATION_MESSAGE_ATTEMPTS = 2;
+const CONFIRMATION_MESSAGE_ATTEMPTS = 1;
 
 type PendingChannelHistoryRequest = {
   mode: 'summary' | 'qa';
@@ -1207,6 +1207,7 @@ async function buildConfirmationMessage(
   commandQuery: string
 ): Promise<string> {
   const expiresTag = `<t:${Math.floor(expiresAt / 1000)}:R>`;
+  if (!shouldUseAiConfirmationMessage(commandQuery)) return safeConfirmationFallback(preview, expiresTag);
   const messages: AiChatMessage[] = buildConfirmationPromptMessages(preview, commandQuery, expiresTag);
   for (let attempt = 1; attempt <= CONFIRMATION_MESSAGE_ATTEMPTS; attempt += 1) {
     try {
@@ -1287,11 +1288,18 @@ function validateConfirmationMessage(content: string): { ok: true; content: stri
   if (/^\s*\{[\s\S]*\}\s*$/u.test(cleaned)) {
     return { ok: false, reason: '사용자용 문장이 아니라 JSON이에요.' };
   }
+  if (!/(진행|괜찮|될까요|할까요|하시겠|승인|확인|답해|원하)/u.test(cleaned)) {
+    return { ok: false, reason: '확인 질문이 아니라 실행 완료처럼 보이는 문장이에요.' };
+  }
   return { ok: true, content: cleaned };
 }
 
 function safeConfirmationFallback(preview: string, expiresTag: string): string {
   return `${preview}\n진행해도 되는지 답해 주세요. ${expiresTag}까지 기다릴게요.`;
+}
+
+function shouldUseAiConfirmationMessage(commandQuery: string): boolean {
+  return !/^(?:청소|대청소)(?:\s|$)/u.test(commandQuery.trim());
 }
 
 function confirmationPreviewForSafety(safety: CommandSafety): string {

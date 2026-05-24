@@ -737,9 +737,10 @@ describe('handleMessageCreate', () => {
     expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('AI 확인 안내')
+        content: expect.stringContaining('내 메시지 삭제를 진행할까요?')
       })
     );
+    expect(context.ai.askMessagesDetailed).not.toHaveBeenCalled();
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
@@ -778,13 +779,14 @@ describe('handleMessageCreate', () => {
 
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('AI 확인 안내')
+        content: expect.stringContaining('채널 메시지 삭제를 진행할까요?')
       })
     );
+    expect(context.ai.askMessagesDetailed).not.toHaveBeenCalled();
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
-  it('retries invalid AI confirmation copy instead of sending an empty-response placeholder', async () => {
+  it('uses deterministic cleanup confirmation copy instead of asking AI for risky delete prompts', async () => {
     const commands = createPrefixCommands();
     const askMessagesDetailed = vi
       .fn()
@@ -825,12 +827,12 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
-    expect(askMessagesDetailed).toHaveBeenCalledTimes(2);
-    expect(askMessagesDetailed.mock.calls[1][0].messages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ content: expect.stringContaining('사용자에게 보낼 수 없어요') })
-    ]));
+    expect(askMessagesDetailed).not.toHaveBeenCalled();
     expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringContaining('채널 채팅 2개를 지워도 될까요?')
+      content: expect.stringContaining('채널 메시지 삭제를 진행할까요?')
+    }));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('진행해도 되는지 답해 주세요')
     }));
     expect(message.reply).not.toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringContaining('응답이 비어 있어요')
@@ -876,7 +878,9 @@ describe('handleMessageCreate', () => {
     await handleMessageCreate(first, commands, context as any, confirmations);
     await handleMessageCreate(second, commands, context as any, confirmations);
 
-    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('AI 확인 안내') }));
+    expect(context.ai.askMessagesDetailed).not.toHaveBeenCalled();
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('채널 메시지 삭제를 진행할까요?') }));
+    expect(first.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('진행해도 되는지 답해 주세요') }));
     expect(context.agentRuntime.run).toHaveBeenCalledTimes(2);
     expect(context.agentRuntime.run).toHaveBeenLastCalledWith(
       second,
@@ -2232,8 +2236,9 @@ describe('handleMessageCreate', () => {
       commandQuery: '청소 2'
     });
     expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringContaining('AI 확인 안내')
+      content: expect.stringContaining('내 메시지 삭제를 진행할까요?')
     }));
+    expect(context.ai.askMessagesDetailed).not.toHaveBeenCalled();
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
   });
 
