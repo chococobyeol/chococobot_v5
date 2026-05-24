@@ -241,6 +241,14 @@ describe('AiChatService', () => {
       messages: expect.arrayContaining([
         expect.objectContaining({
           role: 'system',
+          content: expect.stringContaining('상태/행동 질문 답변 규칙')
+        }),
+        expect.objectContaining({
+          role: 'system',
+          content: expect.stringContaining('근거 없이 그냥 여기 있어요')
+        }),
+        expect.objectContaining({
+          role: 'system',
           content: expect.stringContaining('<t:1779473700:t>')
         })
       ])

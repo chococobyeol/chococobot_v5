@@ -85,6 +85,19 @@ function formatCurrentUserTurn(message: Message, prompt: string): AiChatMessage 
   };
 }
 
+
+function formatStatusGroundingTurn(): AiChatMessage {
+  return {
+    role: 'system',
+    content: [
+      '상태/행동 질문 답변 규칙:',
+      '사용자가 뭐해, 뭐 하고 있어, 어디 있어, 니 상태처럼 봇의 현재 상태나 행동을 물으면 제공된 실시간 실행 문맥과 최근 대화만 근거로 답해요.',
+      '실제 작업, 위치, 상태를 알 수 없으면 꾸며내지 말고 잘 모르겠어요... 또는 지금은 이 채팅에 답하는 것 말고는 알 수 없어요...처럼 답해요.',
+      '근거 없이 그냥 여기 있어요, 음성 채널에 있어요 같은 상태를 만들지 마세요.'
+    ].join('\n')
+  };
+}
+
 function formatRuntimeContextTurn(context: AiChatRuntimeContext): AiChatMessage {
   const botVoice = context.botVoice?.connected
     ? `연결됨${context.botVoice.channel ? `: <#${context.botVoice.channel.id}>${context.botVoice.channel.name ? ` (${context.botVoice.channel.name})` : ''}` : ''}`
@@ -185,6 +198,7 @@ export class AiChatService {
         for (const turn of snapshot.recentTurns) {
           messages.push(formatUserTurn(turn));
         }
+        messages.push(formatStatusGroundingTurn());
         messages.push({
           role: 'system',
           content: [
