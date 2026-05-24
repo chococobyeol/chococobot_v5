@@ -8,6 +8,9 @@ import { logger } from '../logger.js';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_SAFE_CHUNK_LIMIT = 1900;
+const MEMORY_CONTEXT_MAX_CHARS = 1200;
+const MEMORY_CONTEXT_TURN_MAX_CHARS = 240;
+const MEMORY_CONTEXT_SUMMARY_MAX_CHARS = 500;
 
 export function parseAiChatTrigger(content: string, prefix: string): string | null {
   const trigger = `${prefix}?`;
@@ -37,6 +40,18 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
 function prepareAiChatReply(content: string): string {
   const trimmed = content.trim();
   return trimmed || '응답이 비어 있어요...';
+}
+
+function truncateMemoryText(content: string, limit: number): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+}
+
+function formatMemoryContextTurn(turn: AiMemoryTurn): string {
+  const text = truncateMemoryText(turn.content, MEMORY_CONTEXT_TURN_MAX_CHARS);
+  if (turn.role === 'assistant') return `assistant: ${text}`;
+  return `user(${turn.userName}, <#${turn.channelId}>): ${text}`;
 }
 
 function formatUserTurn(turn: AiMemoryTurn): AiChatMessage {
@@ -227,6 +242,19 @@ export class AiChatService {
     };
 
     return this.enqueue(this.channelQueues, key, task);
+  }
+
+  getConversationContext(guildId: string, limit = this.settings.aiMemoryRecentTurns): string {
+    const safeLimit = Math.max(1, Math.min(limit, this.settings.aiMemoryRecentTurns));
+    const snapshot = this.memory.getGuildSnapshot(guildId, safeLimit);
+    const sections: string[] = [];
+    if (snapshot.summary.trim()) {
+      sections.push(`요약:\n${truncateMemoryText(snapshot.summary, MEMORY_CONTEXT_SUMMARY_MAX_CHARS)}`);
+    }
+    if (snapshot.recentTurns.length) {
+      sections.push(`최근 대화:\n${snapshot.recentTurns.map(formatMemoryContextTurn).join('\n')}`);
+    }
+    return truncateMemoryText(sections.join('\n\n'), MEMORY_CONTEXT_MAX_CHARS);
   }
 
   async rememberExchange(message: Message, prompt: string, answer: string): Promise<void> {

@@ -232,6 +232,19 @@ describe('AiCommandPlanner', () => {
     expect(messages[1].content).toContain('짬뽕지존');
   });
 
+  it('includes shared conversation memory for follow-up planning', () => {
+    const messages = buildPlannerMessages(makeMessage(), '어떤 음성채널인데', {
+      prefix: '!',
+      commands: makeCommands(1),
+      availableChannels: [{ id: 'channel-1', name: 'general', mention: '<#channel-1>' }],
+      conversationContext: 'user(테스터, <#channel-1>): 니가 있는곳\nassistant: 저는 현재 음성 채널에 연결돼 있어요...'
+    });
+
+    expect(messages[0].content).toContain('최근 대화 기억');
+    expect(messages[0].content).toContain('저는 현재 음성 채널에 연결돼 있어요');
+    expect(messages[1].content).toBe('어떤 음성채널인데');
+  });
+
   it('keeps ordinary chat planner prompts compact without prose-based section routing', () => {
     const messages = buildPlannerMessages(makeMessage(), '그냥 안녕 뭐해', {
       prefix: '!',

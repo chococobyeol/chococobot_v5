@@ -992,6 +992,14 @@ async function rememberAiExchange(context: BotContext, message: Message, prompt:
     .catch((error) => logger.warn('Failed to remember AI exchange:', error));
 }
 
+function conversationContextFor(context: BotContext, message: Message): string | undefined {
+  if (!message.guildId) return undefined;
+  const aiChat = context.aiChat as AiChatService & { getConversationContext?: (guildId: string) => string };
+  if (typeof aiChat.getConversationContext !== 'function') return undefined;
+  const conversationContext = aiChat.getConversationContext(message.guildId).trim();
+  return conversationContext || undefined;
+}
+
 function formatDiscordDisplayTime(timestamp: number): string {
   return `<t:${Math.floor(timestamp / 1000)}:t>`;
 }
@@ -2139,6 +2147,7 @@ async function handleAiCommandPlannerPrompt(
       maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
       pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
       pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
+      conversationContext: conversationContextFor(context, message),
       onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
     });
     switch (plan.kind) {
@@ -2213,6 +2222,7 @@ async function handleReadOnlyHistoryFallbackPrompt(
       maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
       pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
       pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
+      conversationContext: conversationContextFor(context, message),
       onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
     });
 
@@ -2320,6 +2330,7 @@ async function handleAiPrompt(
         maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
         pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
         pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
+        conversationContext: conversationContextFor(context, message),
         webSearch: {
           mode: getGuildWebSearchMode(context, message.guildId),
           provider: context.settings.webSearchProvider,

@@ -8,6 +8,7 @@ const MAX_COMMAND_LINE_CHARS = 120;
 const MAX_CHANNELS = 25;
 const MAX_CHANNEL_LINE_CHARS = 80;
 const MAX_PLANNER_PROMPT_CHARS = 1500;
+const MAX_CONVERSATION_CONTEXT_CHARS = 1200;
 const MAX_SYSTEM_PROMPT_CHARS = 6000;
 const MAX_RETRIES = 1;
 
@@ -29,6 +30,7 @@ export type AiCommandPlannerOptions = {
   maxCompletionTokens?: number;
   pendingHistory?: { mode: 'summary' | 'qa'; query: string } | null;
   pendingConfirmation?: { preview: string; commandQuery: string; intent: string; normalizedArgs: string } | null;
+  conversationContext?: string;
   onDiagnostic?: (details: AiPlannerDiagnostic) => Promise<void> | void;
 };
 
@@ -188,7 +190,8 @@ function buildPlannerContextSection(message: Message, options: AiCommandPlannerO
     `현재 사용자 메시지 작성 시각: <t:${Math.floor(createdTimestamp / 1000)}:t>`,
     `사용자 음성 채널: ${userVoice}`,
     `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
-    options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined
+    options.pendingHistory ? `이전 채널 기록 요청: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
+    options.conversationContext ? `최근 대화 기억:\n${truncate(options.conversationContext, MAX_CONVERSATION_CONTEXT_CHARS)}` : undefined
   ].filter(Boolean).join('\n');
 }
 

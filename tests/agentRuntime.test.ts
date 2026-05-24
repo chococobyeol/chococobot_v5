@@ -240,6 +240,26 @@ describe('AgentRuntime', () => {
     expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toBeUndefined();
   });
 
+  it('allows contextual final answers when shared conversation memory is present', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'final',
+        message: '방금 말한 곳은 제가 연결된 음성 채널이라는 뜻이에요...'
+      }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
+
+    const outcome = await runtime.run(makeMessage(), '어떤 음성채널인데', makeOptions({
+      conversationContext: 'user(테스터, <#channel-1>): 니가 있는곳\nassistant: 저는 현재 음성 채널에 연결돼 있어요...'
+    }));
+
+    expect(outcome).toEqual({ kind: 'final', message: '방금 말한 곳은 제가 연결된 음성 채널이라는 뜻이에요...' });
+    const firstPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(firstPrompt).toContain('conversation=');
+    expect(firstPrompt).toContain('저는 현재 음성 채널에 연결돼 있어요');
+  });
+
   it('blocks mixed action/read tool requests and executes none of them', async () => {
     const ai = {
       askMessages: vi

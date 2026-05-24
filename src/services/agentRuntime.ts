@@ -11,6 +11,7 @@ const MAX_CALLS_PER_ENVELOPE = 4;
 const MAX_RETRIES = 1;
 const MAX_PROMPT_CHARS = 1800;
 const MAX_OBSERVATION_CHARS = 1400;
+const MAX_CONVERSATION_CONTEXT_CHARS = 1200;
 const MAX_SYSTEM_CHARS = 5200;
 const AGENT_OUTPUT_CONTRACT = [
   '너는 Discord 봇 ChococoBot의 bounded agent runtime이에요.',
@@ -21,6 +22,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '도구 계약: AI는 의미를 판단해 허용 출력 중 하나를 고르고, 코드는 schema/policy/safety/loop만 검증해요.',
   '도구가 필요하면 tool_calls만 사용하고 도구 상세 목록의 name/policy/input schema를 그대로 따르세요.',
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
+  'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify와 pendingAction을 사용해요.',
@@ -72,6 +74,7 @@ export type AgentRuntimeOptions = {
   maxCompletionTokens?: number;
   pendingHistory?: { mode: 'summary' | 'qa'; query: string } | null;
   pendingConfirmation?: { preview: string; commandQuery: string; intent: string; normalizedArgs: string } | null;
+  conversationContext?: string;
   webSearch?: {
     mode: WebSearchMode;
     provider: WebSearchProviderName;
@@ -237,7 +240,8 @@ export class AgentRuntime {
         continue;
       }
       if (envelope.kind !== 'tool_calls') {
-        if (envelope.kind === 'final' && toolCalls.length === 0 && observations.length === 0 && !priorContext) {
+        const hasConversationContext = Boolean(options.conversationContext?.trim());
+        if (envelope.kind === 'final' && toolCalls.length === 0 && observations.length === 0 && !priorContext && !hasConversationContext) {
           await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'final_without_observation' });
           return { kind: 'not_handled', reason: 'final_without_observation' };
         }
@@ -403,6 +407,7 @@ export class AgentRuntime {
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined,
       observations.length ? `도구 관찰 JSON: ${formatObservationsForPrompt(observations)}` : undefined,
       priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 900)}` : undefined,
+      options.conversationContext ? `conversation=${truncate(options.conversationContext, MAX_CONVERSATION_CONTEXT_CHARS)}` : undefined,
       options.pendingHistory ? `pendingHistory=${JSON.stringify(options.pendingHistory)}` : undefined,
       options.pendingConfirmation ? `pendingConfirmation=${JSON.stringify(options.pendingConfirmation)}` : undefined,
       `web=${formatWebSearchPolicy(options.webSearch)}`,

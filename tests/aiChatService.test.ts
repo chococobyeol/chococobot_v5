@@ -364,6 +364,11 @@ describe('AiChatService', () => {
       '정성카츠 주소를 인터넷에 찾아봐',
       '웹 검색 기능이 비활성화돼 있어 정성카츠 주소를 찾아드릴 수 없어요.'
     );
+
+    const conversationContext = service.getConversationContext('guild-1');
+    expect(conversationContext).toContain('정성카츠 주소를 인터넷에 찾아봐');
+    expect(conversationContext).toContain('웹 검색 기능이 비활성화돼 있어');
+
     await service.handlePrompt(makeMessage('channel-1', '!? 왜 비활성화돼있지?'), '왜 비활성화돼있지?');
 
     const callMessages = ai.askMessagesDetailed.mock.calls[0][0].messages as Array<{ role: string; content: string }>;
