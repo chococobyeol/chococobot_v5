@@ -42,17 +42,14 @@ function chunkDiscordMessage(content: string, limit = DISCORD_SAFE_CHUNK_LIMIT):
 }
 
 
-function prepareAiChatReply(content: string, runtimeContext?: AiChatRuntimeContext): string {
+function prepareAiChatReply(content: string): string {
   const trimmed = content.trim();
-  if (!trimmed) return '응답이 비어 있어요...';
-  return sanitizeUngroundedStatusReply(trimmed, runtimeContext);
+  return trimmed || '응답이 비어 있어요...';
 }
 
-function sanitizeUngroundedStatusReply(content: string, runtimeContext?: AiChatRuntimeContext): string {
-  if (isVacuousBotStatusReply(content)) return '몰라요...';
-  if (isUnknownReply(content)) return '몰라요...';
-  if (runtimeContext?.botVoice?.connected === false && claimsBotVoiceConnection(content)) return '몰라요...';
-  return content;
+function shouldRetryUngroundedStatusReply(content: string, runtimeContext?: AiChatRuntimeContext): boolean {
+  return isVacuousBotStatusReply(content)
+    || (runtimeContext?.botVoice?.connected === false && claimsBotVoiceConnection(content));
 }
 
 function isVacuousBotStatusReply(content: string): boolean {
@@ -69,22 +66,6 @@ function isVacuousBotStatusReply(content: string): boolean {
     '여기는지금보시는채팅창이에요',
     '현재채팅창에있어요'
   ].includes(compact);
-}
-
-function isUnknownReply(content: string): boolean {
-  const compact = content.replace(/[\s.。…!！?？]/g, '');
-  return [
-    '몰라요',
-    '모르겠어요',
-    '잘모르겠어요',
-    '잘모름',
-    '알수없어요',
-    '알수없습니다'
-  ].includes(compact)
-    || compact.includes('현재답변생성외에')
-    || compact.includes('현재답변외에')
-    || compact.includes('지금은알수없')
-    || compact.includes('제가알수없');
 }
 
 function claimsBotVoiceConnection(content: string): boolean {
@@ -142,7 +123,7 @@ function formatStatusGroundingTurn(): AiChatMessage {
     content: [
       '상태/행동 질문 답변 규칙:',
       '사용자가 뭐해, 뭐 하고 있어, 어디 있어, 니 상태처럼 봇의 현재 상태나 행동을 물으면 제공된 실시간 실행 문맥과 최근 대화만 근거로 답해요.',
-      '실제 작업, 위치, 상태를 알 수 없거나 현재 답변 생성 외에 말할 상태가 없으면 정확히 몰라요...라고만 답해요.',
+      '실제 작업, 위치, 상태를 알 수 없거나 현재 답변 생성 외에 말할 상태가 없으면 답변 내용은 몰라요... 하나만 쓰고 앞뒤 수식어를 붙이지 마세요.',
       '현재 채팅에 답변 중이라는 사실만으로 채팅하고 있어요, 답변하고 있어요처럼 상태를 둘러대지 마세요.',
       '근거 없이 그냥 여기 있어요, 음성 채널에 있어요 같은 상태를 만들지 마세요.'
     ].join('\n')
@@ -262,13 +243,33 @@ export class AiChatService {
         if (runtimeContext) messages.push(formatRuntimeContextTurn(runtimeContext));
         messages.push(formatCurrentUserTurn(message, prompt));
 
-        const detailed = await this.askDetailedOrText({
+        let detailed = await this.askDetailedOrText({
           guildId: message.guildId!,
           userId: message.author.id,
           messages
         });
-        const rawAnswer = typeof detailed === 'string' ? detailed : detailed.content;
-        const answer = prepareAiChatReply(rawAnswer, runtimeContext);
+        let rawAnswer = typeof detailed === 'string' ? detailed : detailed.content;
+        if (shouldRetryUngroundedStatusReply(rawAnswer, runtimeContext)) {
+          const retryMessages: AiChatMessage[] = [
+            ...messages,
+            { role: 'assistant', content: rawAnswer },
+            {
+              role: 'system',
+              content: [
+                '방금 답변은 제공된 문맥에 없는 봇 상태를 만들었어요.',
+                '현재 답변 생성 자체를 봇 상태로 말하지 마세요.',
+                '실제 작업, 위치, 상태를 알 수 없으면 답변 내용은 몰라요... 하나만 쓰세요.'
+              ].join('\n')
+            }
+          ];
+          detailed = await this.askDetailedOrText({
+            guildId: message.guildId!,
+            userId: message.author.id,
+            messages: retryMessages
+          });
+          rawAnswer = typeof detailed === 'string' ? detailed : detailed.content;
+        }
+        const answer = prepareAiChatReply(rawAnswer);
         if (typeof detailed !== 'string') {
           await this.logAiDiagnostic(message, {
             stage: 'chat',

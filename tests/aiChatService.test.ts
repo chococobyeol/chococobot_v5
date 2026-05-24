@@ -245,7 +245,7 @@ describe('AiChatService', () => {
         }),
         expect.objectContaining({
           role: 'system',
-          content: expect.stringContaining('현재 답변 생성 외에 말할 상태가 없으면 정확히 몰라요...라고만 답해요')
+          content: expect.stringContaining('현재 답변 생성 외에 말할 상태가 없으면 답변 내용은 몰라요... 하나만 쓰고')
         }),
         expect.objectContaining({
           role: 'system',
@@ -267,16 +267,28 @@ describe('AiChatService', () => {
     const settings = makeSettings();
     const memory = new InMemoryAiMemoryStore();
     const ai = {
-      askMessagesDetailed: vi.fn(async () => ({
-        content: '채팅에 답변하고 있어요',
-        model: 'openai/gpt-oss-120b',
-        usageScope: 'chat',
-        promptTokens: 10,
-        completionTokens: 5,
-        totalTokens: 15,
-        rateLimitHeaders: {},
-        status: 200
-      }))
+      askMessagesDetailed: vi
+        .fn()
+        .mockResolvedValueOnce({
+          content: '채팅에 답변하고 있어요',
+          model: 'openai/gpt-oss-120b',
+          usageScope: 'chat',
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          rateLimitHeaders: {},
+          status: 200
+        })
+        .mockResolvedValueOnce({
+          content: '몰라요...',
+          model: 'openai/gpt-oss-120b',
+          usageScope: 'chat',
+          promptTokens: 12,
+          completionTokens: 3,
+          totalTokens: 15,
+          rateLimitHeaders: {},
+          status: 200
+        })
     } as any;
     const activityLog = {
       logCommand: vi.fn(async () => undefined),
@@ -288,6 +300,11 @@ describe('AiChatService', () => {
 
     await service.handlePrompt(message, '뭐해');
 
+    expect(ai.askMessagesDetailed).toHaveBeenCalledTimes(2);
+    const retryMessages = ai.askMessagesDetailed.mock.calls[1][0].messages as Array<{ role: string; content: string }>;
+    expect(retryMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'system', content: expect.stringContaining('방금 답변은 제공된 문맥에 없는 봇 상태를 만들었어요') })
+    ]));
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: '몰라요...' })
     );
@@ -297,50 +314,32 @@ describe('AiChatService', () => {
     });
   });
 
-  it('normalizes indirect unknown status answers to the exact requested wording', async () => {
-    const settings = makeSettings();
-    const memory = new InMemoryAiMemoryStore();
-    const ai = {
-      askMessagesDetailed: vi.fn(async () => ({
-        content: '현재 답변 생성 외에는 알 수 없어요...',
-        model: 'openai/gpt-oss-120b',
-        usageScope: 'chat',
-        promptTokens: 10,
-        completionTokens: 5,
-        totalTokens: 15,
-        rateLimitHeaders: {},
-        status: 200
-      }))
-    } as any;
-    const activityLog = {
-      logCommand: vi.fn(async () => undefined),
-      logError: vi.fn(async () => undefined),
-      logAiDiagnostic: vi.fn(async () => undefined)
-    } as any;
-    const service = new AiChatService(settings, ai, memory, activityLog);
-    const message = makeMessage('channel-1', '!? 뭐해');
-
-    await service.handlePrompt(message, '뭐해');
-
-    expect(message.reply).toHaveBeenCalledWith(
-      expect.objectContaining({ content: '몰라요...' })
-    );
-  });
-
   it('does not send a bot voice-channel claim when runtime context says disconnected', async () => {
     const settings = makeSettings();
     const memory = new InMemoryAiMemoryStore();
     const ai = {
-      askMessagesDetailed: vi.fn(async () => ({
-        content: '저는 현재 음성 채널에 연결돼 있어요...',
-        model: 'openai/gpt-oss-120b',
-        usageScope: 'chat',
-        promptTokens: 10,
-        completionTokens: 5,
-        totalTokens: 15,
-        rateLimitHeaders: {},
-        status: 200
-      }))
+      askMessagesDetailed: vi
+        .fn()
+        .mockResolvedValueOnce({
+          content: '저는 현재 음성 채널에 연결돼 있어요...',
+          model: 'openai/gpt-oss-120b',
+          usageScope: 'chat',
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          rateLimitHeaders: {},
+          status: 200
+        })
+        .mockResolvedValueOnce({
+          content: '몰라요...',
+          model: 'openai/gpt-oss-120b',
+          usageScope: 'chat',
+          promptTokens: 12,
+          completionTokens: 3,
+          totalTokens: 15,
+          rateLimitHeaders: {},
+          status: 200
+        })
     } as any;
     const activityLog = {
       logCommand: vi.fn(async () => undefined),
@@ -359,6 +358,7 @@ describe('AiChatService', () => {
 
     await service.handlePrompt(message, '니가 있는곳');
 
+    expect(ai.askMessagesDetailed).toHaveBeenCalledTimes(2);
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: '몰라요...' })
     );
