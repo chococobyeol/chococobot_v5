@@ -261,7 +261,7 @@ describe('AgentRuntime', () => {
     expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toBeUndefined();
   });
 
-  it('retries unobserved permission claims so setting requests go through the confirmation tool path', async () => {
+  it('retries empty blocked decisions so setting requests go through the confirmation tool path', async () => {
     const ai = {
       askMessages: vi
         .fn()
@@ -286,8 +286,8 @@ describe('AgentRuntime', () => {
     });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
     const retryPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
-    expect(retryPrompt).toContain('권한/관리자/정책 여부를 도구 관찰 없이 단정하지 마세요');
-    expect(retryPrompt).toContain('confirmation_required tool_calls');
+    expect(retryPrompt).toContain('blockedTools에 실제 구조화 도구 이름이 있어야 해요');
+    expect(retryPrompt).toContain('코드의 확인/권한 경로가 처리');
   });
 
   it('allows contextual final answers when shared conversation memory is present', async () => {

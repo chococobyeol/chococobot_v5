@@ -226,11 +226,11 @@ export class AgentRuntime {
         this.updateTurnContext(key, webSearchFailure, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return webSearchFailure;
       }
-      if (isUnverifiedAuthorityDecision(envelope, observations, toolCalls)) {
-        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'unverified_authority_decision' });
+      if (isEmptyBlockedDecision(envelope, observations, toolCalls)) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'empty_blocked_decision' });
         if (actionDecisionRetryRequested) return { kind: 'not_handled', reason: 'final_without_observation' };
         actionDecisionRetryRequested = true;
-        validationFeedback = buildUnverifiedAuthorityFeedback();
+        validationFeedback = buildEmptyBlockedFeedback();
         continue;
       }
       if (envelope.kind === 'not_handled' && hasUsableObservation(observations)) {
@@ -537,11 +537,11 @@ function buildPriorContextFollowUpFeedback(priorContext: AgentTurnStoredContext)
   ].filter(Boolean).join('\n');
 }
 
-function buildUnverifiedAuthorityFeedback(): string {
+function buildEmptyBlockedFeedback(): string {
   return [
-    '권한/관리자/정책 여부를 도구 관찰 없이 단정하지 마세요.',
-    '설정/삭제/관리 작업이면 적절한 confirmation_required tool_calls를 작성해서 코드의 확인/권한 경로가 처리하게 하세요.',
-    '도구로 처리할 일이 아닌 일반 질문이면 not_handled를 쓰세요.'
+    'blocked JSON에는 blockedTools에 실제 구조화 도구 이름이 있어야 해요.',
+    '실행/설정/삭제 요청이면 적절한 tool_calls를 작성해서 코드의 확인/권한 경로가 처리하게 하세요.',
+    '막을 구조화 도구가 없는 일반 대화라면 blocked가 아니라 not_handled를 쓰세요.'
   ].join('\n');
 }
 
@@ -682,16 +682,13 @@ function parseEnvelopeKind(parsed: Record<string, unknown>): string {
   return '';
 }
 
-function isUnverifiedAuthorityDecision(
+function isEmptyBlockedDecision(
   envelope: AgentEnvelope,
   observations: readonly AgentToolObservation[],
   toolCalls: readonly AgentToolCall[]
 ): boolean {
   if (observations.length || toolCalls.length) return false;
-  if (envelope.kind === 'blocked' && envelope.blockedTools.length === 0) return true;
-  if (envelope.kind !== 'final' && envelope.kind !== 'blocked' && envelope.kind !== 'unavailable') return false;
-  const message = 'message' in envelope ? envelope.message : '';
-  return /(권한|permission|admin)/iu.test(message);
+  return envelope.kind === 'blocked' && envelope.blockedTools.length === 0;
 }
 
 function findRepeatedSuccessfulToolCalls(
