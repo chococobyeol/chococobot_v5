@@ -84,6 +84,7 @@ Optional v1 settings:
 | `AI_MEMORY_RECENT_TURNS` | `8` | How many recent unsummarized AI turns are kept in the live prompt. |
 | `AI_MEMORY_COMPACT_AFTER_TURNS` | `12` | When the bot compacts guild AI memory into a summary. |
 | `AI_MEMORY_MAX_SUMMARY_CHARS` | `2000` | Maximum stored summary length after compaction. |
+| `AI_CONFIRM_OWN_CLEANUP` | `false` | If `true`, AI-routed own-message cleanup (`!청소`) asks for confirmation before deleting. `!대청소` still always requires confirmation/admin checks. |
 | `WEB_SEARCH_ENABLED` | `true` | Enables the AI agent's web-search tool. The tool still requires a provider base URL before it can search. |
 | `WEB_SEARCH_PROVIDER` | `searxng` | Web-search provider. Currently only `searxng` is implemented. |
 | `WEB_SEARCH_BASE_URL` | _(none)_ | Base URL of a SearXNG instance with JSON search enabled. The Docker/Render worker defaults to private loopback `http://127.0.0.1:8888`. The bot calls `/search?q=...&format=json`. |

@@ -74,6 +74,7 @@ function makeContext(overrides: Record<string, unknown> = {}) {
       cleanMineMaxLimit: 500,
       cleanAllDefaultTarget: 1000,
       cleanAllMaxLimit: 1000,
+      aiConfirmOwnCleanup: false,
       webSearchEnabled: true,
       webSearchProvider: 'searxng',
       webSearchBaseUrl: 'http://search.local',
@@ -705,7 +706,7 @@ describe('handleMessageCreate', () => {
     expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
   });
 
-  it('routes AI-planned cleanup requests into the existing cleanup command path', async () => {
+  it('executes AI-planned own-message cleanup through the existing cleanup command path without confirmation', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       aiCommandPlanner: {
@@ -734,14 +735,39 @@ describe('handleMessageCreate', () => {
         commands
       })
     );
-    expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
-    expect(message.reply).toHaveBeenCalledWith(
+    expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
+    expect(message.reply).not.toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining('내 메시지 삭제를 진행할까요?')
       })
     );
     expect(context.ai.askMessagesDetailed).not.toHaveBeenCalled();
     expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps AI-planned own-message cleanup confirmation when the runtime setting requires it', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '청소 2' }))
+      }
+    });
+    context.settings.aiConfirmOwnCleanup = true;
+    const message = makeMessage('!? 내 채팅 2개 지워줘');
+    const cleanupChannel = message.channel as any;
+    cleanupChannel.messages = {
+      fetch: vi.fn(async () => new Collection())
+    };
+    cleanupChannel.bulkDelete = vi.fn(async () => new Collection());
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('내 메시지 삭제를 진행할까요?')
+      })
+    );
   });
 
   it('routes AI-planned voice requests into the existing speak command path', async () => {
@@ -2200,7 +2226,7 @@ describe('handleMessageCreate', () => {
     }));
   });
 
-  it('turns AgentRuntime structured cleanup confirmations into pending confirmations before deletion', async () => {
+  it('executes AgentRuntime structured own-message cleanup without creating pending confirmation', async () => {
     const commands = createPrefixCommands();
     const confirmations = new ConfirmationManager();
     const context = makeContext({
@@ -2230,12 +2256,9 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(message, commands, context as any, confirmations);
 
-    expect(cleanupChannel.bulkDelete).not.toHaveBeenCalled();
-    expect(confirmations.latestForActor({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toMatchObject({
-      intent: 'cleanup',
-      commandQuery: '청소 2'
-    });
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+    expect(cleanupChannel.bulkDelete).toHaveBeenCalledTimes(1);
+    expect(confirmations.latestForActor({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' })).toBeUndefined();
+    expect(message.reply).not.toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringContaining('내 메시지 삭제를 진행할까요?')
     }));
     expect(context.ai.askMessagesDetailed).not.toHaveBeenCalled();

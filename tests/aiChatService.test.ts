@@ -32,6 +32,7 @@ function makeSettings(): Settings {
     aiMemoryRecentTurns: 8,
     aiMemoryCompactAfterTurns: 99,
     aiMemoryMaxSummaryChars: 2000,
+    aiConfirmOwnCleanup: false,
     webSearchEnabled: true,
     webSearchProvider: 'searxng',
     webSearchBaseUrl: '',

@@ -15,6 +15,7 @@ function makeSettings(overrides: Partial<Settings> = {}): Settings {
     aiMemoryRecentTurns: 4,
     aiMemoryCompactAfterTurns: 12,
     aiMemoryMaxSummaryChars: 900,
+    aiConfirmOwnCleanup: false,
     webSearchEnabled: true,
     webSearchProvider: 'searxng',
     webSearchBaseUrl: '',

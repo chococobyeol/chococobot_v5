@@ -12,6 +12,7 @@ export type Settings = {
   aiMemoryRecentTurns: number;
   aiMemoryCompactAfterTurns: number;
   aiMemoryMaxSummaryChars: number;
+  aiConfirmOwnCleanup: boolean;
   webSearchEnabled: boolean;
   webSearchProvider: 'searxng';
   webSearchBaseUrl: string;
@@ -99,6 +100,7 @@ export function loadSettings(): Settings {
     aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 4),
     aiMemoryCompactAfterTurns: positiveIntFromEnv('AI_MEMORY_COMPACT_AFTER_TURNS', 12),
     aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 900),
+    aiConfirmOwnCleanup: boolFromEnv('AI_CONFIRM_OWN_CLEANUP', false),
     webSearchEnabled: boolFromEnv('WEB_SEARCH_ENABLED', true),
     webSearchProvider: enumFromEnv('WEB_SEARCH_PROVIDER', 'searxng', ['searxng']),
     webSearchBaseUrl: process.env.WEB_SEARCH_BASE_URL?.trim().replace(/\/+$/, '') ?? '',

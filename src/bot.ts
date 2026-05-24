@@ -2164,7 +2164,9 @@ async function handleAiCommandPlannerPrompt(
         await context.aiChat.handlePrompt(message, prompt);
         return true;
       case 'command':
-        return dispatchPlannerCommand(message, commands, context, confirmations, plan.query);
+        return dispatchPlannerCommand(message, commands, context, confirmations, plan.query, {
+          allowUserCleanupWithoutConfirmation: !context.settings.aiConfirmOwnCleanup
+        });
       case 'confirm_pending':
         if (!pendingConfirmation) {
           await context.aiChat.handlePrompt(message, prompt);
@@ -2357,7 +2359,9 @@ async function handleAiPrompt(
           return true;
         case 'confirmation_required':
           clearPendingChannelHistoryRequest(message);
-          return dispatchPlannerCommand(message, commands, context, confirmations, outcome.commandQuery);
+          return dispatchPlannerCommand(message, commands, context, confirmations, outcome.commandQuery, {
+            allowUserCleanupWithoutConfirmation: !context.settings.aiConfirmOwnCleanup
+          });
         case 'confirm_pending':
           if (pendingConfirmation) return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
           if (await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
