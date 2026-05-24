@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { assertRuntimeSettings, type Settings } from '../src/config.js';
 
@@ -45,5 +46,18 @@ describe('assertRuntimeSettings', () => {
 
   it('allows smoke mode validation without DISCORD_TOKEN', () => {
     expect(() => assertRuntimeSettings(makeSettings(), { requireDiscordToken: false })).not.toThrow();
+  });
+});
+
+
+describe('deployment prompt defaults', () => {
+  it('does not instruct deployed prompts to append polite suffixes', () => {
+    const deploymentConfig = readFileSync('render.yaml', 'utf8');
+    const envExample = readFileSync('.env.example', 'utf8');
+    for (const content of [deploymentConfig, envExample]) {
+      expect(content).not.toContain('문장 끝은 보통 ... 또는 해요로 마무리해요');
+      expect(content).not.toContain('... 또는 해요');
+      expect(content).toContain('접미어처럼 덧붙이지 않아요');
+    }
   });
 });
