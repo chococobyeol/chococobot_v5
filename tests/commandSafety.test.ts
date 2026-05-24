@@ -19,4 +19,5 @@ describe('classifyCommandQuery', () => {
     expect(classifyCommandQuery('대청소 10')).toMatchObject({ level: 'destructive', intent: 'cleanup' });
     expect(classifyCommandQuery('없는명령')).toMatchObject({ level: 'unknown' });
   });
+
 });

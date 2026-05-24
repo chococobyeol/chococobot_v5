@@ -7,7 +7,7 @@ ChococoBot uses AI to judge user intent. Runtime code may validate safety, permi
 - Prefix and command-name parsing for existing command syntax.
 - Permission checks, confirmation storage/consumption, rate limits, count bounds, and Discord API constraints.
 - Exact structural checks on AI output, such as required JSON fields, persisted `pendingAction` slots, or whether a quoted `cleanupEvidence` appears verbatim in the current/prior user text.
-- Deterministic execution of a command after the AI has chosen `legacy_command` or `confirm_pending`.
+- Deterministic execution of a stored pending command after the AI has chosen `confirm_pending`.
 - Deterministic loop guards based on tool state, for example refusing to execute another `web.search` after a successful `web.search` observation in the same agent run and asking the AI to answer from existing observations.
 - Safe fallback text based only on already collected tool observations, such as returning source URLs when a web-search run reaches the loop limit before the AI produces a final answer.
 

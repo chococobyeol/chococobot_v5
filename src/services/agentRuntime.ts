@@ -11,14 +11,14 @@ const MAX_CALLS_PER_ENVELOPE = 4;
 const MAX_RETRIES = 1;
 const MAX_PROMPT_CHARS = 1800;
 const MAX_OBSERVATION_CHARS = 1400;
-const MAX_SYSTEM_CHARS = 9000;
+const MAX_SYSTEM_CHARS = 5200;
 
 export type AgentRuntimeOutcome =
   | { kind: 'final'; message: string }
   | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
   | { kind: 'unavailable'; message: string; reason?: 'web_search_unavailable' }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
-  | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'; cleanupEvidence?: string }
+  | { kind: 'confirmation_required'; message: string; intent: string; preview: string; commandQuery: string; payload?: unknown }
   | { kind: 'confirm_pending' }
   | { kind: 'not_handled'; reason?: 'final_without_observation' };
 
@@ -71,7 +71,6 @@ type AgentEnvelope =
   | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
   | { kind: 'unavailable'; message: string; reason?: 'web_search_unavailable' }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
-  | { kind: 'legacy_command'; query: string; cleanupTarget?: 'self' | 'channel' | 'other' | 'ambiguous'; cleanupEvidence?: string }
   | { kind: 'confirm_pending' }
   | { kind: 'not_handled' };
 
@@ -103,7 +102,7 @@ export class AgentRuntime {
     let blockedOnce = false;
     let actionDecisionRetryRequested = false;
     let observationAnswerRetryRequested = false;
-    const repeatedSuccessfulToolRetryNames = new Set<string>();
+    const repeatedSuccessfulToolRetryKeys = new Set<string>();
     let validationFailureFallback: AgentRuntimeOutcome | null = null;
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
@@ -156,20 +155,6 @@ export class AgentRuntime {
       }
 
       const envelope = parsed.envelope;
-      if (envelope.kind === 'blocked' && shouldRetryLegacyActionDecision(envelope.blockedTools, priorContext) && !actionDecisionRetryRequested) {
-        await options.onDiagnostic?.({
-          stage: 'agent',
-          event: 'retry',
-          runId,
-          iteration,
-          decisionKind: 'legacy_action_decision_required',
-          validationErrors: envelope.blockedTools
-        });
-        actionDecisionRetryRequested = true;
-        validationFailureFallback = envelope;
-        validationFeedback = buildLegacyActionDecisionFeedback(envelope.blockedTools, options.requesterDisplayName);
-        continue;
-      }
       if (envelope.kind === 'not_handled' && options.pendingConfirmation && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'pending_confirmation_decision_required' });
         actionDecisionRetryRequested = true;
@@ -218,23 +203,6 @@ export class AgentRuntime {
         validationFeedback = buildObservationAnswerRequiredFeedback(observations);
         continue;
       }
-      if (envelope.kind === 'legacy_command') {
-        const cleanupValidation = validateLegacyCleanupCommand(envelope.query, envelope.cleanupTarget, envelope.cleanupEvidence, prompt, priorContext);
-        if (!cleanupValidation.ok) {
-          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: cleanupValidation.reason });
-          if (actionDecisionRetryRequested) {
-            return { kind: 'blocked', message: '채팅 삭제 대상이 명확하지 않아 아무 작업도 실행하지 않았어요.', blockedTools: ['command.cleanup'] };
-          }
-          actionDecisionRetryRequested = true;
-          validationFailureFallback = {
-            kind: 'blocked',
-            message: '채팅 삭제 대상이 명확하지 않아 아무 작업도 실행하지 않았어요.',
-            blockedTools: ['command.cleanup']
-          };
-          validationFeedback = buildCleanupTargetFeedback(cleanupValidation.reason, priorContext, options.requesterDisplayName);
-          continue;
-        }
-      }
       if (envelope.kind !== 'tool_calls') {
         if (envelope.kind === 'final' && toolCalls.length === 0 && observations.length === 0 && !priorContext) {
           await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'final_without_observation' });
@@ -260,10 +228,38 @@ export class AgentRuntime {
         continue;
       }
 
+      const unsafeCallObservations = validateToolCallSafety(envelope.calls, prompt, priorContext);
+      if (unsafeCallObservations.length) {
+        await options.onDiagnostic?.({
+          stage: 'agent',
+          event: 'parse_error',
+          runId,
+          iteration,
+          validationErrors: unsafeCallObservations.map((observation) => observation.message ?? 'tool safety validation failed')
+        });
+        observations.push(...unsafeCallObservations);
+        if (actionDecisionRetryRequested) {
+          const fallback = buildObservationBasedFallbackOutcome(observations);
+          if (fallback) {
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+          return { kind: 'blocked', message: '삭제 요청의 구조화된 근거가 부족해서 아무 작업도 실행하지 않았어요.', blockedTools: ['command.cleanup'] };
+        }
+        actionDecisionRetryRequested = true;
+        validationFeedback = [
+          '도구 호출 안전 검증에 실패했어요.',
+          `오류: ${unsafeCallObservations.map((observation) => observation.message).filter(Boolean).join('; ')}`,
+          '도구 입력을 고치거나 clarify/blocked로 답하세요. command.cleanup.evidence는 사용자 요청 또는 이어받은 문맥에 실제로 있는 문구여야 해요.'
+        ].join('\n');
+        continue;
+      }
+
       const repeatedSuccessfulCalls = findRepeatedSuccessfulToolCalls(envelope.calls, toolCalls, observations);
       if (repeatedSuccessfulCalls.length) {
+        const repeatedKeys = repeatedSuccessfulCalls.map(toolCallKey);
         const repeatedToolNames = [...new Set(repeatedSuccessfulCalls.map((call) => call.tool))];
-        const alreadyRetried = repeatedToolNames.some((toolName) => repeatedSuccessfulToolRetryNames.has(toolName));
+        const alreadyRetried = repeatedKeys.some((key) => repeatedSuccessfulToolRetryKeys.has(key));
         await options.onDiagnostic?.({
           stage: 'agent',
           event: alreadyRetried ? 'decision' : 'retry',
@@ -280,27 +276,39 @@ export class AgentRuntime {
           }
           return { kind: 'not_handled' };
         }
-        for (const toolName of repeatedToolNames) repeatedSuccessfulToolRetryNames.add(toolName);
+        for (const key of repeatedKeys) repeatedSuccessfulToolRetryKeys.add(key);
         validationFeedback = buildRepeatedSuccessfulToolFeedback(repeatedSuccessfulCalls, observations);
         continue;
       }
 
-      const policies = envelope.calls.map((call) => this.registry.get(call.tool)?.policy ?? 'blocked');
-      const nonReadOnly = policies.filter((policy) => policy !== 'read_only_auto');
-      if (nonReadOnly.length > 0) {
-        const blockedTools = envelope.calls.filter((call) => this.registry.get(call.tool)?.policy !== 'read_only_auto').map((call) => call.tool);
-        const mixed = policies.some((policy) => policy === 'read_only_auto') && nonReadOnly.length > 0;
-        if (!mixed && shouldRetryLegacyActionDecision(blockedTools, priorContext) && !actionDecisionRetryRequested) {
-          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'legacy_action_decision_required', validationErrors: blockedTools });
-          actionDecisionRetryRequested = true;
-          validationFailureFallback = { kind: 'blocked', message: '그 작업은 자동 실행할 수 없어요... 아무 작업도 실행하지 않았어요.', blockedTools };
-          validationFeedback = buildLegacyActionDecisionFeedback(blockedTools, options.requesterDisplayName);
-          continue;
-        }
+      const policies = envelope.calls.map((call) => this.registry.get(call.tool)?.policy ?? 'read_only_auto');
+      const mixed = policies.some((policy) => policy === 'read_only_auto') && policies.some((policy) => policy !== 'read_only_auto');
+      const nonExecutable = policies.filter((policy) => !isAutoExecutablePolicy(policy) && policy !== 'confirmation_required');
+      if (mixed || nonExecutable.length > 0) {
+        const blockedTools = envelope.calls
+          .filter((call) => {
+            const policy = this.registry.get(call.tool)?.policy ?? 'blocked';
+            return mixed || (!isAutoExecutablePolicy(policy) && policy !== 'confirmation_required');
+          })
+          .map((call) => call.tool);
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: mixed ? 'mixed_tool_request' : 'non_auto_tool', validationErrors: blockedTools });
         for (const call of envelope.calls) {
           const policy = this.registry.get(call.tool)?.policy ?? 'blocked';
-          observations.push({ callId: call.id, toolName: call.tool, status: 'blocked', policy, error: mixed ? 'Mixed action/read request is blocked; no tools executed.' : `Tool policy ${policy} is not auto-executable.` });
+          const messageText = mixed
+            ? 'Mixed action/read request is blocked; no tools executed.'
+            : `Tool policy ${policy} is not auto-executable.`;
+          observations.push({
+            callId: call.id,
+            toolName: call.tool,
+            status: 'blocked',
+            policy,
+            code: mixed ? 'mixed_tool_request' : 'policy_blocked',
+            message: messageText,
+            hint: mixed
+              ? 'Split read-only questions from execution/setting/deletion requests; no tools were executed.'
+              : 'Do not execute this tool from the automatic agent loop; explain the block or use the supported confirmation/command path.',
+            error: messageText
+          });
         }
         if (blockedOnce) {
           const messageText = mixed
@@ -332,6 +340,11 @@ export class AgentRuntime {
           observationSummary: summarizeObservation(observation)
         });
       }
+      const confirmationOutcome = buildConfirmationRequiredOutcome(observations);
+      if (confirmationOutcome) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'confirmation_required' });
+        return confirmationOutcome;
+      }
     }
 
     const fallback = buildObservationBasedFallbackOutcome(observations);
@@ -353,73 +366,27 @@ export class AgentRuntime {
     observations: readonly AgentToolObservation[],
     validationFeedback: string | null
   ): AiChatMessage[] {
-    const userVoice = options.userVoiceChannel
-      ? `<#${options.userVoiceChannel.id}>${options.userVoiceChannel.name ? ` (${options.userVoiceChannel.name})` : ''}`
-      : '(사용자가 음성 채널에 없음)';
     const system = truncate([
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined,
       observations.length ? `도구 관찰 JSON: ${formatObservationsForPrompt(observations)}` : undefined,
-      priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 1200)}` : undefined,
-      `현재 채널: <#${message.channelId}>`,
-      options.pendingHistory ? `기존 채널 기록 후속 문맥: mode=${options.pendingHistory.mode}, query=${options.pendingHistory.query}` : undefined,
-      options.pendingConfirmation ? `대기 중인 확인 작업 JSON: ${JSON.stringify(options.pendingConfirmation)}` : undefined,
+      priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 900)}` : undefined,
+      options.pendingHistory ? `pendingHistory=${JSON.stringify(options.pendingHistory)}` : undefined,
+      options.pendingConfirmation ? `pendingConfirmation=${JSON.stringify(options.pendingConfirmation)}` : undefined,
       '너는 Discord 봇 ChococoBot의 bounded agent runtime이에요.',
-      '사용자 요청은 현재 프리픽스 뒤에 ?로 들어온 AI 요청이에요.',
-      '반드시 JSON 객체 하나만 출력하세요. 마크다운, 코드펜스, 설명 문장은 금지예요.',
-      '읽기 전용 도구는 필요한 만큼 여러 번 호출하고, 관찰값을 본 뒤 한국어로 자연스럽게 final을 작성해요.',
-      '도구 관찰값으로 답할 때도 ChococoBot 말투를 유지해요. 결과만 딱 끊지 말고, 확인한 내용을 짧게 받아 준 뒤 사용자가 이어 말할 수 있는 한 가지 맥락을 덧붙여요.',
-      '사용자에게 보이는 final/unavailable/blocked 문장은 느낌표, 물음표, 이모지 없이 보통 ... 또는 해요로 마무리해요.',
+      '반드시 JSON 객체 하나만 출력하세요. 마크다운/코드펜스/설명 문장 금지.',
+      '도구 계약: AI는 의미를 판단해 허용 출력 중 하나를 고르고, 코드는 schema/policy/safety/loop만 검증해요.',
+      '도구가 필요하면 tool_calls만 사용하고 tool 목록의 name/policy/input schema를 그대로 따르세요.',
       '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
-      '같은 요청에서 이미 성공한 읽기 전용 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
-      '이전 agent 문맥에 web_search 관찰값이 있고 사용자가 이전 검색/이전 답변/출처/주소를 묻는 후속 질문이라고 AI가 판단하면, 이전 관찰값의 제목과 URL을 근거로 답해요.',
-      '삭제/설정/관리/음성 말하기 같은 실행 도구는 임의 agent loop에서 자동 실행하지 않아요.',
-      '음성 말하기도 단 하나의 명확한 기존 말 명령이면 blocked가 아니라 legacy_command를 쓰세요. 예: {"kind":"legacy_command","query":"말 안녕"}',
-      '사용자가 "음성 채널에 들어와서 X라고 말해"처럼 입장과 말하기를 함께 요청하고 말할 내용 X가 명확하면 {"kind":"legacy_command","query":"말 X"}를 사용해요. 기존 말 명령은 필요하면 먼저 사용자의 음성 채널에 자동 입장해요.',
-      '음성 채널에 들어오라는 요청만 명확하면 {"kind":"legacy_command","query":"들어와"}를 사용하고, 말하라는 요청인데 말할 내용이 없으면 clarify로 자연스럽게 물어봐요.',
-      '프리픽스 변경, TTS 채널 설정, 웹 검색 모드 설정, 기억삭제처럼 기존 명령이 있는 단일 실행 요청도 blocked가 아니라 legacy_command로 넘기세요.',
-      '읽기 요청과 실행/삭제/설정/음성 요청이 섞여 있으면 blocked로 답하고 아무 것도 실행하지 마세요.',
-      '채팅/메시지 삭제 요청에서 그냥 "채팅 3개"처럼 대상이 생략되면 요청자 본인 메시지라고 단정하지 말고 clarify로 누구 채팅인지 물어봐요.',
-      '요청자가 "내 채팅/내꺼/내 메시지"라고 명확히 말했거나 이전 clarify 후속으로 본인 것이라고 답한 경우에만 {"kind":"legacy_command","query":"청소 N","cleanupTarget":"self","cleanupEvidence":"내 채팅"}를 사용해요.',
-      '특정 다른 사람의 메시지만 지우는 요청은 청소로 처리하지 마세요. 봇은 요청자 본인 메시지 청소 또는 관리자용 채널 전체 대청소만 지원해요.',
-      '대청소/전체/채널 전체처럼 채널 메시지 삭제가 명확하면 {"kind":"legacy_command","query":"대청소 N","cleanupTarget":"channel"}를 사용하고 기존 관리자/확인 경로에 맡겨요.',
-      '채팅/메시지 삭제 요청에 개수나 대상이 부족하면 clarify로 자연스럽게 되물어봐요.',
-      '채팅/메시지 삭제 clarify를 할 때는 AI가 판단한 슬롯 상태를 pendingAction에 함께 넣어요. 예: {"kind":"clarify","message":"누구 채팅을 몇 개 지울까요?","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","missing":["target","count"]}}',
-      '대화 기록/요약 clarify를 할 때도 pendingAction을 함께 넣어요. 예: {"kind":"clarify","message":"어느 범위의 대화를 볼까요...","pendingAction":{"kind":"history","originalPrompt":"대화 내용 요약해봐","query":"","mode":"summary","missing":["scope"]}}',
-      '이전 agent 문맥에 pendingAction이 있으면 현재 짧은 답변을 그 pendingAction과 합쳐 처리해요. cleanup은 legacy_command/clarify/blocked 중 하나로, history는 history.search tool_calls 또는 clarify로 처리해요.',
-      'pendingAction cleanup에서 target은 self/channel/other/ambiguous 중 하나이고, count는 삭제 개수가 명확할 때만 넣어요. 아직 부족한 슬롯은 missing에 남겨요.',
-      'pendingAction history에서 mode는 qa/summary이고, query는 특정 주제가 없으면 ""예요. 후속 답변은 이전 질문, 현재 사용자 메시지, 현재 채널/서버 문맥을 함께 보고 scope/channelRef/query를 해소해요.',
-      '이전 agent 문맥 lastIntent가 history이고 사용자가 주제 없이 "여기서 찾아"처럼 후속 요청을 하면 이전 slots.topic과 현재/언급 채널을 조합해 history.search를 호출해요.',
-      '대기 중인 확인 작업이 있고 사용자가 그 작업을 승인한다는 의미로 답하면 confirm_pending을 선택해요. 짧은 긍정 답변(예: ㅇ, ㅇㅇ, 응, 네, ok)도 맥락상 승인으로 명확하면 confirm_pending이에요. 승인이 아니면 confirm_pending을 쓰지 마세요.',
+      '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
+      '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
+      '필수 구조화 필드가 부족하면 clarify와 pendingAction을 사용해요.',
+      '대기 중 확인 작업을 사용자가 명확히 승인하면 confirm_pending을 선택해요.',
       '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
-      '허용 출력:',
-      '{"kind":"tool_calls","calls":[{"id":"call_1","tool":"time.in_zone","input":{"timeZone":"America/New_York","label":"동부","offsetSeconds":0}}]}',
-      '{"kind":"final","message":"..."}',
-      '{"kind":"clarify","message":"...","pendingAction":{"kind":"cleanup","originalPrompt":"채팅 지워봐","target":"channel","missing":["count"]}}',
-      '{"kind":"clarify","message":"...","pendingAction":{"kind":"history","originalPrompt":"대화 내용 요약해봐","query":"","mode":"summary","missing":["scope"]}}',
-      '{"kind":"unavailable","message":"..."}',
-      '{"kind":"unavailable","reason":"web_search_unavailable","message":"..."}',
-      '{"kind":"blocked","message":"...","blockedTools":["command.cleanup","voice.speak"]}',
-      '{"kind":"legacy_command","query":"말 안녕"}',
-      '{"kind":"legacy_command","query":"청소 3","cleanupTarget":"self","cleanupEvidence":"내 채팅"}',
-      '{"kind":"legacy_command","query":"대청소 3","cleanupTarget":"channel"}',
-      '{"kind":"confirm_pending"}',
-      '{"kind":"not_handled"}',
-      '미국 시간대 질문은 최소 Eastern/Central/Mountain/Pacific을 각각 time.in_zone으로 호출해요. IANA: America/New_York, America/Chicago, America/Denver, America/Los_Angeles.',
-      '이전 맥락이 시간대 목록이면 "그 4군데" 같은 후속 요청에 같은 timeZone 슬롯을 재사용해요.',
-      '대화 내용/기록/찾아봐/검색/요약 요청은 history.search를 사용해요. 사용자 발화와 제공된 현재 채널/서버 문맥으로 범위를 해소할 수 있으면 바로 tool_calls를 내고, 정말 범위를 정할 근거가 없을 때만 pendingAction history가 포함된 clarify를 내요.',
-      '특정 주제 없이 최근 대화/대화 내용 자체를 요약하라는 요청이면 history.search mode=summary에서 query=""를 사용해요. "최근 대화" 같은 가짜 검색어를 만들지 마세요.',
-      formatWebSearchPolicy(options.webSearch),
-      '도구 목록:',
-      this.registry.list().map((tool) => `- ${tool.name} [${tool.policy}] ${tool.description} input=${tool.inputSchema}`).join('\n'),
-      '지원 prefix 명령:',
-      formatCommands(options.commands),
-      '참조 가능한 텍스트 채널:',
-      options.availableChannels.map((channel) => `- ${channel.mention} (${channel.name}, id=${channel.id})`).join('\n') || '(없음)',
-      options.requesterDisplayName ? `요청자 표시 이름: ${options.requesterDisplayName}` : undefined,
-      `사용자 음성 채널: ${userVoice}`,
-      `봇 음성 연결 상태: ${options.botVoiceConnected ? '연결됨' : '연결 안 됨'}`,
-      `현재 프리픽스: ${options.prefix}`,
-      `현재 사용자 메시지 작성 시각: <t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`
+      'final 스타일: 한국어 ChococoBot 말투, 짧게 확인+다음 맥락 하나, 느낌표/물음표/이모지 없이 ... 또는 해요로 종료.',
+      `ctx=${formatRuntimeContextForPrompt(message, options)}`,
+      `web=${formatWebSearchPolicy(options.webSearch)}`,
+      `tools=${formatToolCatalogForPrompt(this.registry.list())}`,
+      'outputs={"tool_calls":{"calls":[{"id":"call_1","tool":"registered.tool","input":{}}]},"final":{"message":"..."},"clarify":{"message":"...","pendingAction":{"kind":"cleanup|history","originalPrompt":"...","missing":["field"]}},"unavailable":{"message":"...","reason":"web_search_unavailable?"},"blocked":{"message":"...","blockedTools":["tool.name"]},"confirm_pending":{},"not_handled":{}}'
     ].filter(Boolean).join('\n'), MAX_SYSTEM_CHARS);
 
     return [
@@ -435,14 +402,14 @@ export class AgentRuntime {
 
   private updateTurnContext(
     key: { guildId: string; channelId: string; userId: string },
-    envelope: AgentEnvelope,
+    envelope: AgentRuntimeOutcome,
     prompt: string,
     calls: readonly AgentToolCall[],
     observations: readonly AgentToolObservation[],
     nowMs: number,
     priorContext: AgentTurnStoredContext | undefined
   ): void {
-    if (envelope.kind === 'not_handled' || envelope.kind === 'legacy_command' || envelope.kind === 'confirm_pending') {
+    if (envelope.kind === 'not_handled' || envelope.kind === 'confirm_pending') {
       this.contextStore.clear(key);
       return;
     }
@@ -493,61 +460,6 @@ function isReusableFollowUpIntent(intent: string | undefined): boolean {
   return intent === 'history' || intent === 'web_search' || intent === 'time';
 }
 
-
-
-
-type CleanupValidationResult = { ok: true } | { ok: false; reason: 'cleanup_target_missing' | 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported' };
-
-function validateLegacyCleanupCommand(
-  query: string,
-  cleanupTarget: 'self' | 'channel' | 'other' | 'ambiguous' | undefined,
-  cleanupEvidence: string | undefined,
-  prompt: string,
-  priorContext?: AgentTurnStoredContext
-): CleanupValidationResult {
-  const commandName = query.trim().replace(/^[!?.~]\s*/, '').split(/\s+/)[0]?.toLowerCase();
-  if (['청소', 'clean', 'clean-mine', 'clear', '내청소'].includes(commandName ?? '')) {
-    if (cleanupTarget === 'self') {
-      return hasQuotedCleanupEvidence(cleanupEvidence, prompt, priorContext)
-        ? { ok: true }
-        : { ok: false, reason: 'cleanup_target_ambiguous' };
-    }
-    if (cleanupTarget === 'other') return { ok: false, reason: 'other_user_cleanup_unsupported' };
-    if (cleanupTarget === 'ambiguous') return { ok: false, reason: 'cleanup_target_ambiguous' };
-    return { ok: false, reason: 'cleanup_target_missing' };
-  }
-  if (['대청소', 'clean-all', 'purge', 'bulk-clear'].includes(commandName ?? '')) {
-    if (cleanupTarget === undefined || cleanupTarget === 'channel') return { ok: true };
-    return { ok: false, reason: 'cleanup_target_ambiguous' };
-  }
-  return { ok: true };
-}
-
-function hasQuotedCleanupEvidence(cleanupEvidence: string | undefined, prompt: string, priorContext?: AgentTurnStoredContext): boolean {
-  const evidence = cleanupEvidence?.trim();
-  if (!evidence) return false;
-  return [prompt, priorContext?.lastUserPrompt, priorContext?.lastAgentMessage]
-    .concat(priorContext?.pendingAction?.originalPrompt ? [priorContext.pendingAction.originalPrompt] : [])
-    .filter((value): value is string => Boolean(value))
-    .some((value) => value.includes(evidence));
-}
-
-function buildCleanupTargetFeedback(reason: 'cleanup_target_missing' | 'cleanup_target_ambiguous' | 'other_user_cleanup_unsupported', priorContext: AgentTurnStoredContext | undefined, displayName?: string): string {
-  return [
-    reason === 'other_user_cleanup_unsupported'
-      ? '방금 legacy_command가 특정 다른 사람 메시지 삭제를 청소로 처리하려 했어요. 특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.'
-      : '방금 cleanup legacy_command에 안전한 cleanupTarget 판단이 없거나 모호했어요.',
-    '사용자 의미를 다시 판단해서, 요청자 본인 메시지 삭제가 명확하면 cleanupTarget=self, cleanupEvidence와 함께 청소 N을 내세요. cleanupEvidence는 사용자 말이나 이전 clarify 후속에서 본인 메시지임을 드러내는 원문 일부를 그대로 복사해야 해요. 그런 원문 근거가 없으면 cleanupTarget=self를 쓰지 말고 clarify하세요.',
-    '채널 전체 삭제가 명확하면 cleanupTarget=channel과 함께 대청소 N을 내세요.',
-    '대상이 불명확하면 legacy_command를 내지 말고 clarify JSON으로 누구 채팅을 지울지 자연스럽게 물어보세요.',
-    '특정 다른 사람 메시지만 지우는 요청이면 blocked JSON으로 지원하지 않는다고 안내하세요.',
-    priorContext?.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
-    priorContext?.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
-    displayName ? `요청자 표시 이름은 ${displayName}예요.` : undefined
-  ].filter(Boolean).join('\n');
-}
-
-
 function buildPendingConfirmationFeedback(pending: NonNullable<AgentRuntimeOptions['pendingConfirmation']>): string {
   return [
     '현재 사용자 메시지는 대기 중인 확인 작업에 대한 답변일 수 있어요.',
@@ -564,39 +476,10 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
-    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 legacy_command JSON을, history는 history.search tool_calls JSON을 작성하세요.',
+    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 command.cleanup 또는 command.mass_cleanup tool_calls JSON을, history는 history.search tool_calls JSON을 작성하세요.',
     '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요.',
     '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
     '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 삭제 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
-  ].filter(Boolean).join('\n');
-}
-
-function shouldRetryLegacyActionDecision(blockedTools: readonly string[], priorContext?: AgentTurnStoredContext): boolean {
-  if (priorContext?.pendingAction && blockedTools.includes('command.cleanup')) return false;
-  return blockedTools.some((tool) => LEGACY_ACTION_TOOL_NAMES.has(tool));
-}
-
-const LEGACY_ACTION_TOOL_NAMES = new Set([
-  'voice.speak',
-  'command.cleanup',
-  'command.mass_cleanup',
-  'settings.prefix',
-  'settings.tts_channel',
-  'settings.web_search',
-  'memory.delete'
-]);
-
-function buildLegacyActionDecisionFeedback(blockedTools: readonly string[], displayName?: string): string {
-  return [
-    `이전 응답은 ${blockedTools.join(', ')}를 blocked/tool_calls로 처리했지만, 기존 prefix 명령으로 넘길 수 있는 단일 실행 요청일 수 있어요.`,
-    '사용자 요청을 직접 다시 판단하세요. 명확한 단일 기존 명령이면 legacy_command JSON을 작성하고 query는 지원 prefix 명령 목록의 명령/별칭과 인자를 사용해 직접 생성하세요.',
-    '음성 채널에 들어와서 어떤 문장을 말하라는 요청은 "들어와"와 "말"을 따로 내지 말고, 자동 입장 가능한 기존 "말 <문장>" 명령 하나로 표현하세요.',
-    '말할 문장이 없고 그냥 말하라는 요청이면 legacy_command를 만들지 말고 clarify로 무슨 말을 할지 물어보세요.',
-    '채팅/메시지 삭제에서 대상이 생략되면 요청자 본인 메시지라고 단정하지 마세요. 본인 대상임을 보여주는 사용자 원문 일부를 cleanupEvidence로 그대로 복사할 수 있을 때만 cleanupTarget=self와 함께 청소 N을 사용하고, 그냥 채팅 N개는 clarify로 누구 채팅인지 물어보세요.',
-    '특정 다른 사람 메시지만 지우는 요청은 지원하지 않아요. 요청자 본인 청소 또는 관리자용 대청소만 가능하다고 안내하세요. 대청소는 cleanupTarget=channel을 넣으세요.',
-    '읽기 요청과 실행 요청이 섞였거나 기존 명령으로 안전하게 표현할 수 없으면 blocked JSON으로 답하세요.',
-    '비자동 도구를 tool_calls로 다시 호출하지 마세요.',
-    displayName ? `요청자 표시 이름은 ${displayName}예요. 필요하면 clarify 문장에 반영하세요.` : undefined
   ].filter(Boolean).join('\n');
 }
 
@@ -705,20 +588,6 @@ function parseAgentEnvelope(response: string): ParseResult {
       if (!message) return { ok: false, errors: ['blocked.message must be non-empty'] };
       return { ok: true, envelope: { kind: 'blocked', message, blockedTools } };
     }
-    case 'legacy_command': {
-      const query = typeof parsed.query === 'string' ? parsed.query.trim() : '';
-      const cleanupTarget = parsed.cleanupTarget === 'self' || parsed.cleanupTarget === 'channel' || parsed.cleanupTarget === 'other' || parsed.cleanupTarget === 'ambiguous'
-        ? parsed.cleanupTarget
-        : undefined;
-      const cleanupEvidence = typeof parsed.cleanupEvidence === 'string' && parsed.cleanupEvidence.trim()
-        ? parsed.cleanupEvidence.trim()
-        : undefined;
-      if (!query) return { ok: false, errors: ['legacy_command.query must be non-empty'] };
-      const envelope: AgentEnvelope = cleanupTarget
-        ? { kind: 'legacy_command', query, cleanupTarget, ...(cleanupEvidence ? { cleanupEvidence } : {}) }
-        : { kind: 'legacy_command', query };
-      return { ok: true, envelope };
-    }
     case 'confirm_pending':
       return { ok: true, envelope: { kind: 'confirm_pending' } };
     case 'not_handled':
@@ -734,13 +603,29 @@ function findRepeatedSuccessfulToolCalls(
   observations: readonly AgentToolObservation[]
 ): AgentToolCall[] {
   const successfulCallIds = new Set(observations
-    .filter((observation) => observation.status === 'ok' && observation.policy === 'read_only_auto')
+    .filter((observation) => observation.status === 'ok' && (observation.policy === 'read_only_auto' || observation.policy === 'safe_action_auto'))
     .map((observation) => observation.callId));
   if (!successfulCallIds.size) return [];
-  const successfulToolNames = new Set(previousCalls
+  const successfulToolKeys = new Set(previousCalls
     .filter((call) => successfulCallIds.has(call.id))
-    .map((call) => call.tool));
-  return calls.filter((call) => successfulToolNames.has(call.tool));
+    .map(toolCallKey));
+  return calls.filter((call) => successfulToolKeys.has(toolCallKey(call)));
+}
+
+function toolCallKey(call: AgentToolCall): string {
+  return `${call.tool}\u0000${stableStringify(call.input)}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isAutoExecutablePolicy(policy: AgentToolPolicy): boolean {
+  return policy === 'read_only_auto' || policy === 'safe_action_auto';
 }
 
 function validateToolCallBatch(calls: readonly AgentToolCall[], registry: ToolRegistry, totalToolCalls: number): string[] {
@@ -752,9 +637,48 @@ function validateToolCallBatch(calls: readonly AgentToolCall[], registry: ToolRe
   for (const call of calls) {
     if (ids.has(call.id)) errors.push(`duplicate call id ${call.id}`);
     ids.add(call.id);
-    if (!registry.get(call.tool)) errors.push(`unknown tool ${call.tool}`);
   }
   return errors;
+}
+
+function validateToolCallSafety(
+  calls: readonly AgentToolCall[],
+  prompt: string,
+  priorContext: AgentTurnStoredContext | undefined
+): AgentToolObservation[] {
+  const observations: AgentToolObservation[] = [];
+  const evidenceSources = [
+    prompt,
+    priorContext?.lastUserPrompt,
+    priorContext?.lastAgentMessage,
+    priorContext?.pendingAction?.kind === 'cleanup' ? priorContext.pendingAction.originalPrompt : undefined,
+    priorContext?.pendingAction?.kind === 'cleanup' ? priorContext.pendingAction.cleanupEvidence : undefined
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  for (const call of calls) {
+    if (call.tool !== 'command.cleanup' || !isRecord(call.input)) continue;
+    const evidence = typeof call.input.evidence === 'string' ? call.input.evidence.trim() : '';
+    if (!evidence || evidenceSources.some((source) => containsEvidence(source, evidence))) continue;
+    observations.push({
+      callId: call.id,
+      toolName: call.tool,
+      status: 'error',
+      policy: 'confirmation_required',
+      code: 'validation_error',
+      field: 'evidence',
+      message: 'command.cleanup.evidence must be exact text from the current user request or stored follow-up context',
+      hint: 'Use only a literal phrase the user actually wrote as cleanup evidence, or ask a clarify question when the target is ambiguous.',
+      error: 'command.cleanup.evidence must match user text'
+    });
+  }
+  return observations;
+}
+
+function containsEvidence(source: string, evidence: string): boolean {
+  return normalizeEvidenceText(source).includes(normalizeEvidenceText(evidence));
+}
+
+function normalizeEvidenceText(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function extractJsonPayload(response: string): string | null {
@@ -787,6 +711,17 @@ function summarizeObservation(observation: AgentToolObservation): string {
     toolName: observation.toolName,
     status: observation.status,
     policy: observation.policy,
+    code: observation.code,
+    field: observation.field,
+    message: observation.message,
+    hint: observation.hint,
+    confirmation: observation.confirmation
+      ? {
+        intent: observation.confirmation.intent,
+        preview: observation.confirmation.preview,
+        commandQuery: observation.confirmation.commandQuery
+      }
+      : undefined,
     error: observation.error
   };
   if (!isRecord(observation.output)) return JSON.stringify(base).slice(0, 500);
@@ -833,42 +768,64 @@ function compactObservation(observation: AgentToolObservation): unknown {
     toolName: observation.toolName,
     status: observation.status,
     policy: observation.policy,
+    code: observation.code,
+    field: observation.field,
+    message: observation.message,
+    hint: observation.hint,
+    confirmation: observation.confirmation,
     output: observation.output,
     error: observation.error
   };
 }
 
-function inferIntent(calls: readonly AgentToolCall[], envelope: AgentEnvelope): string | undefined {
+function inferIntent(calls: readonly AgentToolCall[], envelope: AgentRuntimeOutcome): string | undefined {
   if (calls.some((call) => call.tool.startsWith('time.'))) return 'time';
   if (calls.some((call) => call.tool.startsWith('history.'))) return 'history';
   if (calls.some((call) => call.tool === 'web.search')) return 'web_search';
+  if (calls.some((call) => call.tool.startsWith('voice.'))) return 'voice';
   if (envelope.kind === 'unavailable' && envelope.reason === 'web_search_unavailable') return 'web_search';
   return envelope.kind;
 }
 
+function formatRuntimeContextForPrompt(message: Message, options: AgentRuntimeOptions): string {
+  return JSON.stringify({
+    channel: `<#${message.channelId}>`,
+    prefix: options.prefix,
+    requester: options.requesterDisplayName,
+    userVoice: options.userVoiceChannel
+      ? { id: options.userVoiceChannel.id, name: options.userVoiceChannel.name ?? undefined }
+      : null,
+    botVoiceConnected: Boolean(options.botVoiceConnected),
+    channels: options.availableChannels.map((channel) => ({ id: channel.id, name: channel.name, mention: channel.mention })),
+    now: `<t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`
+  });
+}
+
+function formatToolCatalogForPrompt(tools: ReturnType<ToolRegistry['list']>): string {
+  return tools
+    .map((tool) => `${tool.name} [${tool.policy}] input=${tool.inputSchema} :: ${truncate(tool.description, 96)}`)
+    .join(' | ');
+}
+
 function formatWebSearchPolicy(webSearch: AgentRuntimeOptions['webSearch']): string {
-  if (!webSearch) return '웹 검색 설정: unavailable. web.search를 호출하지 말고 일반 대화면 not_handled, 검색이 필요한 요청이면 unavailable로 답해요.';
-  const statusText = `웹 검색 설정: mode=${webSearch.mode}, provider=${webSearch.provider}, providerStatus=${webSearch.providerStatus}, resultCount=${webSearch.resultCount}.`;
-  const shared = [
-    statusText,
-    'web.search는 공개 웹의 최신/외부/검증 가능한 정보를 확인하는 읽기 전용 도구예요. Discord 서버 대화 기록은 web.search가 아니라 history.search를 사용해요.',
-    '잡담, 창작, 의견 요청, 서버 대화 기록만 필요한 요청에는 web.search를 호출하지 마세요.',
-    'web.search 관찰값을 근거로 답하면 문장 끝이나 문단 끝에 [1], [2]처럼 결과 번호를 붙이고, 답변 아래에 출처: [1] 제목 — URL 형식으로 간단히 적어요.',
-    'web.search가 error이거나 providerStatus가 ready가 아니고 현재 사용자 요청을 AI가 웹검색 필요 요청으로 판단했다면 검색 없이 사실 답을 꾸미지 말고 {"kind":"unavailable","reason":"web_search_unavailable","message":"..."} JSON으로 웹 검색을 사용할 수 없다고 한국어로 설명해요.'
-  ];
-  if (webSearch.mode === 'disabled') {
-    return [...shared, '현재 서버 웹 검색 모드는 disabled예요. web.search를 호출하지 마세요. 명시적 검색 요청이면 unavailable로 답해요.'].join('\n');
-  }
-  if (webSearch.providerStatus !== 'ready') {
-    return [...shared, `현재 providerStatus가 ${webSearch.providerStatus}라 web.search를 호출해도 실패할 수 있어요. 명시적 검색/사실 확인 요청이면 unavailable로 답해요.`].join('\n');
-  }
-  if (webSearch.mode === 'explicit_only') {
-    return [...shared, '현재 모드는 explicit_only예요. 사용자가 웹 검색/인터넷 검색/최신 확인/출처 확인을 명시한 경우에만 web.search를 호출해요.'].join('\n');
-  }
-  if (webSearch.mode === 'automatic') {
-    return [...shared, '현재 모드는 automatic이에요. 최신성/외부 사실/불확실성이 답 품질에 중요할 때 web.search를 호출해요.'].join('\n');
-  }
-  return [...shared, '현재 모드는 search_first_factual이에요. 최신/외부/검증 가능한 사실 질문은 가능한 먼저 web.search를 호출한 뒤 답해요.'].join('\n');
+  if (!webSearch) return JSON.stringify({ status: 'unavailable', rule: 'do not call web.search; use unavailable for explicit search needs' });
+  const rule = webSearch.mode === 'disabled'
+    ? 'do not call web.search; explicit search needs unavailable'
+    : webSearch.providerStatus !== 'ready'
+      ? 'provider not ready; explicit factual/search needs unavailable'
+      : webSearch.mode === 'explicit_only'
+        ? 'call only when user explicitly asks web/search/latest/source check'
+        : webSearch.mode === 'automatic'
+          ? 'call when current/external/uncertain facts materially affect quality'
+          : 'search first for current/external/verifiable factual questions';
+  return JSON.stringify({
+    mode: webSearch.mode,
+    provider: webSearch.provider,
+    providerStatus: webSearch.providerStatus,
+    resultCount: webSearch.resultCount,
+    rule,
+    citation: 'when answering from web.search, cite result numbers and include source title/url list'
+  });
 }
 
 function buildWebSearchFailureOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
@@ -886,6 +843,12 @@ function buildObservationBasedFallbackOutcome(observations: readonly AgentToolOb
   if (webFailure) return webFailure;
   const historyFallback = buildHistoryFallbackOutcome(observations);
   if (historyFallback) return historyFallback;
+  const historySummaryFallback = buildHistorySummaryFallbackOutcome(observations);
+  if (historySummaryFallback) return historySummaryFallback;
+  const timeFallback = buildTimeFallbackOutcome(observations);
+  if (timeFallback) return timeFallback;
+  const voiceFallback = buildVoiceFallbackOutcome(observations);
+  if (voiceFallback) return voiceFallback;
   const webSources = extractSuccessfulWebSearchSources(observations);
   if (!webSources.length) return null;
   return {
@@ -899,8 +862,25 @@ function buildObservationBasedFallbackOutcome(observations: readonly AgentToolOb
   };
 }
 
+function buildConfirmationRequiredOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const observation = observations.find((item) => item.status === 'confirmation_required' && item.confirmation?.commandQuery);
+  if (!observation?.confirmation?.commandQuery) return null;
+  return {
+    kind: 'confirmation_required',
+    message: observation.message ?? `${observation.toolName} 실행 전 확인이 필요해요...`,
+    intent: observation.confirmation.intent,
+    preview: observation.confirmation.preview,
+    payload: observation.confirmation.payload,
+    commandQuery: observation.confirmation.commandQuery
+  };
+}
+
 function hasUsableObservation(observations: readonly AgentToolObservation[]): boolean {
-  return hasSuccessfulWebSearchObservation(observations) || hasSuccessfulHistorySearchObservation(observations);
+  return hasSuccessfulWebSearchObservation(observations)
+    || hasSuccessfulHistorySearchObservation(observations)
+    || hasSuccessfulHistorySummaryObservation(observations)
+    || hasSuccessfulTimeObservation(observations)
+    || hasSuccessfulVoiceObservation(observations);
 }
 
 function hasSuccessfulWebSearchObservation(observations: readonly AgentToolObservation[]): boolean {
@@ -911,11 +891,23 @@ function hasSuccessfulHistorySearchObservation(observations: readonly AgentToolO
   return extractSuccessfulHistoryEvidence(observations).length > 0;
 }
 
+function hasSuccessfulHistorySummaryObservation(observations: readonly AgentToolObservation[]): boolean {
+  return extractSuccessfulHistorySummaries(observations).length > 0;
+}
+
+function hasSuccessfulTimeObservation(observations: readonly AgentToolObservation[]): boolean {
+  return extractSuccessfulTimeOutputs(observations).length > 0;
+}
+
+function hasSuccessfulVoiceObservation(observations: readonly AgentToolObservation[]): boolean {
+  return extractSuccessfulVoiceMessages(observations).length > 0;
+}
+
 function buildRepeatedSuccessfulToolFeedback(repeatedCalls: readonly AgentToolCall[], observations: readonly AgentToolObservation[]): string {
   return [
-    '이미 읽기 전용 도구 성공 관찰값이 있어요.',
+    '이미 같은 입력의 도구 성공 관찰값이 있어요.',
     `반복 도구: ${[...new Set(repeatedCalls.map((call) => call.tool))].join(', ')}`,
-    '이미 성공한 읽기 전용 도구를 다시 호출하지 말고, 현재 도구 관찰 JSON만 근거로 final/unavailable/blocked 중 하나를 작성하세요.',
+    '이미 성공한 같은 입력의 도구를 다시 호출하지 말고, 현재 도구 관찰 JSON만 근거로 final/unavailable/blocked 중 하나를 작성하세요.',
     '관찰값에 없는 내용은 단정하지 말고 확인된 내용 기준이라고 밝혀요.',
     ...formatObservationEvidenceForFeedback(observations)
   ].join('\n');
@@ -929,6 +921,12 @@ function formatObservationEvidenceForFeedback(observations: readonly AgentToolOb
   }
   const historyEvidence = extractSuccessfulHistoryEvidence(observations);
   if (historyEvidence.length) parts.push(...formatHistoryEvidenceForFeedback(historyEvidence));
+  const historySummaries = extractSuccessfulHistorySummaries(observations);
+  if (historySummaries.length) parts.push('대화 요약:', ...historySummaries.map((summary, index) => `[${index + 1}] ${truncate(summary, 180)}`));
+  const timeOutputs = extractSuccessfulTimeOutputs(observations);
+  if (timeOutputs.length) parts.push('시간 관찰:', ...timeOutputs.map((item, index) => `[${index + 1}] ${item.label}: ${item.display} (${item.timeZone})`));
+  const voiceMessages = extractSuccessfulVoiceMessages(observations);
+  if (voiceMessages.length) parts.push('작업 관찰:', ...voiceMessages.map((message, index) => `[${index + 1}] ${message}`));
   return parts;
 }
 
@@ -944,6 +942,18 @@ function buildObservationAnswerRequiredFeedback(observations: readonly AgentTool
   const historyEvidence = extractSuccessfulHistoryEvidence(observations);
   if (historyEvidence.length) {
     parts.push(...formatHistoryEvidenceForFeedback(historyEvidence));
+  }
+  const historySummaries = extractSuccessfulHistorySummaries(observations);
+  if (historySummaries.length) {
+    parts.push('대화 요약:', ...historySummaries.map((summary, index) => `[${index + 1}] ${truncate(summary, 180)}`));
+  }
+  const timeOutputs = extractSuccessfulTimeOutputs(observations);
+  if (timeOutputs.length) {
+    parts.push('시간 관찰:', ...timeOutputs.map((item, index) => `[${index + 1}] ${item.label}: ${item.display} (${item.timeZone})`));
+  }
+  const voiceMessages = extractSuccessfulVoiceMessages(observations);
+  if (voiceMessages.length) {
+    parts.push('작업 관찰:', ...voiceMessages.map((message, index) => `[${index + 1}] ${message}`));
   }
   return parts.join('\n');
 }
@@ -1006,6 +1016,97 @@ function buildHistoryFallbackOutcome(observations: readonly AgentToolObservation
   };
 }
 
+function extractSuccessfulHistorySummaries(observations: readonly AgentToolObservation[]): string[] {
+  const summaries: string[] = [];
+  for (const observation of observations) {
+    if (observation.toolName !== 'history.summarize' || observation.status !== 'ok' || !isRecord(observation.output)) continue;
+    const message = typeof observation.output.message === 'string' ? observation.output.message.trim() : '';
+    if (!message) continue;
+    summaries.push(message);
+    if (summaries.length >= 4) return summaries;
+  }
+  return summaries;
+}
+
+function buildHistorySummaryFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const summaries = extractSuccessfulHistorySummaries(observations);
+  if (!summaries.length) return null;
+  return {
+    kind: 'final',
+    message: [
+      '대화 요약 관찰값 기준으로 답할게요...',
+      ...summaries.slice(0, 4).map((summary) => truncate(summary.replace(/\s+/g, ' '), 280))
+    ].join('\n')
+  };
+}
+
+function extractSuccessfulTimeOutputs(observations: readonly AgentToolObservation[]): Array<{ label: string; timeZone: string; display: string; epochSeconds?: number }> {
+  const outputs: Array<{ label: string; timeZone: string; display: string; epochSeconds?: number }> = [];
+  for (const observation of observations) {
+    if (!observation.toolName.startsWith('time.') || observation.status !== 'ok' || !isRecord(observation.output)) continue;
+    const display = typeof observation.output.display === 'string'
+      ? observation.output.display.trim()
+      : typeof observation.output.timestampTag === 'string'
+        ? observation.output.timestampTag.trim()
+        : '';
+    if (!display) continue;
+    const timeZone = typeof observation.output.timeZone === 'string' && observation.output.timeZone.trim()
+      ? observation.output.timeZone.trim()
+      : 'viewer-local';
+    const label = typeof observation.output.label === 'string' && observation.output.label.trim()
+      ? observation.output.label.trim()
+      : timeZone;
+    outputs.push({
+      label,
+      timeZone,
+      display,
+      ...(typeof observation.output.epochSeconds === 'number' ? { epochSeconds: observation.output.epochSeconds } : {})
+    });
+    if (outputs.length >= 8) return outputs;
+  }
+  return outputs;
+}
+
+function buildTimeFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const outputs = extractSuccessfulTimeOutputs(observations);
+  if (!outputs.length) return null;
+  return {
+    kind: 'final',
+    message: [
+      '확인한 시간 관찰값 기준으로 답할게요...',
+      ...outputs.map((item) => `${item.label}: ${item.display}`)
+    ].join('\n')
+  };
+}
+
+function extractSuccessfulVoiceMessages(observations: readonly AgentToolObservation[]): string[] {
+  const messages: string[] = [];
+  for (const observation of observations) {
+    if (!isMessageFallbackTool(observation.toolName) || observation.status !== 'ok' || !isRecord(observation.output)) continue;
+    const message = typeof observation.output.message === 'string' ? observation.output.message.trim() : '';
+    if (!message) continue;
+    messages.push(message);
+    if (messages.length >= 4) return messages;
+  }
+  return messages;
+}
+
+function isMessageFallbackTool(toolName: string): boolean {
+  return toolName.startsWith('voice.') || toolName.startsWith('tts.') || toolName === 'time.user_timezone';
+}
+
+function buildVoiceFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const messages = extractSuccessfulVoiceMessages(observations);
+  if (!messages.length) return null;
+  return {
+    kind: 'final',
+    message: [
+      '작업 관찰값 기준으로 답할게요...',
+      ...messages.slice(0, 4)
+    ].join('\n')
+  };
+}
+
 function formatObservationsForPrompt(observations: readonly AgentToolObservation[]): string {
   return JSON.stringify(observations.map((observation) => observation.toolName === 'web.search'
     ? sanitizeWebSearchObservation(observation)
@@ -1025,14 +1126,20 @@ function summarizePromptForDiagnostic(messages: readonly AiChatMessage[]): strin
 }
 
 function sanitizeWebSearchObservation(observation: AgentToolObservation): unknown {
+  const base = {
+    callId: observation.callId,
+    toolName: observation.toolName,
+    status: observation.status,
+    policy: observation.policy,
+    code: observation.code,
+    field: observation.field,
+    message: observation.message,
+    hint: observation.hint,
+    confirmation: observation.confirmation,
+    error: observation.error
+  };
   if (!isRecord(observation.output)) {
-    return {
-      callId: observation.callId,
-      toolName: observation.toolName,
-      status: observation.status,
-      policy: observation.policy,
-      error: observation.error
-    };
+    return base;
   }
   const results = Array.isArray(observation.output.results)
     ? observation.output.results.filter(isRecord).slice(0, 10).map((result) => ({
@@ -1044,15 +1151,11 @@ function sanitizeWebSearchObservation(observation: AgentToolObservation): unknow
     }))
     : undefined;
   return {
-    callId: observation.callId,
-    toolName: observation.toolName,
-    status: observation.status,
-    policy: observation.policy,
+    ...base,
     output: {
       provider: observation.output.provider,
       results
     },
-    error: observation.error
   };
 }
 
@@ -1083,13 +1186,6 @@ function sanitizeStoredObservation(observation: unknown): unknown {
   const safeOutput = { ...observation.output };
   delete safeOutput.query;
   return { ...observation, output: safeOutput };
-}
-
-function formatCommands(commands: AgentRuntimeOptions['commands']): string {
-  return commands
-    .slice(0, 20)
-    .map((command) => `- ${[command.name, ...command.aliases.slice(0, 5)].join(' / ')} — ${command.description}`.slice(0, 140))
-    .join('\n') || '(없음)';
 }
 
 function truncate(value: string, limit: number): string {

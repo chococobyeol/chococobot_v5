@@ -87,9 +87,9 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({ kind: 'final', message: '서울은 지금 새벽 3시 15분이야. 다른 지역도 볼까...' });
     const secondPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
-    expect(secondPrompt).toContain('관찰값을 본 뒤 한국어로 자연스럽게 final');
-    expect(secondPrompt).toContain('사용자가 이어 말할 수 있는 한 가지 맥락');
-    expect(secondPrompt).toContain('느낌표, 물음표, 이모지 없이 보통 ... 또는 해요');
+    expect(secondPrompt).toContain('final 스타일: 한국어 ChococoBot 말투');
+    expect(secondPrompt).toContain('다음 맥락 하나');
+    expect(secondPrompt).toContain('느낌표/물음표/이모지 없이 ... 또는 해요');
     expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toMatchObject({
       lastAgentMessage: '서울은 지금 새벽 3시 15분이야. 다른 지역도 볼까...',
       slots: { timeZones: ['Asia/Seoul'] }
@@ -275,7 +275,7 @@ describe('AgentRuntime', () => {
       { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary', limit: 50 },
       expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
     );
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('query=""');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain("query may be empty only when mode='summary'");
   });
 
   it('grounds channel-summary requests in provided current-channel context before asking clarifying questions', async () => {
@@ -310,8 +310,10 @@ describe('AgentRuntime', () => {
       expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
     );
     const firstPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    expect(firstPrompt).toContain('제공된 현재 채널/서버 문맥으로 범위를 해소할 수 있으면 바로 tool_calls');
-    expect(firstPrompt).toContain('정말 범위를 정할 근거가 없을 때만 pendingAction history가 포함된 clarify');
+    expect(firstPrompt).toContain('필수 구조화 필드가 부족하면 clarify');
+    expect(firstPrompt).toContain('history.search [read_only_auto]');
+    expect(firstPrompt).toContain('\"mention\":\"<#channel-1>\"');
+    expect(firstPrompt).toContain('\"name\":\"general\"');
   });
 
   it('repairs a channel-summary clarify follow-up by steering the AI back to history.search', async () => {
@@ -404,7 +406,7 @@ describe('AgentRuntime', () => {
         }))
         .mockResolvedValueOnce(JSON.stringify({
           kind: 'tool_calls',
-          calls: [{ id: 'history-2', tool: 'history.search', input: { scope: 'server', query: '최근 대화 내용', mode: 'summary', limit: 20 } }]
+          calls: [{ id: 'history-2', tool: 'history.search', input: { scope: 'server', query: '최근 대화', mode: 'summary', limit: 20 } }]
         }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '읽은 메시지 기준으로 봇 응답 품질에 대한 불만이 있었어요...' }))
     };
@@ -415,9 +417,9 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'final', message: '읽은 메시지 기준으로 봇 응답 품질에 대한 불만이 있었어요...' });
     expect(historySearch).toHaveBeenCalledTimes(1);
     const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
-    expect(repairPrompt).toContain('이미 읽기 전용 도구 성공 관찰값이 있어요');
+    expect(repairPrompt).toContain('이미 같은 입력의 도구 성공 관찰값이 있어요');
     expect(repairPrompt).toContain('반복 도구: history.search');
-    expect(repairPrompt).toContain('이미 성공한 읽기 전용 도구를 다시 호출하지 말고');
+    expect(repairPrompt).toContain('이미 성공한 같은 입력의 도구를 다시 호출하지 말고');
   });
 
   it('falls back from evidence instead of looping when history.search is repeated after retry feedback', async () => {
@@ -467,7 +469,7 @@ describe('AgentRuntime', () => {
     expect(observationPrompt).toContain('짬뽕지존 홍대점');
     const retryPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
     expect(retryPrompt.indexOf('재시도 지시:')).toBeLessThan(retryPrompt.indexOf('너는 Discord 봇 ChococoBot'));
-    expect(retryPrompt).toContain('이미 성공한 읽기 전용 도구를 다시 호출하지 말고');
+    expect(retryPrompt).toContain('이미 성공한 같은 입력의 도구를 다시 호출하지 말고');
     expect(retryPrompt).toContain('반복 도구: history.search');
     expect(retryPrompt).toContain('짬뽕지존 홍대점');
     expect(diagnostics).toEqual(expect.arrayContaining([
@@ -510,8 +512,8 @@ describe('AgentRuntime', () => {
       expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
     );
     const firstPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    expect(firstPrompt).toContain('mode=search_first_factual');
-    expect(firstPrompt).toContain('출처: [1] 제목 — URL');
+    expect(firstPrompt).toContain('\"mode\":\"search_first_factual\"');
+    expect(firstPrompt).toContain('source title/url list');
     const secondPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
     expect(secondPrompt).toContain('https://docs.searxng.org/dev/search_api.html');
     expect(secondPrompt).not.toContain('SearXNG JSON API');
@@ -547,7 +549,7 @@ describe('AgentRuntime', () => {
         }))
         .mockResolvedValueOnce(JSON.stringify({
           kind: 'tool_calls',
-          calls: [{ id: 'web-2', tool: 'web.search', input: { query: '짬뽕지존 공식', count: 3, language: 'ko' } }]
+          calls: [{ id: 'web-2', tool: 'web.search', input: { query: '짬뽕지존', count: 3, language: 'ko' } }]
         }))
         .mockResolvedValueOnce(JSON.stringify({
           kind: 'final',
@@ -564,9 +566,9 @@ describe('AgentRuntime', () => {
     expect(webSearch).toHaveBeenCalledTimes(1);
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
     const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
-    expect(repairPrompt).toContain('이미 읽기 전용 도구 성공 관찰값이 있어요');
+    expect(repairPrompt).toContain('이미 같은 입력의 도구 성공 관찰값이 있어요');
     expect(repairPrompt).toContain('반복 도구: web.search');
-    expect(repairPrompt).toContain('이미 성공한 읽기 전용 도구를 다시 호출하지 말고');
+    expect(repairPrompt).toContain('이미 성공한 같은 입력의 도구를 다시 호출하지 말고');
     expect(repairPrompt).toContain('https://jjamppongjijon.example/');
   });
 
@@ -662,7 +664,7 @@ describe('AgentRuntime', () => {
     expect(outcome.kind).toBe('final');
     const followUpPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
     expect(followUpPrompt).toContain('이전 agent 문맥 JSON');
-    expect(followUpPrompt).toContain('이전 검색/이전 답변/출처/주소를 묻는 후속 질문');
+    expect(followUpPrompt).toContain('이전 agent 문맥 JSON');
     expect(followUpPrompt).toContain('https://jjamppongjijon.example/');
   });
 
@@ -677,7 +679,7 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({ kind: 'not_handled' });
     expect(webSearch).not.toHaveBeenCalled();
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('잡담, 창작, 의견 요청');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('search first for current/external/verifiable factual questions');
   });
 
 
@@ -686,7 +688,7 @@ describe('AgentRuntime', () => {
 
     expect(source).not.toContain('isExplicitWebSearchPrompt');
     expect(source).not.toMatch(/웹\\s\*검색.*검색해.*최신.*뉴스/s);
-    expect(source).toContain('AI가 웹검색 필요 요청으로 판단했다면');
+    expect(source).toContain('explicit factual/search needs unavailable');
   });
 
   it('fails closed when a required web search provider call fails', async () => {
@@ -724,8 +726,8 @@ describe('AgentRuntime', () => {
     }));
 
     expect(outcome).toEqual({ kind: 'not_handled' });
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('providerStatus=missing_config');
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('AI가 웹검색 필요 요청으로 판단했다면');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('\"providerStatus\":\"missing_config\"');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('explicit factual/search needs unavailable');
     expect(store.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, Date.parse('2026-05-22T18:15:00.000Z'))).toBeUndefined();
   });
 
@@ -755,156 +757,249 @@ describe('AgentRuntime', () => {
     expect(JSON.stringify(stored)).not.toContain('최신 Node.js 소식');
   });
 
-  it('asks the model to repair mistaken blocked voice-speak decisions into legacy commands', async () => {
-    const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'blocked',
-          message: '음성 채널에 들어와서 말하기는 현재 차단된 기능입니다.',
-          blockedTools: ['voice.speak']
-        }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '말 초코코봇 테스트 중이에요' }))
-    };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
-
-    const outcome = await runtime.run(makeMessage(), '일단 음성채널에 들어와서 아무말이나 해봐', makeOptions());
-
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '말 초코코봇 테스트 중이에요' });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('query는 지원 prefix 명령 목록의 명령/별칭과 인자를 사용해 직접 생성');
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('자동 입장 가능한 기존 "말 <문장>" 명령 하나');
-  });
-
-  it('tells the model that join-and-speak is one speak command when text is clear', async () => {
-    const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '말 안녕' }))
-    };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
-
-    const outcome = await runtime.run(makeMessage(), '음성채널에 들어와서 안녕이라고 말해', makeOptions());
-
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '말 안녕' });
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('기존 말 명령은 필요하면 먼저 사용자의 음성 채널에 자동 입장');
-  });
-
-  it('lets the model keep mixed read and voice requests blocked after a repair prompt', async () => {
-    const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'blocked',
-          message: '읽기랑 음성 실행이 섞여 있어요.',
-          blockedTools: ['voice.speak']
-        }))
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'blocked',
-          message: '읽기랑 음성 실행이 섞여 있어요.',
-          blockedTools: ['voice.speak']
-        }))
-    };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
-
-    const outcome = await runtime.run(makeMessage(), '미국 시간대 알려주고 음성으로 말해줘', makeOptions());
-
-    expect(outcome).toEqual({ kind: 'blocked', message: '읽기랑 음성 실행이 섞여 있어요.', blockedTools: ['voice.speak'] });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
-  });
-
-  it('keeps the safe blocked answer when a legacy-action repair retry returns invalid JSON', async () => {
-    const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'blocked',
-          message: '음성 채널에 들어가서 말하기는 한 번에 처리할 수 없어요.',
-          blockedTools: ['voice.speak']
-        }))
-        .mockResolvedValueOnce('응답이 비어 있어요...')
-    };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
-
-    const outcome = await runtime.run(makeMessage(), '음성채널에 들어와서 안녕이라고 말해', makeOptions());
-
-    expect(outcome).toEqual({
-      kind: 'blocked',
-      message: '음성 채널에 들어가서 말하기는 한 번에 처리할 수 없어요.',
-      blockedTools: ['voice.speak']
-    });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
-  });
-
-
-  it('asks the model to repair explicit requester cleanup decisions into legacy commands', async () => {
-    const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'blocked',
-          message: '채팅 삭제는 차단된 기능입니다.',
-          blockedTools: ['command.cleanup']
-        }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 10', cleanupTarget: 'self', cleanupEvidence: '내 채팅' }))
-    };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
-
-    const outcome = await runtime.run(makeMessage(), '내 채팅 10개 지워줘', makeOptions());
-
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 10', cleanupTarget: 'self', cleanupEvidence: '내 채팅' });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
-  });
-
-  it('asks the model to repair mistaken blocked mass cleanup decisions into destructive legacy commands', async () => {
-    const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'blocked',
-          message: '전체 채팅 삭제는 차단된 기능입니다.',
-          blockedTools: ['command.mass_cleanup']
-        }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' }))
-    };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
-
-    const outcome = await runtime.run(makeMessage(), '전체 채팅 5개 지워줘', makeOptions());
-
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
-  });
-
-  it('asks the model to repair non-read-only cleanup tool calls into legacy commands', async () => {
+  it('executes voice.speak through the common tool path', async () => {
+    const voiceSpeak = vi.fn(async () => ({ message: '음성으로 말했어요...', text: '안녕', autoJoined: true, channelId: 'voice-1' }));
     const ai = {
       askMessages: vi
         .fn()
         .mockResolvedValueOnce(JSON.stringify({
           kind: 'tool_calls',
-          calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { count: 3 } }]
+          calls: [{ id: 'speak', tool: 'voice.speak', input: { text: '안녕' } }]
         }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self', cleanupEvidence: '내 채팅' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '음성으로 말했어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ voiceSpeak }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '음성채널에 들어와서 안녕이라고 말해', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '음성으로 말했어요...' });
+    expect(voiceSpeak).toHaveBeenCalledWith(
+      { text: '안녕' },
+      expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
+    );
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"toolName":"voice.speak"');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"policy":"safe_action_auto"');
+  });
+
+  it('executes voice.join, voice.stop, and voice.leave through the common tool path', async () => {
+    const voiceJoin = vi.fn(async () => ({ message: '음성 채널에 연결했어요...', channelId: 'voice-1' }));
+    const voiceStop = vi.fn(async () => ({ message: '재생을 멈췄어요...', stopped: true }));
+    const voiceLeave = vi.fn(async () => ({ message: '음성 채널에서 나왔어요...' }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [
+            { id: 'join', tool: 'voice.join', input: {} },
+            { id: 'stop', tool: 'voice.stop', input: {} },
+            { id: 'leave', tool: 'voice.leave', input: {} }
+          ]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '음성 연결, 멈춤, 해제를 처리했어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ voiceJoin, voiceStop, voiceLeave }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '들어왔다가 멈추고 나가', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '음성 연결, 멈춤, 해제를 처리했어요...' });
+    expect(voiceJoin).toHaveBeenCalledTimes(1);
+    expect(voiceStop).toHaveBeenCalledTimes(1);
+    expect(voiceLeave).toHaveBeenCalledTimes(1);
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"voice.join"');
+    expect(observationPrompt).toContain('"toolName":"voice.stop"');
+    expect(observationPrompt).toContain('"toolName":"voice.leave"');
+  });
+
+  it('falls back from successful voice observations instead of requiring another route', async () => {
+    const voiceSpeak = vi.fn(async () => ({ message: '음성으로 말했어요...', text: '안녕', autoJoined: false, channelId: 'voice-1' }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'speak', tool: 'voice.speak', input: { text: '안녕' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ voiceSpeak }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '안녕이라고 말해', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: expect.stringContaining('작업 관찰값 기준') });
+    expect(voiceSpeak).toHaveBeenCalledTimes(1);
+  });
+
+  it('executes requester TTS and time preference tools through the common tool path', async () => {
+    const ttsVoicePreset = vi.fn(async () => ({ message: '내 TTS 음색을 sunhi로 저장했어요...', current: 'sunhi', available: ['sunhi'] }));
+    const ttsEngine = vi.fn(async () => ({ message: '내 TTS 엔진을 edge로 저장했어요...', current: 'edge', available: ['edge', 'gtts'] }));
+    const userTimezone = vi.fn(async () => ({ message: '내 시간대를 Asia/Seoul로 저장했어요...', current: 'Asia/Seoul', defaultTimeZone: 'Asia/Seoul' }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [
+            { id: 'voice-preset', tool: 'tts.voice_preset', input: { action: 'set', preset: 'sunhi' } },
+            { id: 'engine', tool: 'tts.engine', input: { action: 'set', engine: 'edge' } },
+            { id: 'timezone', tool: 'time.user_timezone', input: { action: 'set', timeZone: 'Asia/Seoul' } }
+          ]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '개인 TTS와 시간대 설정을 저장했어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ ttsVoicePreset, ttsEngine, userTimezone }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '내 음색 sunhi, tts엔진 edge, 시간대 Asia/Seoul로 설정해줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '개인 TTS와 시간대 설정을 저장했어요...' });
+    expect(ttsVoicePreset).toHaveBeenCalledWith({ action: 'set', preset: 'sunhi' }, expect.anything());
+    expect(ttsEngine).toHaveBeenCalledWith({ action: 'set', engine: 'edge' }, expect.anything());
+    expect(userTimezone).toHaveBeenCalledWith({ action: 'set', timeZone: 'Asia/Seoul' }, expect.anything());
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"tts.voice_preset"');
+    expect(observationPrompt).toContain('"toolName":"tts.engine"');
+    expect(observationPrompt).toContain('"toolName":"time.user_timezone"');
+  });
+
+  it('returns structured voice.speak validation errors for missing text', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'speak', tool: 'voice.speak', input: {} }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '무슨 말을 할까요...' }))
+    };
+    const voiceSpeak = vi.fn();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ voiceSpeak }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '말해줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'clarify', message: '무슨 말을 할까요...' });
+    expect(voiceSpeak).not.toHaveBeenCalled();
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"voice.speak"');
+    expect(observationPrompt).toContain('"code":"validation_error"');
+    expect(observationPrompt).toContain('"field":"text"');
+  });
+
+
+
+  it('returns cleanup confirmation observations through the common tool path', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'tool_calls',
+        calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { target: 'self', count: 3, evidence: '내 채팅' } }]
+      }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '내 채팅 3개 지워줘', makeOptions());
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self', cleanupEvidence: '내 채팅' });
+    expect(outcome).toMatchObject({
+      kind: 'confirmation_required',
+      intent: 'command.cleanup',
+      commandQuery: '청소 3',
+      payload: { target: 'self', count: 3, evidence: '내 채팅' }
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('feeds cleanup validation errors back as structured observations', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { target: 'self', count: 0 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '몇 개를 지울까요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '내 채팅 지워줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'clarify', message: '몇 개를 지울까요...' });
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"command.cleanup"');
+    expect(observationPrompt).toContain('"code":"validation_error"');
+    expect(observationPrompt).toContain('"field":"count"');
+  });
+
+
+  it('keeps migrated tools in the tool-only runtime without legacy repair routing', () => {
+    const source = readFileSync(new URL('../src/services/agentRuntime.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toContain('LEGACY_ACTION_TOOL_NAMES');
+    expect(source).not.toContain('buildLegacyActionDecisionFeedback');
+    expect(source).not.toContain('legacy_command');
+    expect(source).not.toContain('isToolBackedMigratedCommandQuery');
+    expect(source).toContain('validateToolCallSafety');
+  });
+
+  it('does not repair migrated cleanup blocks into legacy commands', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'blocked',
+        message: '채팅 삭제는 구조화된 도구 확인으로만 처리해요...',
+        blockedTools: ['command.cleanup']
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '내 채팅 10개 지워줘', makeOptions());
+
+    expect(outcome).toEqual({
+      kind: 'blocked',
+      message: '채팅 삭제는 구조화된 도구 확인으로만 처리해요...',
+      blockedTools: ['command.cleanup']
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not repair migrated settings or memory blocks into legacy commands', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '설정 변경은 구조화된 도구 확인으로만 처리해요...', blockedTools: ['settings.prefix'] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '기억삭제는 구조화된 도구 확인으로만 처리해요...', blockedTools: ['memory.delete'] }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await expect(runtime.run(makeMessage(), '프리픽스 ~로 바꿔줘', makeOptions())).resolves.toEqual({ kind: 'blocked', message: '설정 변경은 구조화된 도구 확인으로만 처리해요...', blockedTools: ['settings.prefix'] });
+    await expect(runtime.run(makeMessage(), '서버 AI 기억 초기화해줘', makeOptions())).resolves.toEqual({ kind: 'blocked', message: '기억삭제는 구조화된 도구 확인으로만 처리해요...', blockedTools: ['memory.delete'] });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses structured cleanup tools for migrated cleanup requests', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'tool_calls',
+        calls: [{ id: 'cleanup', tool: 'command.mass_cleanup', input: { target: 'channel', count: 5 } }]
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '전체 채팅 5개 지워줘', makeOptions());
+
+    expect(outcome).toMatchObject({
+      kind: 'confirmation_required',
+      intent: 'command.mass_cleanup',
+      commandQuery: '대청소 5'
+    });
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
   });
 
 
   it('asks the model to generate a clarifying question for cleanup prompts without a count or scope', async () => {
     const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'blocked',
-          message: '채팅 삭제는 차단된 기능입니다.',
-          blockedTools: ['command.cleanup']
-        }))
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'clarify',
-          message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
-        }))
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'clarify',
+        message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
+      }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
@@ -914,46 +1009,26 @@ describe('AgentRuntime', () => {
       kind: 'clarify',
       message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
     });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('대상이 생략되면 요청자 본인 메시지라고 단정하지 마세요');
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('필수 구조화 필드가 부족하면 clarify');
   });
 
-
-  it('asks the model to repair other single confirmation-gated action blocks through legacy commands', async () => {
-    const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['settings.prefix'] }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '프리픽스 ~' }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['settings.tts_channel'] }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: 'tts채널' }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '차단됨', blockedTools: ['memory.delete'] }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '기억삭제' }))
-    };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
-
-    await expect(runtime.run(makeMessage(), '프리픽스 ~로 바꿔줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: '프리픽스 ~' });
-    await expect(runtime.run(makeMessage(), '여기를 tts 채널로 설정해줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: 'tts채널' });
-    await expect(runtime.run(makeMessage(), '서버 AI 기억 초기화해줘', makeOptions())).resolves.toEqual({ kind: 'legacy_command', query: '기억삭제' });
-    expect(ai.askMessages).toHaveBeenCalledTimes(6);
-  });
 
 
   it('asks who to delete when counted cleanup omits the target', async () => {
     const ai = {
-      askMessages: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3' }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '누구 채팅 3개를 지울까요? 본인 메시지라면 내꺼라고 말해 주세요.' }))
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'clarify',
+        message: '누구 채팅 3개를 지울까요? 본인 메시지라면 내꺼라고 말해 주세요.'
+      }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
 
     expect(outcome).toEqual({ kind: 'clarify', message: '누구 채팅 3개를 지울까요? 본인 메시지라면 내꺼라고 말해 주세요.' });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('그냥 "채팅 3개"처럼 대상이 생략되면');
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('대상이 불명확하면 legacy_command를 내지 말고 clarify JSON으로 누구 채팅을 지울지 자연스럽게 물어보세요');
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('필수 구조화 필드가 부족하면 clarify');
   });
 
 
@@ -961,7 +1036,10 @@ describe('AgentRuntime', () => {
     const ai = {
       askMessages: vi
         .fn()
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { target: 'self', count: 3, evidence: '내 채팅' } }]
+        }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '누구 채팅 3개를 지울까요?' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
@@ -970,25 +1048,34 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({ kind: 'clarify', message: '누구 채팅 3개를 지울까요?' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('cleanupEvidence는 사용자 말이나 이전 clarify 후속에서 본인 메시지임을 드러내는 원문 일부를 그대로 복사');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('도구 호출 안전 검증');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('command.cleanup');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"field":"evidence"');
   });
 
-  it('allows explicit requester cleanup to become a legacy cleanup command', async () => {
+  it('returns a structured confirmation for explicit requester cleanup tools', async () => {
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self', cleanupEvidence: '내 채팅' }))
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'tool_calls',
+        calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { target: 'self', count: 3, evidence: '내 채팅' } }]
+      }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '내 채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self', cleanupEvidence: '내 채팅' });
+    expect(outcome).toMatchObject({
+      kind: 'confirmation_required',
+      intent: 'command.cleanup',
+      commandQuery: '청소 3',
+      payload: { target: 'self', count: 3, evidence: '내 채팅' }
+    });
   });
 
   it('does not allow another user cleanup to be rewritten as requester cleanup', async () => {
     const ai = {
       askMessages: vi
         .fn()
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'other' }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.', blockedTools: ['command.cleanup'] }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
@@ -996,10 +1083,10 @@ describe('AgentRuntime', () => {
     const outcome = await runtime.run(makeMessage(), '다른 사람 채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
 
     expect(outcome).toEqual({ kind: 'blocked', message: '특정 다른 사람 메시지만 지우는 기능은 지원하지 않아요.', blockedTools: ['command.cleanup'] });
-    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps cleanup clarification context so short follow-up answers can become legacy commands', async () => {
+  it('keeps cleanup clarification context so short follow-up answers can become structured cleanup confirmations', async () => {
     const ai = {
       askMessages: vi
         .fn()
@@ -1008,7 +1095,10 @@ describe('AgentRuntime', () => {
           message: '테스터님 메시지를 지울까요, 아니면 채널 전체를 지울까요? 몇 개를 지울지도 알려 주세요.'
         }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self', cleanupEvidence: '내꺼' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { target: 'self', count: 3, evidence: '내꺼' } }]
+        }))
     };
     const store = new AgentTurnContextStore();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
@@ -1016,7 +1106,7 @@ describe('AgentRuntime', () => {
     await runtime.run(makeMessage(), '채팅 3개 지워봐', makeOptions({ requesterDisplayName: '테스터' }));
     const outcome = await runtime.run(makeMessage(), '내꺼', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 3', cleanupTarget: 'self', cleanupEvidence: '내꺼' });
+    expect(outcome).toMatchObject({ kind: 'confirmation_required', commandQuery: '청소 3' });
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('이전 agent 문맥 JSON');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('이전 사용자 요청: 채팅 3개 지워봐');
@@ -1045,7 +1135,10 @@ describe('AgentRuntime', () => {
             missing: ['count']
           }
         }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cleanup', tool: 'command.mass_cleanup', input: { target: 'channel', count: 5 } }]
+        }))
     };
     const store = new AgentTurnContextStore();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
@@ -1054,7 +1147,7 @@ describe('AgentRuntime', () => {
     await runtime.run(makeMessage(), '전체', makeOptions({ requesterDisplayName: '테스터' }));
     const outcome = await runtime.run(makeMessage(), '5', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '대청소 5', cleanupTarget: 'channel' });
+    expect(outcome).toMatchObject({ kind: 'confirmation_required', commandQuery: '대청소 5' });
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"originalPrompt":"채팅 지워봐"');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('"target":"channel"');
@@ -1076,7 +1169,10 @@ describe('AgentRuntime', () => {
             missing: ['count']
           }
         }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'legacy_command', query: '청소 5', cleanupTarget: 'self', cleanupEvidence: '내 채팅' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cleanup', tool: 'command.cleanup', input: { target: 'self', count: 5, evidence: '내 채팅' } }]
+        }))
     };
     const store = new AgentTurnContextStore();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), store);
@@ -1084,7 +1180,7 @@ describe('AgentRuntime', () => {
     await runtime.run(makeMessage(), '내 채팅 지워줘', makeOptions({ requesterDisplayName: '테스터' }));
     const outcome = await runtime.run(makeMessage(), '5', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'legacy_command', query: '청소 5', cleanupTarget: 'self', cleanupEvidence: '내 채팅' });
+    expect(outcome).toMatchObject({ kind: 'confirmation_required', commandQuery: '청소 5' });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('"cleanupEvidence":"내 채팅"');
   });
@@ -1158,6 +1254,46 @@ describe('AgentRuntime', () => {
   });
 
 
+
+  it('returns settings and memory confirmation requests through the common tool path', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'tool_calls',
+        calls: [{ id: 'prefix', tool: 'settings.prefix', input: { action: 'set', prefix: '~' } }]
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '프리픽스를 바꿔줘', makeOptions());
+
+    expect(outcome).toMatchObject({
+      kind: 'confirmation_required',
+      intent: 'settings.prefix',
+      commandQuery: '프리픽스 ~'
+    });
+  });
+
+  it('feeds settings validation errors back as structured observations', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'tts', tool: 'settings.tts_channel', input: { action: 'set' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '어느 채널로 설정할까요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), 'tts 채널 설정해줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'clarify', message: '어느 채널로 설정할까요...' });
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"settings.tts_channel"');
+    expect(observationPrompt).toContain('"code":"validation_error"');
+    expect(observationPrompt).toContain('"field":"channelRef"');
+  });
+
   it('uses AI to decide pending confirmation replies', async () => {
     const ai = {
       askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'confirm_pending' }))
@@ -1169,8 +1305,8 @@ describe('AgentRuntime', () => {
     }));
 
     expect(outcome).toEqual({ kind: 'confirm_pending' });
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('대기 중인 확인 작업 JSON');
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('짧은 긍정 답변');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('pendingConfirmation=');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('명확히 승인하면 confirm_pending');
   });
 
   it('retries not_handled pending confirmation replies through AI instead of code keywords', async () => {
@@ -1190,6 +1326,233 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('사용자 답변의 의미를 판단');
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('짧은 긍정');
+  });
+
+
+  it('does not re-execute repeated time.in_zone calls and steers the model to answer from the existing observation', async () => {
+    const diagnostics: unknown[] = [];
+    const repeatedCall = {
+      kind: 'tool_calls',
+      calls: [{ id: 'seoul', tool: 'time.in_zone', input: { timeZone: 'Asia/Seoul', label: '서울' } }]
+    };
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'seoul-again', tool: 'time.in_zone', input: { timeZone: 'Asia/Seoul', label: '서울' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '서울 시간 관찰값 기준으로 답할게요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '서울 지금 몇 시야', makeOptions({
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({ kind: 'final', message: '서울 시간 관찰값 기준으로 답할게요...' });
+    expect(diagnostics.filter((event) => (event as { event?: string; toolName?: string }).event === 'tool_call' && (event as { toolName?: string }).toolName === 'time.in_zone')).toHaveLength(1);
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'tool_observation_already_available' })
+    ]));
+    const repairPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
+    expect(repairPrompt).toContain('반복 도구: time.in_zone');
+    expect(repairPrompt).toContain('이미 성공한 같은 입력의 도구를 다시 호출하지 말고');
+  });
+
+  it('allows the same read-only tool with different structured input', async () => {
+    const diagnostics: unknown[] = [];
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'seoul', tool: 'time.in_zone', input: { timeZone: 'Asia/Seoul', label: '서울' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'new-york', tool: 'time.in_zone', input: { timeZone: 'America/New_York', label: '뉴욕' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '서울과 뉴욕 시간을 확인했어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '서울이랑 뉴욕 지금 몇 시야', makeOptions({
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({ kind: 'final', message: '서울과 뉴욕 시간을 확인했어요...' });
+    expect(diagnostics.filter((event) => (event as { event?: string; toolName?: string }).event === 'tool_call' && (event as { toolName?: string }).toolName === 'time.in_zone')).toHaveLength(2);
+  });
+
+  it('does not re-execute repeated safe-action tools with the same input', async () => {
+    const voiceSpeak = vi.fn(async () => ({ message: '음성으로 말했어요...', text: '안녕', autoJoined: false, channelId: 'voice-1' }));
+    const repeatedCall = {
+      kind: 'tool_calls',
+      calls: [{ id: 'speak', tool: 'voice.speak', input: { text: '안녕' } }]
+    };
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'speak-again', tool: 'voice.speak', input: { text: '안녕' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '이미 음성으로 말했어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ voiceSpeak }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '안녕이라고 말해', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '이미 음성으로 말했어요...' });
+    expect(voiceSpeak).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('반복 도구: voice.speak');
+  });
+
+  it('feeds unknown tools back as structured observations instead of parser errors', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'missing', tool: 'missing.tool', input: {} }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '등록되지 않은 도구예요...', blockedTools: ['missing.tool'] }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '없는 도구 호출해봐', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'blocked', message: '등록되지 않은 도구예요...', blockedTools: ['missing.tool'] });
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"missing.tool"');
+    expect(observationPrompt).toContain('"code":"unknown_tool"');
+  });
+
+  it('falls back from time observations when the model repeats after retry feedback', async () => {
+    const repeatedCall = {
+      kind: 'tool_calls',
+      calls: [{ id: 'seoul', tool: 'time.in_zone', input: { timeZone: 'Asia/Seoul', label: '서울' } }]
+    };
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+        .mockResolvedValueOnce(JSON.stringify(repeatedCall))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '서울 지금 몇 시야', makeOptions());
+
+    expect(outcome).toEqual({
+      kind: 'final',
+      message: expect.stringContaining('확인한 시간 관찰값 기준')
+    });
+    expect(outcome.kind === 'final' ? outcome.message : '').toContain('서울');
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses successful time observations as fallback after repeated parse errors', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'seoul', tool: 'time.in_zone', input: { timeZone: 'Asia/Seoul', label: '서울' } }]
+        }))
+        .mockResolvedValueOnce('not json')
+        .mockResolvedValueOnce('still not json')
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '서울 지금 몇 시야', makeOptions());
+
+    expect(outcome).toEqual({
+      kind: 'final',
+      message: expect.stringContaining('확인한 시간 관찰값 기준')
+    });
+    expect(outcome.kind === 'final' ? outcome.message : '').toContain('서울');
+  });
+
+  it('feeds structured validation observations with field and hint back to the model', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'bad-web', tool: 'web.search', input: { query: '', count: 99 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'unavailable', reason: 'web_search_unavailable', message: '웹 검색 입력을 고쳐야 해요...' }))
+    };
+    const webSearch = vi.fn();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ webSearch }), new AgentTurnContextStore());
+
+    await runtime.run(makeMessage(), '웹 검색해줘', makeOptions({
+      webSearch: { mode: 'explicit_only', provider: 'searxng', providerStatus: 'ready', resultCount: 3 }
+    }));
+
+    expect(webSearch).not.toHaveBeenCalled();
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"web.search"');
+    expect(observationPrompt).toContain('"code":"validation_error"');
+    expect(observationPrompt).toContain('"field":"query"');
+    expect(observationPrompt).toContain('"hint":"Fix the structured input field');
+  });
+
+  it('turns mixed read/action tool calls into structured blocked observations without executing tools', async () => {
+    const diagnostics: unknown[] = [];
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [
+            { id: 'time', tool: 'time.in_zone', input: { timeZone: 'Asia/Seoul', label: '서울' } },
+            { id: 'speak', tool: 'voice.speak', input: { text: '안녕' } }
+          ]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'blocked', message: '읽기와 실행 요청이 섞여 있어 처리하지 않았어요...', blockedTools: ['voice.speak'] }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '서울 시간 알려주고 안녕이라고 말해', makeOptions({
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({ kind: 'blocked', message: '읽기와 실행 요청이 섞여 있어 처리하지 않았어요...', blockedTools: ['voice.speak'] });
+    expect(diagnostics.filter((event) => (event as { stage?: string; event?: string }).stage === 'tool' && (event as { event?: string }).event === 'tool_call')).toHaveLength(0);
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"code":"mixed_tool_request"');
+    expect(observationPrompt).toContain('no tools were executed');
+  });
+
+  it('runs history.summarize through the same common observation loop with structured output', async () => {
+    const historySummarize = vi.fn(async () => ({ message: '배달 채널에서는 짬뽕지존 가격 이야기가 있었어요.' }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'summary', tool: 'history.summarize', input: { query: '짬뽕지존', mode: 'summary', messages: [{ content: '짬뽕지존 가격' }] } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '짬뽕지존 가격 이야기가 있었어요...' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySummarize }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '이 기록을 요약해줘', makeOptions());
+
+    expect(outcome).toEqual({ kind: 'final', message: '짬뽕지존 가격 이야기가 있었어요...' });
+    expect(historySummarize).toHaveBeenCalledWith(
+      { query: '짬뽕지존', mode: 'summary', messages: [{ content: '짬뽕지존 가격' }], searchRef: undefined },
+      expect.objectContaining({ nowMs: Date.parse('2026-05-22T18:15:00.000Z') })
+    );
+    const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    expect(observationPrompt).toContain('"toolName":"history.summarize"');
+    expect(observationPrompt).toContain('"status":"ok"');
+    expect(observationPrompt).toContain('배달 채널에서는 짬뽕지존 가격 이야기가 있었어요.');
   });
 
 });

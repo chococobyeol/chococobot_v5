@@ -8,7 +8,22 @@ import { extractErrorDetails, type AiChatMessage } from './services/aiService.js
 import { AiCommandPlanner } from './services/aiCommandPlanner.js';
 import { AgentRuntime, type AgentRuntimeDiagnostic } from './services/agentRuntime.js';
 import { AgentTurnContextStore } from './services/agentTurnContextStore.js';
-import { createDefaultToolRegistry, type HistorySearchInput, type HistorySearchOutput } from './services/toolRegistry.js';
+import {
+  AgentToolExecutionError,
+  createDefaultToolRegistry,
+  type AgentToolExecutionContext,
+  type HistorySearchInput,
+  type HistorySearchOutput,
+  type TtsEngineInput,
+  type TtsEngineOutput,
+  type TtsVoicePresetInput,
+  type TtsVoicePresetOutput,
+  type UserTimezoneInput,
+  type UserTimezoneOutput,
+  type VoiceSpeakInput,
+  type VoiceSpeakOutput,
+  type VoiceStopOutput
+} from './services/toolRegistry.js';
 import { createWebSearchProvider, type WebSearchMode, type WebSearchProvider } from './services/webSearchService.js';
 import { AiChatService, parseAiChatTrigger } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
@@ -1259,6 +1274,14 @@ function confirmationPreviewForSafety(safety: CommandSafety): string {
   }
 }
 
+function requiresAdministratorForConfirmation(intent: ConfirmationScope['intent'] | undefined): boolean {
+  return intent === 'prefix-change'
+    || intent === 'memory-reset'
+    || intent === 'watch-channel'
+    || intent === 'ai-channel'
+    || intent === 'web-search';
+}
+
 async function logPlannerDiagnostic(
   message: Message,
   context: BotContext,
@@ -1378,6 +1401,10 @@ async function dispatchPlannerCommand(
   if (safety.level === 'needs-confirmation' || safety.level === 'destructive') {
     if (!safety.intent) {
       await message.reply({ content: '이 명령은 확인이 필요해요... 어떤 작업인지 다시 말해 주세요...', allowedMentions: { repliedUser: false } });
+      return true;
+    }
+    if (requiresAdministratorForConfirmation(safety.intent) && !message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+      await message.reply({ content: '서버 관리자만 이 설정을 바꿀 수 있어요...', allowedMentions: { repliedUser: false } });
       return true;
     }
     if (safety.intent === 'cleanup' && safety.level === 'destructive' && !hasManageMessages(message.member?.permissions)) {
@@ -1593,6 +1620,196 @@ async function executeHistorySearchTool(
     matchedMessages: isTopicLookup ? filteredHistory.length : history.length,
     usedMessages: usedHistory.length,
     evidence: usedHistory.slice(0, 20).map(toHistoryEvidence)
+  };
+}
+
+function resolveVoiceToolContext(executionContext: AgentToolExecutionContext): { message: Message; context: BotContext } {
+  const message = executionContext.message as Message | undefined;
+  const context = executionContext.botContext as BotContext | undefined;
+  if (!message || !context) {
+    throw new AgentToolExecutionError(
+      'voice_context_missing',
+      'Voice tool execution context is unavailable.',
+      'Retry only when the runtime provides the triggering Discord message and bot context.'
+    );
+  }
+  return { message, context };
+}
+
+async function executeVoiceJoinTool(_input: Record<string, never>, executionContext: AgentToolExecutionContext): Promise<{ message: string; channelId?: string }> {
+  const { message, context } = resolveVoiceToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버에서만 사용할 수 있어요...', 'Ask the user to use this in a server channel.');
+  }
+  const member = requireGuildMember(message);
+  if (!member.voice.channel) {
+    throw new AgentToolExecutionError('user_not_in_voice', '먼저 음성 채널에 들어가 주세요...', 'Ask the user to join a voice channel first.');
+  }
+  await context.voice.join(member);
+  await context.activityLog.logVoiceConnection({
+    guildId: message.guildId,
+    guildName: message.guild?.name,
+    channelId: member.voice.channel.id,
+    message: 'voice joined'
+  });
+  return { message: '음성 채널에 연결했어요...', channelId: member.voice.channel.id };
+}
+
+async function executeVoiceLeaveTool(_input: Record<string, never>, executionContext: AgentToolExecutionContext): Promise<{ message: string }> {
+  const { message, context } = resolveVoiceToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버에서만 사용할 수 있어요...', 'Ask the user to use this in a server channel.');
+  }
+  if (!context.voice.isConnected(message.guildId)) {
+    throw new AgentToolExecutionError('voice_not_connected', '봇이 음성 채널에 연결되어 있지 않아요...', 'Explain that the bot is not currently connected to a voice channel.');
+  }
+  context.voice.leave(message.guildId);
+  await context.activityLog.logVoiceConnection({
+    guildId: message.guildId,
+    guildName: message.guild?.name,
+    message: 'voice left'
+  });
+  return { message: '음성 채널에서 나왔어요...' };
+}
+
+async function executeVoiceStopTool(_input: Record<string, never>, executionContext: AgentToolExecutionContext): Promise<VoiceStopOutput> {
+  const { message, context } = resolveVoiceToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버에서만 사용할 수 있어요...', 'Ask the user to use this in a server channel.');
+  }
+  if (!context.voice.isConnected(message.guildId)) {
+    throw new AgentToolExecutionError('voice_not_connected', '봇이 음성 채널에 연결되어 있지 않아요...', 'Explain that the bot is not currently connected to a voice channel.');
+  }
+  const stopped = context.voice.stopPlayback(message.guildId);
+  return { message: '재생을 멈췄어요...', stopped };
+}
+
+async function executeVoiceSpeakTool(input: VoiceSpeakInput, executionContext: AgentToolExecutionContext): Promise<VoiceSpeakOutput> {
+  const { message, context } = resolveVoiceToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버에서만 사용할 수 있어요...', 'Ask the user to use this in a server channel.');
+  }
+  if (input.text.length > MAX_TTS_COMMAND_CHARS) {
+    throw new AgentToolExecutionError('validation_error', `한 번에 ${MAX_TTS_COMMAND_CHARS}자까지만 읽을 수 있어요...`, 'Shorten the text before calling voice.speak again.', 'error', 'text');
+  }
+  const member = requireGuildMember(message);
+  let autoJoined = false;
+  let channelId = member.voice.channel?.id;
+  if (!context.voice.isConnected(message.guildId)) {
+    if (!member.voice.channel) {
+      throw new AgentToolExecutionError('user_not_in_voice', '먼저 음성 채널에 들어가 주세요...', 'Ask the user to join a voice channel first.');
+    }
+    await context.voice.join(member);
+    autoJoined = true;
+    channelId = member.voice.channel.id;
+    await context.activityLog.logVoiceConnection({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId,
+      message: 'voice auto-joined for tts'
+    });
+  }
+  await context.activityLog.logTtsRequest({
+    guildId: message.guildId,
+    guildName: message.guild?.name,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userName: message.author.username,
+    source: 'command',
+    engine: context.voice.getUserTtsEngine(message.guildId, message.author.id),
+    voice: context.voice.getUserVoicePreset(message.guildId, message.author.id),
+    text: input.text
+  });
+  const played = await context.voice.speak(message.guildId, input.text, message.author.id);
+  if (!played) {
+    const voiceError = context.voice.getLastError(message.guildId);
+    await context.activityLog.logError({
+      guildId: message.guildId,
+      guildName: message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.author.username,
+      commandName: 'voice.speak',
+      summary: `text=${input.text.slice(0, 500)}`,
+      error: new Error(voiceError ? `TTS synthesis/playback failed: ${voiceError}` : 'TTS synthesis/playback failed')
+    });
+    throw new AgentToolExecutionError('tts_playback_failed', voiceError ?? 'TTS synthesis/playback failed', 'Tell the user voice playback failed and suggest retrying later.');
+  }
+  return { message: '음성으로 말했어요...', text: input.text, autoJoined, channelId };
+}
+
+async function executeTtsVoicePresetTool(input: TtsVoicePresetInput, executionContext: AgentToolExecutionContext): Promise<TtsVoicePresetOutput> {
+  const { message, context } = resolveVoiceToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버에서만 사용할 수 있어요...', 'Ask the user to use this in a server channel.');
+  }
+  const available = context.voice.listVoicePresets();
+  if (input.action === 'status') {
+    const current = context.voice.getUserVoicePreset(message.guildId, message.author.id) ?? '기본값';
+    return { message: `현재 음색은 ${current}예요... 사용 가능: ${available.join(', ')}`, current, available };
+  }
+  try {
+    context.voice.setUserVoicePreset(message.guildId, message.author.id, input.preset ?? '');
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new AgentToolExecutionError('validation_error', errorMessage, `Choose one of: ${available.join(', ')}`, 'error', 'preset');
+  }
+  return { message: `내 TTS 음색을 ${input.preset}로 저장했어요...`, current: input.preset, available };
+}
+
+async function executeTtsEngineTool(input: TtsEngineInput, executionContext: AgentToolExecutionContext): Promise<TtsEngineOutput> {
+  const { message, context } = resolveVoiceToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버에서만 사용할 수 있어요...', 'Ask the user to use this in a server channel.');
+  }
+  const available = context.voice.listTtsEngines();
+  if (input.action === 'status') {
+    const current = context.voice.getUserTtsEngine(message.guildId, message.author.id);
+    return { message: `현재 엔진은 ${current}예요... 사용 가능: ${available.join(', ')}`, current, available };
+  }
+  if (input.action === 'clear') {
+    context.voice.clearUserTtsEngine(message.guildId, message.author.id);
+    const current = context.voice.getUserTtsEngine(message.guildId, message.author.id);
+    return { message: 'TTS 엔진 설정을 기본값으로 되돌렸어요...', current, available };
+  }
+  const engine = normalizeTtsEngineName(input.engine ?? '');
+  if (!engine) {
+    throw new AgentToolExecutionError('validation_error', `알 수 없는 TTS 엔진이에요. 사용 가능: ${available.join(', ')}`, `Choose one of: ${available.join(', ')}`, 'error', 'engine');
+  }
+  context.voice.setUserTtsEngine(message.guildId, message.author.id, engine);
+  return { message: `내 TTS 엔진을 ${engine}로 저장했어요...`, current: engine, available };
+}
+
+async function executeUserTimezoneTool(input: UserTimezoneInput, executionContext: AgentToolExecutionContext): Promise<UserTimezoneOutput> {
+  const { message, context } = resolveVoiceToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버에서만 사용할 수 있어요...', 'Ask the user to use this in a server channel.');
+  }
+  if (input.action === 'status') {
+    const current = context.voiceSettings.getUserTimeZone(message.guildId, message.author.id);
+    return {
+      message: current
+        ? `내 시간대는 ${current}예요...`
+        : `내 시간대가 아직 없어요... 지금 시간 질문은 ${context.settings.botTimeZone} 기준으로 답해요...`,
+      ...(current ? { current } : {}),
+      defaultTimeZone: context.settings.botTimeZone
+    };
+  }
+  if (input.action === 'clear') {
+    context.voiceSettings.setUserTimeZone(message.guildId, message.author.id, undefined);
+    return {
+      message: `시간대 설정을 지웠어요... 이제 ${context.settings.botTimeZone} 기준으로 답해요...`,
+      defaultTimeZone: context.settings.botTimeZone
+    };
+  }
+  if (!input.timeZone || !isValidTimeZone(input.timeZone)) {
+    throw new AgentToolExecutionError('validation_error', '알 수 없는 시간대예요... 예: Asia/Seoul, America/Los_Angeles, America/New_York', 'Use a valid IANA time zone such as Asia/Seoul.', 'error', 'timeZone');
+  }
+  context.voiceSettings.setUserTimeZone(message.guildId, message.author.id, input.timeZone);
+  return {
+    message: `내 시간대를 ${input.timeZone}로 저장했어요...`,
+    current: input.timeZone,
+    defaultTimeZone: context.settings.botTimeZone
   };
 }
 
@@ -1969,7 +2186,25 @@ async function handleAiPrompt(
           providerStatus: context.webSearchProvider?.status() ?? 'unavailable',
           resultCount: context.settings.webSearchResultCount
         },
-        executionContext: { nowMs: message.createdTimestamp, message, botContext: context },
+        executionContext: {
+          nowMs: message.createdTimestamp,
+          message,
+          botContext: context,
+          runtime: {
+            prefix,
+            currentChannelId: message.channelId,
+            requesterDisplayName: requesterDisplayName(message),
+            availableChannels: listTextChannelCandidates(message),
+            userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
+            botVoiceConnected: context.voice.isConnected(message.guildId),
+            webSearch: {
+              mode: getGuildWebSearchMode(context, message.guildId),
+              provider: context.settings.webSearchProvider,
+              providerStatus: context.webSearchProvider?.status() ?? 'unavailable',
+              resultCount: context.settings.webSearchResultCount
+            }
+          }
+        },
         onDiagnostic: (details) => logAgentDiagnostic(message, context, details)
       });
       switch (outcome.kind) {
@@ -1980,12 +2215,12 @@ async function handleAiPrompt(
           clearPendingChannelHistoryRequest(message);
           await replyWithChunks(message, outcome.message);
           return true;
-        case 'legacy_command':
-          return dispatchPlannerCommand(message, commands, context, confirmations, outcome.query, { allowUserCleanupWithoutConfirmation: true });
+        case 'confirmation_required':
+          clearPendingChannelHistoryRequest(message);
+          return dispatchPlannerCommand(message, commands, context, confirmations, outcome.commandQuery);
         case 'confirm_pending':
           return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
         case 'not_handled':
-          if (outcome.reason === 'final_without_observation' && await handleAiCommandPlannerPrompt(message, prompt, prefix, commands, context, confirmations, pendingHistoryRequest, pendingConfirmation)) return true;
           if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
           await context.aiChat.handlePrompt(message, prompt);
           return true;
@@ -2113,7 +2348,14 @@ export async function createBot(
     createDefaultToolRegistry({
       historySearch: (input, executionContext) =>
         executeHistorySearchTool(executionContext.message as Message, executionContext.botContext as BotContext, input),
-      webSearch: (input) => webSearchProvider.search(input)
+      webSearch: (input) => webSearchProvider.search(input),
+      voiceJoin: executeVoiceJoinTool,
+      voiceLeave: executeVoiceLeaveTool,
+      voiceStop: executeVoiceStopTool,
+      voiceSpeak: executeVoiceSpeakTool,
+      ttsVoicePreset: executeTtsVoicePresetTool,
+      ttsEngine: executeTtsEngineTool,
+      userTimezone: executeUserTimezoneTool
     }),
     agentTurnContextStore
   );
