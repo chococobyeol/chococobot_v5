@@ -30,6 +30,59 @@ function makeOptions(overrides: Record<string, unknown> = {}) {
 }
 
 describe('AgentRuntime', () => {
+  it('recovers safe status/action aliases for non-tool envelopes without retrying', async () => {
+    const statusAi = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ status: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+    const actionAi = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ action: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+
+    const statusRuntime = new AgentRuntime(statusAi as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+    const actionRuntime = new AgentRuntime(actionAi as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await expect(statusRuntime.run(makeMessage(), '안녕', makeOptions())).resolves.toEqual({ kind: 'not_handled' });
+    await expect(actionRuntime.run(makeMessage(), '안녕', makeOptions())).resolves.toEqual({ kind: 'not_handled' });
+    expect(statusAi.askMessages).toHaveBeenCalledTimes(1);
+    expect(actionAi.askMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not recover status/action aliases into executable tool calls', async () => {
+    const historySearch = vi.fn(async () => ({
+      scope: 'channel',
+      channelId: 'channel-1',
+      query: '',
+      scannedChannels: 1,
+      matchedMessages: 1,
+      usedMessages: 1,
+      evidence: [{ channelId: 'channel-1', authorName: '테스터', timestamp: '2026-05-22T18:00:00.000Z', content: '배달 이야기' }]
+    }));
+    const diagnostics: unknown[] = [];
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          status: 'tool_calls',
+          calls: [{ id: 'history', tool: 'history.search', input: { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary' } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), new AgentTurnContextStore());
+
+    await expect(runtime.run(makeMessage(), '배달 채널 내용 요약해봐', makeOptions({ onDiagnostic: (event: unknown) => diagnostics.push(event) }))).resolves.toEqual({ kind: 'not_handled' });
+
+    expect(historySearch).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'parse_error', validationErrors: expect.arrayContaining(['Unknown kind: (missing)']) })
+    ]));
+  });
+
   it('runs multiple read-only time tools before returning a Korean final answer', async () => {
     const ai = {
       askMessages: vi
@@ -465,10 +518,10 @@ describe('AgentRuntime', () => {
     expect(historySearch).toHaveBeenCalledTimes(1);
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
     const observationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
-    expect(observationPrompt.indexOf('도구 관찰 JSON:')).toBeLessThan(observationPrompt.indexOf('너는 Discord 봇 ChococoBot'));
+    expect(observationPrompt).toContain('도구 관찰 JSON:');
     expect(observationPrompt).toContain('짬뽕지존 홍대점');
     const retryPrompt = ai.askMessages.mock.calls[2][0].messages[0].content;
-    expect(retryPrompt.indexOf('재시도 지시:')).toBeLessThan(retryPrompt.indexOf('너는 Discord 봇 ChococoBot'));
+    expect(retryPrompt).toContain('재시도 지시:');
     expect(retryPrompt).toContain('이미 성공한 같은 입력의 도구를 다시 호출하지 말고');
     expect(retryPrompt).toContain('반복 도구: history.search');
     expect(retryPrompt).toContain('짬뽕지존 홍대점');

@@ -49,6 +49,26 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt.length).toBeLessThan(5200);
   });
 
+  it('keeps the output envelope contract before truncatable channel/tool context', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+    const availableChannels = Array.from({ length: 40 }, (_, index) => ({
+      id: `channel-${index}`,
+      name: `긴채널이름-${index}-${'가'.repeat(20)}`,
+      mention: `<#channel-${index}>`
+    }));
+
+    await runtime.run(makeMessage(), '배달 채널 내용 요약해봐', makeOptions({ availableChannels }));
+
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('top-level field는 반드시 kind');
+    expect(prompt).toContain('허용 kind');
+    expect(prompt).toContain('provider/native tool call');
+    expect(prompt).toContain('{"kind":"not_handled"}');
+    expect(prompt).toContain('{"kind":"tool_calls"');
+    expect(prompt).toContain('history.search');
+  });
+
   it('does not reintroduce long migrated-feature legacy_command exception blocks', async () => {
     const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());

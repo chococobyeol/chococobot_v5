@@ -1336,6 +1336,10 @@ function isRateLimitLike(error: unknown): boolean {
   return extractErrorDetails(error).status === 429;
 }
 
+function isNativeToolCallLeakError(error: unknown): boolean {
+  return /Tool choice is none, but model called a tool/iu.test(extractErrorDetails(error).errorMessage);
+}
+
 async function logAgentDiagnostic(
   message: Message,
   context: BotContext,
@@ -1961,6 +1965,16 @@ async function handleNaturalLanguageRoute(
   }
 }
 
+function isReadOnlyHistoryFallbackPrompt(prompt: string): boolean {
+  const normalized = prompt.trim();
+  if (!normalized) return false;
+  if (/(삭제|지워|청소|대청소|프리픽스|prefix|기억\s*삭제|초기화|들어와|입장|나가|퇴장|말해|읽어줘|tts|음성|설정|바꿔|변경)/iu.test(normalized)) {
+    return false;
+  }
+  return /(?:채널|서버|대화|내용|기록|메시지|채팅|히스토리)[\s\S]*(?:요약|정리|찾아|검색|알려|있나|있어|뭐|내용)/iu.test(normalized)
+    || /(?:요약해|요약해봐|찾아봐|검색해)[\s\S]*(?:채널|서버|대화|내용|기록|메시지|채팅|히스토리)/iu.test(normalized);
+}
+
 async function handlePendingChannelHistoryReply(
   message: Message,
   prompt: string,
@@ -2135,6 +2149,62 @@ async function handleAiCommandPlannerPrompt(
   }
 }
 
+async function handleReadOnlyHistoryFallbackPrompt(
+  message: Message,
+  prompt: string,
+  prefix: string,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  pendingHistoryRequest: PendingChannelHistoryRequest | undefined,
+  pendingConfirmation: PendingConfirmation | undefined
+): Promise<boolean> {
+  if (!message.guildId || !context.aiCommandPlanner || !isReadOnlyHistoryFallbackPrompt(prompt)) return false;
+  try {
+    const member = message.member as GuildMember | null;
+    const plan = await context.aiCommandPlanner.plan(message, prompt, {
+      prefix,
+      commands,
+      availableChannels: listTextChannelCandidates(message),
+      userVoiceChannel: member?.voice?.channel ? { id: member.voice.channel.id, name: member.voice.channel.name } : null,
+      botVoiceConnected: context.voice.isConnected(message.guildId),
+      maxCompletionTokens: context.settings.aiPlannerMaxCompletionTokens,
+      pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
+      pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
+      onDiagnostic: (details) => logPlannerDiagnostic(message, context, details)
+    });
+
+    switch (plan.kind) {
+      case 'channel-history':
+        if (isServerWideHistoryTarget(plan.targetChannelReference)) {
+          return handleGuildChannelHistoryPlan(message, plan.mode, plan.query, context);
+        }
+        return handleChannelHistoryPlan(
+          message,
+          {
+            kind: 'channel-history',
+            mode: plan.mode,
+            targetChannelReference: plan.targetChannelReference,
+            query: plan.query
+          },
+          context
+        );
+      case 'time':
+        return handleTimePlan(message, plan, context);
+      case 'clarify':
+      case 'unavailable':
+        await message.reply({ content: plan.message, allowedMentions: { repliedUser: false } });
+        return true;
+      case 'chat':
+      case 'command':
+      case 'confirm_pending':
+        return false;
+    }
+  } catch (error) {
+    await logPlannerDiagnostic(message, context, { event: isRateLimitLike(error) ? 'rate_limit' : 'error', error });
+    return false;
+  }
+}
+
 async function dispatchConfirmedPendingCommand(
   message: Message,
   commands: Collection<string, PrefixCommand>,
@@ -2222,6 +2292,7 @@ async function handleAiPrompt(
           return dispatchConfirmedPendingCommand(message, commands, context, confirmations);
         case 'not_handled':
           if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
+          if (await handleReadOnlyHistoryFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
           await context.aiChat.handlePrompt(message, prompt);
           return true;
       }
@@ -2231,7 +2302,14 @@ async function handleAiPrompt(
         await message.reply({ content: '지금 AI 요청이 몰려서 잠시 지연되고 있어요... 조금 뒤에 다시 시도해 주세요...', allowedMentions: { repliedUser: false } });
         return true;
       }
-      await logAgentDiagnostic(message, context, { stage: 'agent', event: 'error', error });
+      await logAgentDiagnostic(message, context, {
+        stage: 'agent',
+        event: 'error',
+        error,
+        decisionKind: isNativeToolCallLeakError(error) ? 'agent_native_tool_call_leak' : undefined
+      });
+      if (await handlePendingChannelHistoryReply(message, prompt, context)) return true;
+      if (await handleReadOnlyHistoryFallbackPrompt(message, prompt, prefix, commands, context, pendingHistoryRequest, pendingConfirmation)) return true;
       await context.aiChat.handlePrompt(message, prompt);
       return true;
     }

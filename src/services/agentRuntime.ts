@@ -12,6 +12,23 @@ const MAX_RETRIES = 1;
 const MAX_PROMPT_CHARS = 1800;
 const MAX_OBSERVATION_CHARS = 1400;
 const MAX_SYSTEM_CHARS = 5200;
+const AGENT_OUTPUT_CONTRACT = [
+  '너는 Discord 봇 ChococoBot의 bounded agent runtime이에요.',
+  '반드시 JSON 객체 하나만 출력하세요. 마크다운/코드펜스/설명 문장 금지.',
+  'top-level field는 반드시 kind입니다. status/action 같은 다른 top-level decision field를 쓰지 마세요.',
+  '허용 kind: tool_calls, final, clarify, unavailable, blocked, confirm_pending, not_handled.',
+  'provider/native tool call을 사용하지 마세요. 도구 호출도 JSON 텍스트 {"kind":"tool_calls","calls":[...]}로만 출력하세요.',
+  '도구 계약: AI는 의미를 판단해 허용 출력 중 하나를 고르고, 코드는 schema/policy/safety/loop만 검증해요.',
+  '도구가 필요하면 tool_calls만 사용하고 tool 목록의 name/policy/input schema를 그대로 따르세요.',
+  '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
+  '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
+  '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
+  '필수 구조화 필드가 부족하면 clarify와 pendingAction을 사용해요.',
+  '대기 중 확인 작업을 사용자가 명확히 승인하면 confirm_pending을 선택해요.',
+  '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요. 예: {"kind":"not_handled"}',
+  'final 스타일: 한국어 ChococoBot 말투, 짧게 확인+다음 맥락 하나, 느낌표/물음표/이모지 없이 ... 또는 해요로 종료.',
+  'outputs={"tool_calls":{"calls":[{"id":"call_1","tool":"registered.tool","input":{}}]},"final":{"message":"..."},"clarify":{"message":"...","pendingAction":{"kind":"cleanup|history","originalPrompt":"...","missing":["field"]}},"unavailable":{"message":"...","reason":"web_search_unavailable?"},"blocked":{"message":"...","blockedTools":["tool.name"]},"confirm_pending":{},"not_handled":{}}'
+].join('\n');
 
 export type AgentRuntimeOutcome =
   | { kind: 'final'; message: string }
@@ -366,28 +383,20 @@ export class AgentRuntime {
     observations: readonly AgentToolObservation[],
     validationFeedback: string | null
   ): AiChatMessage[] {
-    const system = truncate([
+    const dynamicContext = [
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined,
       observations.length ? `도구 관찰 JSON: ${formatObservationsForPrompt(observations)}` : undefined,
       priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 900)}` : undefined,
       options.pendingHistory ? `pendingHistory=${JSON.stringify(options.pendingHistory)}` : undefined,
       options.pendingConfirmation ? `pendingConfirmation=${JSON.stringify(options.pendingConfirmation)}` : undefined,
-      '너는 Discord 봇 ChococoBot의 bounded agent runtime이에요.',
-      '반드시 JSON 객체 하나만 출력하세요. 마크다운/코드펜스/설명 문장 금지.',
-      '도구 계약: AI는 의미를 판단해 허용 출력 중 하나를 고르고, 코드는 schema/policy/safety/loop만 검증해요.',
-      '도구가 필요하면 tool_calls만 사용하고 tool 목록의 name/policy/input schema를 그대로 따르세요.',
-      '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
-      '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
-      '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
-      '필수 구조화 필드가 부족하면 clarify와 pendingAction을 사용해요.',
-      '대기 중 확인 작업을 사용자가 명확히 승인하면 confirm_pending을 선택해요.',
-      '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요.',
-      'final 스타일: 한국어 ChococoBot 말투, 짧게 확인+다음 맥락 하나, 느낌표/물음표/이모지 없이 ... 또는 해요로 종료.',
-      `ctx=${formatRuntimeContextForPrompt(message, options)}`,
       `web=${formatWebSearchPolicy(options.webSearch)}`,
       `tools=${formatToolCatalogForPrompt(this.registry.list())}`,
-      'outputs={"tool_calls":{"calls":[{"id":"call_1","tool":"registered.tool","input":{}}]},"final":{"message":"..."},"clarify":{"message":"...","pendingAction":{"kind":"cleanup|history","originalPrompt":"...","missing":["field"]}},"unavailable":{"message":"...","reason":"web_search_unavailable?"},"blocked":{"message":"...","blockedTools":["tool.name"]},"confirm_pending":{},"not_handled":{}}'
-    ].filter(Boolean).join('\n'), MAX_SYSTEM_CHARS);
+      `ctx=${formatRuntimeContextForPrompt(message, options)}`
+    ].filter(Boolean).join('\n');
+    const system = [
+      AGENT_OUTPUT_CONTRACT,
+      truncate(dynamicContext, Math.max(0, MAX_SYSTEM_CHARS - AGENT_OUTPUT_CONTRACT.length - 1))
+    ].filter(Boolean).join('\n');
 
     return [
       { role: 'system', content: system },
@@ -545,7 +554,7 @@ function parseAgentEnvelope(response: string): ParseResult {
     return { ok: false, errors: [`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`] };
   }
   if (!isRecord(parsed)) return { ok: false, errors: ['Envelope must be an object'] };
-  const kind = typeof parsed.kind === 'string' ? parsed.kind : '';
+  const kind = parseEnvelopeKind(parsed);
   switch (kind) {
     case 'tool_calls': {
       if (!Array.isArray(parsed.calls)) return { ok: false, errors: ['tool_calls.calls must be an array'] };
@@ -595,6 +604,26 @@ function parseAgentEnvelope(response: string): ParseResult {
     default:
       return { ok: false, errors: [`Unknown kind: ${kind || '(missing)'}`] };
   }
+}
+
+function parseEnvelopeKind(parsed: Record<string, unknown>): string {
+  if (typeof parsed.kind === 'string') return parsed.kind;
+  const alias = typeof parsed.status === 'string'
+    ? parsed.status
+    : typeof parsed.action === 'string'
+      ? parsed.action
+      : '';
+  if (
+    alias === 'not_handled'
+    || alias === 'confirm_pending'
+    || alias === 'final'
+    || alias === 'clarify'
+    || alias === 'unavailable'
+    || alias === 'blocked'
+  ) {
+    return alias;
+  }
+  return '';
 }
 
 function findRepeatedSuccessfulToolCalls(

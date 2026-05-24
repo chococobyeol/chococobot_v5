@@ -1875,7 +1875,7 @@ describe('handleMessageCreate', () => {
     expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'agent answer' }));
   });
 
-  it('does not fall back to the AI planner after AgentRuntime rejects a no-tool final', async () => {
+  it('falls back to read-only channel history after AgentRuntime rejects a no-tool final', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({
       agentRuntime: {
@@ -1891,13 +1891,198 @@ describe('handleMessageCreate', () => {
       }
     });
     const message = makeMessage('!? 대화 내용 요약해봐');
+    const generalChannel = message.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'general-summary-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '일반 채널에서 점심 메뉴 이야기가 있었어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
     expect(context.agentRuntime.run).toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
+    expect(context.ai.askMessages).toHaveBeenCalledWith(expect.objectContaining({ usageScope: 'summary' }));
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('falls back to read-only channel history when AgentRuntime leaks a native tool call', async () => {
+    const commands = createPrefixCommands();
+    const nativeToolLeak = new Error('400 {"error":{"message":"Tool choice is none, but model called a tool","type":"invalid_request_error","code":"tool_use_failed"}}');
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => {
+          throw nativeToolLeak;
+        })
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '배달',
+          query: '배달 채널 내용 요약해봐'
+        }))
+      }
+    });
+    const message = makeMessage('!? 배달 채널 내용 요약해봐');
+    message.guild.channels.cache.set('delivery-1', {
+      id: 'delivery-1',
+      name: '배달',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: vi.fn(async () =>
+          [
+            {
+              id: 'delivery-message-1',
+              channelId: 'delivery-1',
+              createdTimestamp: Date.now(),
+              content: '오늘은 짬뽕지존 배달 얘기가 있었어요',
+              author: { id: 'user-1', username: 'tester', bot: false },
+              member: { displayName: '테스터' }
+            }
+          ] as any
+        )
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).toHaveBeenCalled();
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
+    expect(context.ai.askMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('오늘은 짬뽕지존 배달 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '채널 기록 답변' }));
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.activityLog.logAiDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'agent',
+      event: 'error',
+      decisionKind: 'agent_native_tool_call_leak'
+    }));
+  });
+
+  it('recovers pending channel-history replies before generic error fallback when AgentRuntime fails', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi
+          .fn()
+          .mockResolvedValueOnce({ kind: 'not_handled' })
+          .mockRejectedValueOnce(new Error('agent failed'))
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({
+          kind: 'channel-history',
+          mode: 'summary',
+          targetChannelReference: '서버 전체',
+          query: '짬뽕지존'
+        }))
+      }
+    });
+    const first = makeMessage('!? 대화내용중에 짬뽕지존에 관한 내용 있나 찾아봐');
+    const second = makeMessage('!? 배달');
+    const generalChannel = first.guild.channels.cache.get('channel-1') as any;
+    generalChannel.messages = {
+      fetch: vi.fn(async () =>
+        [
+          {
+            id: 'general-jjamppong-1',
+            channelId: 'channel-1',
+            createdTimestamp: Date.now(),
+            content: '짬뽕지존 얘기가 있었어요',
+            author: { id: 'user-1', username: 'tester', bot: false },
+            member: { displayName: '테스터' }
+          }
+        ] as any
+      )
+    };
+    const deliveryChannel = {
+      id: 'delivery-agent-error',
+      name: '배달',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: vi.fn(async () =>
+          [
+            {
+              id: 'delivery-jjamppong-1',
+              channelId: 'delivery-agent-error',
+              createdTimestamp: Date.now(),
+              content: '배달 채널에서 짬뽕지존 얘기가 있었어요',
+              author: { id: 'user-2', username: 'writer', bot: false },
+              member: { displayName: '작성자' }
+            }
+          ] as any
+        )
+      }
+    };
+    first.guild.channels.cache.set('delivery-agent-error', deliveryChannel);
+    second.guild.channels.cache.set('delivery-agent-error', deliveryChannel);
+
+    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
+    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+
+    expect(context.aiCommandPlanner.plan).toHaveBeenCalledTimes(1);
+    expect(context.ai.askMessages).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining('검색 주제: 짬뽕지존') }),
+          expect.objectContaining({ content: expect.stringContaining('채널: #배달') }),
+          expect.objectContaining({ content: expect.stringContaining('배달 채널에서 짬뽕지존 얘기가 있었어요') })
+        ])
+      })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+  });
+
+  it('does not execute command fallback after AgentRuntime errors on an action request', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => {
+          throw new Error('agent failed');
+        })
+      },
+      aiCommandPlanner: {
+        plan: vi.fn(async () => ({ kind: 'command', query: '들어와' }))
+      }
+    });
+    const message = makeMessage('!? 들어와');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.voice.join).not.toHaveBeenCalled();
     expect(context.aiCommandPlanner.plan).not.toHaveBeenCalled();
-    expect(context.ai.askMessages).not.toHaveBeenCalledWith(expect.objectContaining({ usageScope: 'summary' }));
-    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '대화 내용 요약해봐');
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '들어와');
+  });
+
+  it('preserves ordinary chat fallback after AgentRuntime errors', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => {
+          throw new Error('agent failed');
+        })
+      }
+    });
+    const message = makeMessage('!? 안녕');
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.aiChat.handlePrompt).toHaveBeenCalledWith(message, '안녕');
+    expect(context.voice.join).not.toHaveBeenCalled();
   });
 
   it('asks for clarification when AgentRuntime sees a cleanup request without count or scope', async () => {
