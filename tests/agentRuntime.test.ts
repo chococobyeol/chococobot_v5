@@ -1918,4 +1918,48 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('도구 관찰값을 이미 받았기 때문에');
   });
 
+  it('rejects malformed tarot clarify for topic/spreadCount and recovers with start_reading instead of chat fallback', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '일반 운세',
+      spreadCount: 3,
+      message: '일반 운세는 3장으로 볼게요. 1~78 사이 숫자 3개를 골라주세요.'
+    }));
+    const diagnostics: unknown[] = [];
+    const invalidTarotClarify = {
+      kind: 'clarify',
+      message: '타로를 보려면 주제와 카드 개수를 알려주세요',
+      pendingAction: {
+        kind: 'tarot',
+        originalPrompt: '타로봐줘',
+        missing: ['topic', 'spreadCount']
+      }
+    };
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify(invalidTarotClarify))
+        .mockResolvedValueOnce(JSON.stringify(invalidTarotClarify))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '타로봐줘', makeOptions({
+      requesterDisplayName: '테스터',
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '일반 운세는 3장으로 볼게요. 1~78 사이 숫자 3개를 골라주세요.'
+    });
+    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '일반 운세', spreadCount: 3 }, expect.any(Object));
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('tarot clarify cannot ask for topic or spreadCount');
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'agent', event: 'parse_error', validationErrors: expect.arrayContaining([expect.stringContaining('tarot clarify cannot ask')]) }),
+      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'recovered_malformed_tarot_start' }),
+      expect.objectContaining({ stage: 'tool', event: 'tool_call', toolName: 'tarot.start_reading' })
+    ]));
+  });
+
 });

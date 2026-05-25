@@ -25,6 +25,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
+  '타로/운세 요청은 topic/spreadCount를 사용자에게 묻지 말고 tarot.start_reading으로 시작하세요. 모호하면 topic="일반 운세", spreadCount=3을 고르세요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify+pendingAction을 사용하되, missing에는 사용자가 답할 수 있는 필드만 넣어요.',
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
@@ -103,7 +104,7 @@ type AgentToolCall = {
   input: unknown;
 };
 
-type ParseResult = { ok: true; envelope: AgentEnvelope } | { ok: false; errors: string[] };
+type ParseResult = { ok: true; envelope: AgentEnvelope } | { ok: false; errors: string[]; recovery?: AgentEnvelope };
 
 export class AgentRuntime {
   constructor(
@@ -163,21 +164,28 @@ export class AgentRuntime {
       });
 
       const parsed = parseAgentEnvelope(response);
+      let envelope: AgentEnvelope;
       if (!parsed.ok) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'parse_error', runId, iteration, validationErrors: parsed.errors, responseSnippet: response.slice(0, 500) });
-        if (validationFeedback) {
-          const fallback = buildObservationBasedFallbackOutcome(observations);
-          if (fallback) {
-            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-            return fallback;
+        if (validationFeedback && parsed.recovery) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_malformed_tarot_start' });
+          envelope = parsed.recovery;
+        } else {
+          if (validationFeedback) {
+            const fallback = buildObservationBasedFallbackOutcome(observations);
+            if (fallback) {
+              this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+              return fallback;
+            }
+            return validationFailureFallback ?? { kind: 'not_handled' };
           }
-          return validationFailureFallback ?? { kind: 'not_handled' };
+          validationFeedback = ['이전 응답은 사용할 수 없어요.', `오류: ${parsed.errors.join('; ')}`, '허용된 JSON 객체 하나로만 다시 답하세요.'].join('\n');
+          continue;
         }
-        validationFeedback = ['이전 응답은 사용할 수 없어요.', `오류: ${parsed.errors.join('; ')}`, '허용된 JSON 객체 하나로만 다시 답하세요.'].join('\n');
-        continue;
+      } else {
+        envelope = parsed.envelope;
       }
 
-      const envelope = parsed.envelope;
       if (envelope.kind === 'confirm_pending' && !options.pendingConfirmation) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'spurious_confirm_pending' });
         if (actionDecisionRetryRequested) return { kind: 'not_handled' };
@@ -682,6 +690,16 @@ function parseAgentEnvelope(response: string): ParseResult {
       if (!message) return { ok: false, errors: ['clarify.message must be non-empty'] };
       const pendingAction = parsePendingAction(parsed.pendingAction);
       if (parsed.pendingAction !== undefined && !pendingAction) {
+        const recoveredTarotStart = recoverTarotStartReadingCall(parsed.pendingAction);
+        if (recoveredTarotStart) {
+          return {
+            ok: false,
+            errors: [
+              'tarot clarify cannot ask for topic or spreadCount; when the AI chooses tarot/fortune intent it must call tarot.start_reading with topic and spreadCount; use topic="일반 운세" and spreadCount=3 for vague tarot requests'
+            ],
+            recovery: { kind: 'tool_calls', calls: [recoveredTarotStart] }
+          };
+        }
         return { ok: false, errors: ['clarify.pendingAction is invalid or uses unsupported missing fields; pendingAction missing fields must match the action; cleanup missing may only include target/count and must not ask for evidence; tarot missing may only include numbers'] };
       }
       return { ok: true, envelope: pendingAction ? { kind, message, pendingAction } : { kind, message } };
@@ -699,6 +717,24 @@ function parseAgentEnvelope(response: string): ParseResult {
     default:
       return { ok: false, errors: [`Unknown kind: ${kind || '(missing)'}`] };
   }
+}
+
+function recoverTarotStartReadingCall(raw: unknown): AgentToolCall | null {
+  if (!isRecord(raw) || raw.kind !== 'tarot') return null;
+  const rawTopic = typeof raw.topic === 'string' ? raw.topic.trim() : '';
+  const spreadCount = typeof raw.spreadCount === 'number' && Number.isInteger(raw.spreadCount) && raw.spreadCount >= 1 && raw.spreadCount <= 5
+    ? raw.spreadCount
+    : 3;
+  const spreadName = typeof raw.spreadName === 'string' && raw.spreadName.trim() ? raw.spreadName.trim() : undefined;
+  return {
+    id: 'tarot_start_repair',
+    tool: 'tarot.start_reading',
+    input: {
+      topic: rawTopic || '일반 운세',
+      spreadCount,
+      ...(spreadName ? { spreadName } : {})
+    }
+  };
 }
 
 function parseEnvelopeKind(parsed: Record<string, unknown>): string {
