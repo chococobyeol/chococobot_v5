@@ -2083,7 +2083,7 @@ describe('AgentRuntime', () => {
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
 
-    const outcome = await runtime.run(makeMessage(), '123', makeOptions({
+    const outcome = await runtime.run(makeMessage(), '1 2 3', makeOptions({
       requesterDisplayName: '테스터',
       tarotPending: { topic: '저녁 뭐 먹을지', spreadCount: 3 }
     }));
@@ -2091,6 +2091,24 @@ describe('AgentRuntime', () => {
     expect(tarotRevealSelection).toHaveBeenCalledWith({ numbers: [1, 2, 3] }, expect.any(Object));
     expect(outcome).toEqual({ kind: 'final', message: '가볍고 따뜻한 메뉴가 좋아 보여요...' });
     expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('"toolName":"tarot.reveal_selection"');
+  });
+
+  it('treats a contiguous tarot number like 123 as one out-of-range card number', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValue(JSON.stringify({ kind: 'not_handled' })) };
+    const tarotRevealSelection = vi.fn();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '123', makeOptions({
+      requesterDisplayName: '테스터',
+      tarotPending: { topic: '저녁 뭐 먹을지', spreadCount: 3 }
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '1~78 사이에서 골라주세요.'
+    });
+    expect(tarotRevealSelection).not.toHaveBeenCalled();
+    expect(ai.askMessages).not.toHaveBeenCalled();
   });
 
   it('gives immediate feedback for non-numeric active tarot selections without asking the model', async () => {

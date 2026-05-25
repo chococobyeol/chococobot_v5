@@ -52,6 +52,12 @@ describe('assertRuntimeSettings', () => {
 
 
 describe('deployment prompt defaults', () => {
+  it('copies tarot assets into the runtime Docker image', () => {
+    const dockerfile = readFileSync('Dockerfile', 'utf8');
+
+    expect(dockerfile).toContain('COPY assets ./assets');
+  });
+
   it('does not instruct deployed prompts to append polite suffixes', () => {
     const deploymentConfig = readFileSync('render.yaml', 'utf8');
     const envExample = readFileSync('.env.example', 'utf8');

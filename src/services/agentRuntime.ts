@@ -222,6 +222,21 @@ export class AgentRuntime {
         validationFeedback = buildPendingConfirmationFeedback(options.pendingConfirmation);
         continue;
       }
+      if (envelope.kind === 'not_handled' && hasUsableObservation(observations)) {
+        const fallback = buildObservationBasedFallbackOutcome(observations);
+        if (observationAnswerRetryRequested) {
+          if (fallback) {
+            await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'observation_based_final' });
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+          return { kind: 'not_handled' };
+        }
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'observation_answer_required' });
+        observationAnswerRetryRequested = true;
+        validationFeedback = buildObservationAnswerRequiredFeedback(observations);
+        continue;
+      }
       if (envelope.kind === 'not_handled' && (priorContext?.lastIntent === 'clarify' || priorContext?.pendingAction) && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'clarify_follow_up_required' });
         actionDecisionRetryRequested = true;
@@ -262,21 +277,6 @@ export class AgentRuntime {
         if (actionDecisionRetryRequested) return { kind: 'not_handled', reason: 'final_without_observation' };
         actionDecisionRetryRequested = true;
         validationFeedback = buildEmptyBlockedFeedback();
-        continue;
-      }
-      if (envelope.kind === 'not_handled' && hasUsableObservation(observations)) {
-        const fallback = buildObservationBasedFallbackOutcome(observations);
-        if (observationAnswerRetryRequested) {
-          if (fallback) {
-            await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'observation_based_final' });
-            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-            return fallback;
-          }
-          return { kind: 'not_handled' };
-        }
-        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'observation_answer_required' });
-        observationAnswerRetryRequested = true;
-        validationFeedback = buildObservationAnswerRequiredFeedback(observations);
         continue;
       }
       if (envelope.kind !== 'tool_calls') {
@@ -536,6 +536,10 @@ export class AgentRuntime {
     }
     const usedWebSearch = calls.some((call) => call.tool === 'web.search');
     const webSearchRelated = usedWebSearch || (envelope.kind === 'unavailable' && envelope.reason === 'web_search_unavailable');
+    const shouldClearTarotTopicPending = calls.some((call) => call.tool === 'tarot.start_reading');
+    const pendingAction = envelope.kind === 'clarify'
+      ? envelope.pendingAction ?? (shouldClearTarotTopicPending ? undefined : priorContext?.pendingAction)
+      : undefined;
     this.contextStore.set(key, {
       lastIntent: inferIntent(calls, envelope),
       lastUserPrompt: webSearchRelated ? '[redacted-web-search-prompt]' : prompt,
@@ -543,9 +547,7 @@ export class AgentRuntime {
       lastToolCalls: calls.map((call) => sanitizeToolCallForStoredContext(call)),
       slots,
       observations: observations.slice(-4).map((observation) => compactObservation(observation)),
-      ...(envelope.kind === 'clarify'
-        ? { pendingAction: envelope.pendingAction ?? priorContext?.pendingAction }
-        : {})
+      ...(pendingAction ? { pendingAction } : {})
     }, nowMs);
   }
 }
@@ -588,7 +590,7 @@ function buildDirectTarotSelectionResolution(
   tarotPending: AgentRuntimeOptions['tarotPending']
 ): { kind: 'call'; call: AgentToolCall } | { kind: 'outcome'; outcome: AgentRuntimeOutcome } | null {
   if (!tarotPending) return null;
-  const numbers = parseTarotSelectionNumbers(prompt, tarotPending.spreadCount);
+  const numbers = parseTarotSelectionNumbers(prompt);
   if (!numbers) {
     return {
       kind: 'outcome',
@@ -608,14 +610,11 @@ function buildDirectTarotSelectionResolution(
   };
 }
 
-function parseTarotSelectionNumbers(prompt: string, expectedCount: number): number[] | null {
+function parseTarotSelectionNumbers(prompt: string): number[] | null {
   const trimmed = prompt.trim();
   if (!trimmed || !/[0-9]/.test(trimmed)) return null;
   const numericTokens = trimmed.match(/[0-9]+/g) ?? [];
   if (!numericTokens.length) return null;
-  if (numericTokens.length === 1 && numericTokens[0].length === expectedCount && expectedCount > 1) {
-    return numericTokens[0].split('').map((digit) => Number(digit));
-  }
   return numericTokens.map((token) => Number(token));
 }
 

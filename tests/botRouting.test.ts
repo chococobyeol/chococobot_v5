@@ -293,8 +293,8 @@ describe('handleMessageCreate', () => {
           presentation: {
             title: '오늘 운세 타로',
             summary: '흐름 ▰▰▰▰▱',
-            files: [{ path: 'assets/tarot/07-TheChariot.png', name: 'tarot-07-TheChariot.png' }],
-            cards: [{ selectionNumber: 7, name: '전차', orientation: '정방향', attachmentName: 'tarot-07-TheChariot.png' }]
+            files: [{ path: 'assets/tarot/tarot_chariot.png', name: 'tarot-chariot.png' }],
+            cards: [{ selectionNumber: 7, name: '전차', orientation: '정방향', attachmentName: 'tarot-chariot.png' }]
           }
         }))
       }
@@ -309,6 +309,34 @@ describe('handleMessageCreate', () => {
       files: expect.any(Array)
     }));
   });
+
+  it('does not fail tarot replies when a trusted presentation file is missing', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({
+          kind: 'final',
+          message: '카드 해석은 텍스트로 보낼게요...',
+          presentation: {
+            title: '오늘 운세 타로',
+            summary: '흐름 ▰▰▰▱▱',
+            files: [{ path: 'assets/tarot/missing-card.png', name: 'missing-card.png' }],
+            cards: [{ selectionNumber: 7, name: '전차', orientation: '정방향', attachmentName: 'missing-card.png' }]
+          }
+        }))
+      }
+    });
+    const message = makeMessage('!? 7', { createdTimestamp: 1_500 });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: '카드 해석은 텍스트로 보낼게요...',
+      embeds: expect.any(Array)
+    }));
+    expect(message.reply).toHaveBeenCalledWith(expect.not.objectContaining({ files: expect.any(Array) }));
+  });
+
   it('keeps existing prefix commands ahead of the natural-language router', async () => {
     const commands = createPrefixCommands();
     const context = makeContext();

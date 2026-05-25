@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { AttachmentBuilder, ChannelType, Client, Collection, EmbedBuilder, Events, GatewayIntentBits, GuildMember, PermissionFlagsBits } from 'discord.js';
 import type { GuildTextBasedChannel, Message, TextChannel } from 'discord.js';
 import type { PrefixCommand } from './types.js';
@@ -1000,9 +1002,9 @@ async function replyWithTarotPresentation(message: Message, content: string, pre
   }
   const chunks = chunkDiscordMessage(content);
   const files = (presentation.files ?? [])
-    .filter((file) => file.path.startsWith('assets/tarot/') && !file.path.includes('..') && file.name.endsWith('.png'))
-    .slice(0, 5)
-    .map((file) => new AttachmentBuilder(file.path, { name: file.name }));
+    .map((file) => toTarotAttachment(file))
+    .filter((file): file is AttachmentBuilder => Boolean(file))
+    .slice(0, 5);
   const embed = new EmbedBuilder();
   if (presentation.title) embed.setTitle(presentation.title);
   const cardLines = (presentation.cards ?? []).map((card) => `${card.selectionNumber}. ${card.name} · ${card.orientation}`);
@@ -1021,6 +1023,18 @@ async function replyWithTarotPresentation(message: Message, content: string, pre
   for (const chunk of chunks.slice(1)) {
     await channel.send({ content: chunk, allowedMentions: { parse: [], repliedUser: false } });
   }
+}
+
+function toTarotAttachment(file: { path: string; name: string }): AttachmentBuilder | null {
+  if (!file.path.startsWith('assets/tarot/') || file.path.includes('..') || !file.name.endsWith('.png')) return null;
+  const tarotRoot = resolve('assets/tarot');
+  const absolutePath = resolve(file.path);
+  if (absolutePath !== tarotRoot && !absolutePath.startsWith(`${tarotRoot}${sep}`)) return null;
+  if (!existsSync(absolutePath)) {
+    logger.warn('Trusted tarot attachment file is missing:', absolutePath);
+    return null;
+  }
+  return new AttachmentBuilder(absolutePath, { name: file.name });
 }
 
 async function rememberAiExchange(context: BotContext, message: Message, prompt: string, answer: string): Promise<void> {

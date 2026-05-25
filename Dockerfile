@@ -55,6 +55,7 @@ RUN git clone --depth 1 --branch "${SEARXNG_REF}" "${SEARXNG_REPOSITORY}" "${SEA
 COPY --from=app-build /app/package*.json ./
 COPY --from=app-build /app/node_modules ./node_modules
 COPY --from=app-build /app/dist ./dist
+COPY assets ./assets
 COPY scripts/render-start.sh ./scripts/render-start.sh
 RUN chmod +x ./scripts/render-start.sh
 ENTRYPOINT ["/usr/bin/tini", "--"]
