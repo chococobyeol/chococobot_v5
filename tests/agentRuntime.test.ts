@@ -1854,7 +1854,51 @@ describe('AgentRuntime', () => {
       blockedTools: ['tarot.reveal_selection']
     });
     expect(JSON.stringify(outcome)).not.toContain('메시지 삭제');
-    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('타로 카드 선택 후속 답변');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('타로 pendingAction.missing에 numbers가 있으면');
+  });
+
+  it('asks for a tarot topic first when the request has no subject, then starts a spread from the follow-up', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '연애운',
+      spreadCount: 3,
+      message: '연애운은 3장으로 볼게요. 1~78 사이 숫자 3개를 골라주세요.'
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '무엇에 대해 타로를 볼까요?',
+          pendingAction: {
+            kind: 'tarot',
+            originalPrompt: '타로 봐줘',
+            missing: ['topic']
+          }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '연애운', spreadCount: 3 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '연애운은 3장으로 볼게요. 1~78 사이 숫자 3개를 골라주세요.' }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), store);
+
+    await expect(runtime.run(makeMessage(), '타로 봐줘', makeOptions({ requesterDisplayName: '테스터' }))).resolves.toEqual({
+      kind: 'clarify',
+      message: '무엇에 대해 타로를 볼까요?',
+      pendingAction: {
+        kind: 'tarot',
+        originalPrompt: '타로 봐줘',
+        missing: ['topic']
+      }
+    });
+    const outcome = await runtime.run(makeMessage(), '연애운', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({ kind: 'clarify', message: '연애운은 3장으로 볼게요. 1~78 사이 숫자 3개를 골라주세요.' });
+    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '연애운', spreadCount: 3 }, expect.any(Object));
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('타로 pendingAction.missing에 topic이 있으면');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('tarot.start_reading');
   });
 
   it('returns trusted tarot presentation metadata with the final interpretation', async () => {
@@ -1918,12 +1962,7 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('도구 관찰값을 이미 받았기 때문에');
   });
 
-  it('rejects malformed tarot clarify for topic/spreadCount and recovers with start_reading instead of chat fallback', async () => {
-    const tarotStartReading = vi.fn(async () => ({
-      topic: '일반 운세',
-      spreadCount: 3,
-      message: '일반 운세는 3장으로 볼게요. 1~78 사이 숫자 3개를 골라주세요.'
-    }));
+  it('rejects malformed tarot clarify that asks for spreadCount and recovers to a topic-only question', async () => {
     const diagnostics: unknown[] = [];
     const invalidTarotClarify = {
       kind: 'clarify',
@@ -1942,7 +1981,7 @@ describe('AgentRuntime', () => {
         .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
     };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '타로봐줘', makeOptions({
       requesterDisplayName: '테스터',
@@ -1951,14 +1990,17 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'clarify',
-      message: '일반 운세는 3장으로 볼게요. 1~78 사이 숫자 3개를 골라주세요.'
+      message: '무엇에 대해 타로를 볼까요?',
+      pendingAction: {
+        kind: 'tarot',
+        originalPrompt: '타로봐줘',
+        missing: ['topic']
+      }
     });
-    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '일반 운세', spreadCount: 3 }, expect.any(Object));
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('tarot clarify cannot ask for topic or spreadCount');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('tarot clarify may ask only for topic');
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stage: 'agent', event: 'parse_error', validationErrors: expect.arrayContaining([expect.stringContaining('tarot clarify cannot ask')]) }),
-      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'recovered_malformed_tarot_start' }),
-      expect.objectContaining({ stage: 'tool', event: 'tool_call', toolName: 'tarot.start_reading' })
+      expect.objectContaining({ stage: 'agent', event: 'parse_error', validationErrors: expect.arrayContaining([expect.stringContaining('tarot clarify may ask only for topic')]) }),
+      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'recovered_malformed_tarot_clarify' })
     ]));
   });
 

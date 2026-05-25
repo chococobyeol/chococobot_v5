@@ -31,10 +31,10 @@ export type AgentHistoryPendingAction = {
 export type AgentTarotPendingAction = {
   kind: 'tarot';
   originalPrompt: string;
-  topic: string;
-  spreadCount: number;
+  topic?: string;
+  spreadCount?: number;
   spreadName?: string;
-  missing: Array<'numbers'>;
+  missing: Array<'topic' | 'numbers'>;
 };
 
 export type AgentPendingAction = AgentCleanupPendingAction | AgentHistoryPendingAction | AgentTarotPendingAction;

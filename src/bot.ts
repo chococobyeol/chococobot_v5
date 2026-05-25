@@ -2579,6 +2579,7 @@ function rememberTarotClarifySession(message: Message, context: BotContext, outc
   const pending = outcome.pendingAction;
   const key = tarotSessionKeyFor(message);
   if (!key || !context.tarotSessions || pending?.kind !== 'tarot') return;
+  if (!pending.topic || !pending.spreadCount || !pending.missing.includes('numbers')) return;
   if (context.tarotSessions.get(key, message.createdTimestamp)) return;
   context.tarotSessions.start(key, {
     topic: pending.topic,

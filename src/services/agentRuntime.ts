@@ -25,7 +25,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
-  '타로/운세 요청은 topic/spreadCount를 사용자에게 묻지 말고 tarot.start_reading으로 시작하세요. 모호하면 topic="일반 운세", spreadCount=3을 고르세요.',
+  '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"])으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify+pendingAction을 사용하되, missing에는 사용자가 답할 수 있는 필드만 넣어요.',
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
@@ -168,7 +168,7 @@ export class AgentRuntime {
       if (!parsed.ok) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'parse_error', runId, iteration, validationErrors: parsed.errors, responseSnippet: response.slice(0, 500) });
         if (validationFeedback && parsed.recovery) {
-          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_malformed_tarot_start' });
+          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_malformed_tarot_clarify' });
           envelope = parsed.recovery;
         } else {
           if (validationFeedback) {
@@ -417,6 +417,7 @@ export class AgentRuntime {
     const dynamicContext = [
       validationFeedback ? `재시도 지시:\n${validationFeedback}` : undefined,
       observations.length ? `도구 관찰 JSON: ${formatObservationsForPrompt(observations)}` : undefined,
+      priorContext?.pendingAction ? `pendingAction 후속 처리 지시: ${formatPendingActionPromptHint(priorContext.pendingAction)}` : undefined,
       priorContext ? `이전 agent 문맥 JSON: ${JSON.stringify(sanitizePriorContextForPrompt(priorContext)).slice(0, 900)}` : undefined,
       options.conversationContext ? `conversation=${truncate(options.conversationContext, MAX_CONVERSATION_CONTEXT_CHARS)}` : undefined,
       options.pendingHistory ? `pendingHistory=${JSON.stringify(options.pendingHistory)}` : undefined,
@@ -503,6 +504,13 @@ function isReusableFollowUpIntent(intent: string | undefined): boolean {
 
 function buildPendingActionBlockedFallback(pendingAction: AgentPendingAction | undefined): AgentRuntimeOutcome {
   if (pendingAction?.kind === 'tarot') {
+    if (pendingAction.missing.includes('topic')) {
+      return {
+        kind: 'clarify',
+        message: '무엇에 대해 타로를 볼까요?',
+        pendingAction
+      };
+    }
     return {
       kind: 'blocked',
       message: '타로 카드 선택이 아직 처리되지 않았어요. 안내된 개수만큼 1~78 사이 숫자를 중복 없이 골라주세요.',
@@ -539,12 +547,23 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
-    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 command.cleanup 또는 command.mass_cleanup tool_calls JSON을, history는 history.search tool_calls JSON을, 타로 카드 선택 후속 답변은 tarot.reveal_selection tool_calls JSON을 작성하세요.',
+    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 command.cleanup 또는 command.mass_cleanup tool_calls JSON을, history는 history.search tool_calls JSON을 작성하세요. 타로 pendingAction.missing에 topic이 있으면 현재 답변을 topic으로 삼고 카드 개수는 AI가 정해 tarot.start_reading tool_calls JSON을 작성하세요. 타로 pendingAction.missing에 numbers가 있으면 tarot.reveal_selection tool_calls JSON을 작성하세요.',
     'cleanup에서 evidence는 사용자에게 물어보는 값이 아니에요. command.cleanup.evidence는 originalPrompt/현재 답변에 실제로 있는 문구를 그대로 쓰고, command.mass_cleanup에는 evidence를 넣지 마세요.',
-    '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요. 이전 질문이 타로 카드 번호를 묻는 clarify였다면, 현재 답변의 번호를 AI가 구조화해 tarot.reveal_selection을 호출하고 숫자 검증 오류는 관찰값 그대로 사용자에게 안내하세요.',
+    '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요. 이전 질문이 타로 주제를 묻는 clarify였다면 현재 답변을 topic으로 tarot.start_reading을 호출하세요. 이전 질문이 타로 카드 번호를 묻는 clarify였다면, 현재 답변의 번호를 AI가 구조화해 tarot.reveal_selection을 호출하고 숫자 검증 오류는 관찰값 그대로 사용자에게 안내하세요.',
     '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
     '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 해당 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
   ].filter(Boolean).join('\n');
+}
+
+function formatPendingActionPromptHint(pendingAction: AgentPendingAction): string {
+  if (pendingAction.kind === 'tarot') {
+    if (pendingAction.missing.includes('topic')) {
+      return '타로 pendingAction.missing에 topic이 있으면 현재 답변을 topic으로 삼고, 카드 개수는 사용자에게 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading tool_calls JSON을 작성하세요.';
+    }
+    return '타로 pendingAction.missing에 numbers가 있으면 현재 답변의 번호를 구조화해 tarot.reveal_selection tool_calls JSON을 작성하세요.';
+  }
+  if (pendingAction.kind === 'history') return 'history pendingAction은 현재 답변으로 범위를 해소해 history.search tool_calls JSON을 작성하세요.';
+  return 'cleanup pendingAction은 현재 답변으로 target/count를 해소해 command.cleanup 또는 command.mass_cleanup tool_calls JSON을 작성하세요.';
 }
 
 function buildPriorContextFollowUpFeedback(priorContext: AgentTurnStoredContext): string {
@@ -606,10 +625,19 @@ function parseTarotPendingAction(raw: Record<string, unknown>): AgentPendingActi
     ? raw.spreadCount
     : undefined;
   const spreadName = typeof raw.spreadName === 'string' && raw.spreadName.trim() ? raw.spreadName.trim() : undefined;
-  if (!originalPrompt || !topic || !spreadCount) return undefined;
+  if (!originalPrompt) return undefined;
   const rawMissing = Array.isArray(raw.missing) ? raw.missing : [];
-  if (rawMissing.some((item) => item !== 'numbers')) return undefined;
-  const missing = rawMissing.filter((item): item is 'numbers' => item === 'numbers');
+  if (rawMissing.some((item) => item !== 'topic' && item !== 'numbers')) return undefined;
+  const missing = rawMissing.filter((item): item is 'topic' | 'numbers' => item === 'topic' || item === 'numbers');
+  if (missing.includes('topic')) {
+    if (missing.includes('numbers')) return undefined;
+    return {
+      kind: 'tarot',
+      originalPrompt,
+      missing: ['topic']
+    };
+  }
+  if (!topic || !spreadCount) return undefined;
   return {
     kind: 'tarot',
     originalPrompt,
@@ -690,17 +718,17 @@ function parseAgentEnvelope(response: string): ParseResult {
       if (!message) return { ok: false, errors: ['clarify.message must be non-empty'] };
       const pendingAction = parsePendingAction(parsed.pendingAction);
       if (parsed.pendingAction !== undefined && !pendingAction) {
-        const recoveredTarotStart = recoverTarotStartReadingCall(parsed.pendingAction);
-        if (recoveredTarotStart) {
+        const recoveredTarot = recoverMalformedTarotClarify(parsed.pendingAction);
+        if (recoveredTarot) {
           return {
             ok: false,
             errors: [
-              'tarot clarify cannot ask for topic or spreadCount; when the AI chooses tarot/fortune intent it must call tarot.start_reading with topic and spreadCount; use topic="일반 운세" and spreadCount=3 for vague tarot requests'
+              'tarot clarify may ask only for topic when the tarot subject is missing; never ask the user for spreadCount. If topic is known, call tarot.start_reading and choose spreadCount yourself.'
             ],
-            recovery: { kind: 'tool_calls', calls: [recoveredTarotStart] }
+            recovery: recoveredTarot
           };
         }
-        return { ok: false, errors: ['clarify.pendingAction is invalid or uses unsupported missing fields; pendingAction missing fields must match the action; cleanup missing may only include target/count and must not ask for evidence; tarot missing may only include numbers'] };
+        return { ok: false, errors: ['clarify.pendingAction is invalid or uses unsupported missing fields; pendingAction missing fields must match the action; cleanup missing may only include target/count and must not ask for evidence; tarot missing may only include topic or numbers'] };
       }
       return { ok: true, envelope: pendingAction ? { kind, message, pendingAction } : { kind, message } };
     }
@@ -719,21 +747,37 @@ function parseAgentEnvelope(response: string): ParseResult {
   }
 }
 
-function recoverTarotStartReadingCall(raw: unknown): AgentToolCall | null {
+function recoverMalformedTarotClarify(raw: unknown): AgentEnvelope | null {
   if (!isRecord(raw) || raw.kind !== 'tarot') return null;
+  const originalPrompt = typeof raw.originalPrompt === 'string' && raw.originalPrompt.trim() ? raw.originalPrompt.trim() : '타로';
   const rawTopic = typeof raw.topic === 'string' ? raw.topic.trim() : '';
+  const rawMissing = Array.isArray(raw.missing) ? raw.missing : [];
+  if (!rawTopic || rawMissing.includes('topic')) {
+    return {
+      kind: 'clarify',
+      message: '무엇에 대해 타로를 볼까요?',
+      pendingAction: {
+        kind: 'tarot',
+        originalPrompt,
+        missing: ['topic']
+      }
+    };
+  }
   const spreadCount = typeof raw.spreadCount === 'number' && Number.isInteger(raw.spreadCount) && raw.spreadCount >= 1 && raw.spreadCount <= 5
     ? raw.spreadCount
     : 3;
   const spreadName = typeof raw.spreadName === 'string' && raw.spreadName.trim() ? raw.spreadName.trim() : undefined;
   return {
-    id: 'tarot_start_repair',
-    tool: 'tarot.start_reading',
-    input: {
-      topic: rawTopic || '일반 운세',
-      spreadCount,
-      ...(spreadName ? { spreadName } : {})
-    }
+    kind: 'tool_calls',
+    calls: [{
+      id: 'tarot_start_repair',
+      tool: 'tarot.start_reading',
+      input: {
+        topic: rawTopic,
+        spreadCount,
+        ...(spreadName ? { spreadName } : {})
+      }
+    }]
   };
 }
 
