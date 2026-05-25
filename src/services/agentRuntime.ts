@@ -240,7 +240,7 @@ export class AgentRuntime {
       if (envelope.kind === 'not_handled' && (priorContext?.lastIntent === 'clarify' || priorContext?.pendingAction) && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'clarify_follow_up_required' });
         actionDecisionRetryRequested = true;
-        validationFailureFallback = buildPendingActionBlockedFallback(priorContext?.pendingAction);
+        validationFailureFallback = buildPendingActionFailureFallback(priorContext);
         validationFeedback = buildClarifyFollowUpFeedback(priorContext);
         continue;
       }
@@ -262,8 +262,9 @@ export class AgentRuntime {
           }
         }
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: 'pending_action_not_resolved' });
-        this.updateTurnContext(key, { kind: 'clarify', message: 'pending action unresolved', pendingAction: priorContext.pendingAction }, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-        return buildPendingActionBlockedFallback(priorContext.pendingAction);
+        const fallback = buildPendingActionFailureFallback(priorContext);
+        this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return fallback;
       }
       validationFeedback = null;
       const webSearchFailure = buildWebSearchFailureOutcome(observations);
@@ -556,19 +557,14 @@ function isReusableFollowUpIntent(intent: string | undefined): boolean {
   return intent === 'history' || intent === 'web_search' || intent === 'time' || intent === 'tarot';
 }
 
-function buildPendingActionBlockedFallback(pendingAction: AgentPendingAction | undefined): AgentRuntimeOutcome {
-  if (pendingAction?.kind === 'tarot') {
-    if (pendingAction.missing.includes('topic')) {
-      return {
-        kind: 'clarify',
-        message: '무엇에 대해 타로를 볼까요?',
-        pendingAction
-      };
-    }
+function buildPendingActionFailureFallback(priorContext: AgentTurnStoredContext | undefined): AgentRuntimeOutcome {
+  const pendingAction = priorContext?.pendingAction;
+  const previousQuestion = priorContext?.lastAgentMessage?.trim();
+  if (pendingAction && previousQuestion) {
     return {
-      kind: 'blocked',
-      message: '타로 카드 선택이 아직 처리되지 않았어요. 안내된 개수만큼 1~78 사이 숫자를 중복 없이 골라주세요.',
-      blockedTools: ['tarot.reveal_selection']
+      kind: 'clarify',
+      message: previousQuestion,
+      pendingAction
     };
   }
   if (pendingAction?.kind === 'history') {
@@ -576,6 +572,13 @@ function buildPendingActionBlockedFallback(pendingAction: AgentPendingAction | u
       kind: 'blocked',
       message: '대화 기록 요청의 필요한 범위가 아직 처리되지 않았어요. 채널이나 서버 범위를 다시 알려주세요.',
       blockedTools: ['history.search']
+    };
+  }
+  if (pendingAction?.kind === 'tarot') {
+    return {
+      kind: 'blocked',
+      message: '타로 요청을 아직 처리하지 못했어요. 다시 한 번 필요한 내용을 알려주세요.',
+      blockedTools: [pendingAction.missing.includes('numbers') ? 'tarot.reveal_selection' : 'tarot.start_reading']
     };
   }
   return {

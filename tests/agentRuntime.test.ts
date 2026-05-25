@@ -1460,9 +1460,14 @@ describe('AgentRuntime', () => {
     const outcome = await runtime.run(makeMessage(), '니 메세지', makeOptions({ requesterDisplayName: '테스터' }));
 
     expect(outcome).toEqual({
-      kind: 'blocked',
-      message: '메시지 삭제 요청의 대상이 아직 처리되지 않았어요. 제가 처리할 수 있는 건 요청자 본인 메시지 삭제나 관리자용 전체 채널 삭제뿐이에요.',
-      blockedTools: ['command.cleanup']
+      kind: 'clarify',
+      message: '누구 채팅을 몇 개 지울까요?',
+      pendingAction: {
+        kind: 'cleanup',
+        originalPrompt: '메세지 삭제 해봐',
+        target: 'ambiguous',
+        missing: ['target', 'count']
+      }
     });
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
   });
@@ -1857,9 +1862,15 @@ describe('AgentRuntime', () => {
     const outcome = await runtime.run(makeMessage(), '아무거나', makeOptions({ requesterDisplayName: '테스터' }));
 
     expect(outcome).toEqual({
-      kind: 'blocked',
-      message: '타로 카드 선택이 아직 처리되지 않았어요. 안내된 개수만큼 1~78 사이 숫자를 중복 없이 골라주세요.',
-      blockedTools: ['tarot.reveal_selection']
+      kind: 'clarify',
+      message: '오늘 운세는 1장으로 볼게요. 숫자 1개를 골라주세요.',
+      pendingAction: {
+        kind: 'tarot',
+        originalPrompt: '오늘 운세 봐줘',
+        topic: '오늘 운세',
+        spreadCount: 1,
+        missing: ['numbers']
+      }
     });
     expect(JSON.stringify(outcome)).not.toContain('메시지 삭제');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('타로 pendingAction.missing에 numbers가 있으면');
