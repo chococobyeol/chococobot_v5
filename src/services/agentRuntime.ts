@@ -404,6 +404,12 @@ export class AgentRuntime {
         await this.executeToolCallWithDiagnostics(call, options, observations, toolCalls, runId, iteration);
         totalToolCalls += 1;
       }
+      const toolInputCorrectionFeedback = buildToolInputCorrectionFeedback(observations);
+      if (toolInputCorrectionFeedback) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'tool_input_correction_required' });
+        validationFeedback = toolInputCorrectionFeedback;
+        continue;
+      }
       const tarotStartOutcome = buildTarotStartFallbackOutcome(observations);
       if (tarotStartOutcome) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'tarot_start_observation' });
@@ -1385,6 +1391,22 @@ function buildObservationAnswerRequiredFeedback(observations: readonly AgentTool
   return parts.join('\n');
 }
 
+function buildToolInputCorrectionFeedback(observations: readonly AgentToolObservation[]): string | null {
+  const latest = observations.at(-1);
+  if (!latest || latest.status === 'ok' || latest.code !== 'validation_error') return null;
+  const parts = [
+    '방금 도구 호출 입력이 도구 스키마 검증에 실패했어요.',
+    `실패한 도구: ${latest.toolName}`,
+    latest.message ? `검증 오류: ${latest.message}` : undefined,
+    latest.hint ? `수정 힌트: ${latest.hint}` : undefined,
+    '사용자에게 내부 스키마 오류를 말하지 말고, 도구 입력을 스키마에 맞게 고쳐 tool_calls JSON을 다시 작성하세요.'
+  ];
+  if (latest.toolName === 'tarot.start_reading') {
+    parts.push('tarot.start_reading 입력은 반드시 { "topic": string, "spreadCount": 1..5, "spreadName"?: string }입니다. cardCount/card_count/count를 쓰지 말고 spreadCount를 쓰세요.');
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
 function formatHistoryEvidenceForFeedback(evidence: ReturnType<typeof extractSuccessfulHistoryEvidence>): string[] {
   if (!evidence.length) return ['대화 증거: (없음)'];
   return [
@@ -1533,6 +1555,13 @@ function buildTarotFallbackOutcome(observations: readonly AgentToolObservation[]
         message: latest.message ?? '타로 카드 번호를 다시 골라주세요.'
       };
     }
+    if (latest.toolName === 'tarot.start_reading' && latest.code === 'validation_error') {
+      return {
+        kind: 'blocked',
+        message: '타로 시작 도구 입력을 맞추지 못했어요. 다시 한 번 타로를 봐달라고 요청해 주세요.',
+        blockedTools: [latest.toolName]
+      };
+    }
     return {
       kind: 'blocked',
       message: latest.message ?? '타로 카드 선택을 처리하지 못했어요. 안내된 개수만큼 1~78 사이 숫자를 중복 없이 골라주세요.',
@@ -1552,6 +1581,7 @@ function buildTarotStartFallbackOutcome(observations: readonly AgentToolObservat
   const latest = [...observations].reverse().find((observation) => observation.toolName === 'tarot.start_reading');
   if (!latest) return null;
   if (latest.status !== 'ok') {
+    if (latest.code === 'validation_error') return null;
     return {
       kind: 'blocked',
       message: latest.message ?? '타로 선택을 시작하지 못했어요. 잠시 뒤에 다시 요청해 주세요.',

@@ -1970,6 +1970,69 @@ describe('AgentRuntime', () => {
     expect(tarotStartReading).toHaveBeenCalledTimes(1);
   });
 
+  it('starts a tarot reading for a fully specified lunch-choice prompt', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '내일 점심 뭐먹을지',
+      spreadCount: 3,
+      message: '내일 점심 뭐먹을지 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+    }));
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'tool_calls',
+        calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '내일 점심 뭐먹을지', spreadCount: 3 } }]
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '내일 점심 뭐먹을지 타로 봐줘', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '내일 점심 뭐먹을지 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+    });
+    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '내일 점심 뭐먹을지', spreadCount: 3 }, expect.any(Object));
+  });
+
+  it('feeds tarot.start_reading schema errors back to the model instead of the user', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '밖에 나가는게 좋을까',
+      spreadCount: 3,
+      message: '밖에 나가는게 좋을까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'bad', tool: 'tarot.start_reading', input: { topic: '밖에 나가는게 좋을까', cardCount: 3 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'fixed', tool: 'tarot.start_reading', input: { topic: '밖에 나가는게 좋을까', spreadCount: 3 } }]
+        }))
+    };
+    const diagnostics: unknown[] = [];
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '밖에 나가는게 좋을까', makeOptions({
+      requesterDisplayName: '테스터',
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '밖에 나가는게 좋을까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+    });
+    expect(tarotStartReading).toHaveBeenCalledTimes(1);
+    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '밖에 나가는게 좋을까', spreadCount: 3 }, expect.any(Object));
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('spreadCount');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('cardCount');
+    expect(JSON.stringify(outcome)).not.toContain('spreadCount must be an integer');
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'tool_input_correction_required' })
+    ]));
+  });
+
   it('recovers a tarot topic follow-up when the model keeps returning not_handled', async () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '저녁 뭐 먹을지',
