@@ -31,6 +31,6 @@ ChococoBot uses AI to judge user intent. Runtime code may validate safety, permi
 4. Validate only the contract/safety boundary in code.
 5. Add a regression test proving code does not contain a prose classifier for that decision.
 
-For tarot/fortune features, the first semantic decision remains AI-owned: the AI must decide whether the user is asking for tarot/fortune, ask for a missing topic, and choose a 1-5 card spread. After that structured state exists (`pendingAction.kind === "tarot"` or an active tarot session), code may treat the next reply as a slot continuation: fill the missing topic, extract card-number tokens, and return deterministic feedback for no numbers, duplicates, wrong count, or values outside 1-78. Code still must not add helpers such as `isTarotIntent`, `mentionsTarot`, or `isFortunePrompt`.
+For tarot/fortune features, code may validate `tarot.start_reading` and `tarot.reveal_selection` fields, active sessions, and card-number constraints, but must not add helpers such as `isTarotIntent`, `mentionsTarot`, or `isFortunePrompt`.
 
 If a future change feels like it needs `isSomethingIntent(...)`, stop and move that decision into the AI contract instead.

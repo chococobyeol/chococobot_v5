@@ -25,7 +25,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
-  '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"], spreadCount?: 1..5)으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요.',
+  '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"], spreadCount?: 1..5)으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요. 예: "내일 점심 뭐먹을지 타로 봐줘"는 topic="내일 점심 뭐먹을지"로 tarot.start_reading을 호출하세요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify+pendingAction을 사용하되, missing에는 사용자가 답할 수 있는 필드만 넣어요.',
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
@@ -128,18 +128,6 @@ export class AgentRuntime {
     let observationAnswerRetryRequested = false;
     const repeatedSuccessfulToolRetryKeys = new Set<string>();
     let validationFailureFallback: AgentRuntimeOutcome | null = null;
-
-    const directTarotTopicStartCall = buildTarotStartCallFromTopicPrompt(prompt, priorContext?.pendingAction);
-    if (directTarotTopicStartCall) {
-      await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration: 0, decisionKind: 'direct_tarot_topic_follow_up' });
-      await this.executeToolCallWithDiagnostics(directTarotTopicStartCall, options, observations, toolCalls, runId, 0);
-      totalToolCalls += 1;
-      const fallback = buildTarotStartFallbackOutcome(observations) ?? buildObservationBasedFallbackOutcome(observations);
-      if (fallback) {
-        this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-        return fallback;
-      }
-    }
 
     const directTarotSelection = buildDirectTarotSelectionResolution(prompt, options.tarotPending);
     if (directTarotSelection?.kind === 'outcome') {

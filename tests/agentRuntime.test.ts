@@ -72,6 +72,14 @@ describe('AgentRuntime', () => {
           calls: [{ id: 'history', tool: 'history.search', input: { scope: 'channel', channelRef: 'channel-1', query: '', mode: 'summary' } }]
         }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '연애운', spreadCount: 3 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '연애운', spreadCount: 3 } }]
+        }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ historySearch }), new AgentTurnContextStore());
 
@@ -1876,6 +1884,10 @@ describe('AgentRuntime', () => {
           }
         }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '연애운', spreadCount: 3 } }]
+        }))
     };
     const store = new AgentTurnContextStore();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), store);
@@ -1893,7 +1905,9 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({ kind: 'clarify', message: '연애운 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '연애운', spreadCount: 3 }, expect.any(Object));
-    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('clarify 질문에 대한 후속 답변');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('tarot.start_reading');
   });
 
   it('returns trusted tarot presentation metadata with the final interpretation', async () => {
@@ -1986,7 +2000,8 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'clarify', message: '저녁 뭐 먹을지 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '저녁 뭐 먹을지', spreadCount: 3 }, expect.any(Object));
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stage: 'agent', event: 'decision', decisionKind: 'direct_tarot_topic_follow_up' }),
+      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'clarify_follow_up_required' }),
+      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'recovered_tarot_topic_follow_up' }),
       expect.objectContaining({ stage: 'tool', event: 'tool_call', toolName: 'tarot.start_reading' })
     ]));
   });
