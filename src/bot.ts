@@ -1763,7 +1763,7 @@ async function executeTarotStartReadingTool(input: TarotStartReadingInput, execu
     spreadCount: session.spreadCount,
     ...(session.spreadName ? { spreadName: session.spreadName } : {}),
     expiresAt: session.expiresAt,
-    message: `${session.topic}은 ${spreadLabel}${session.spreadCount}장으로 볼게요. 1~78 사이 숫자 ${session.spreadCount}개를 중복 없이 골라주세요.`
+    message: `${session.topic} 주제로 ${spreadLabel}${session.spreadCount}장 볼게요. 1~78 사이 숫자 ${session.spreadCount}개를 중복 없이 골라주세요.`
   };
 }
 

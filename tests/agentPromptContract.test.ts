@@ -110,8 +110,21 @@ describe('AgentRuntime prompt contract', () => {
   });
 
   it('includes compact active tarot session context without adding semantic router prose', async () => {
-    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '관찰값 기준으로 해석했어요.' }))
+    };
+    const tarotRevealSelection = vi.fn(async () => ({
+      message: '연애운 타로 카드 3장을 확인했어요.',
+      topic: '연애운',
+      spreadCount: 3,
+      selectedNumbers: [1, 2, 3],
+      cards: [],
+      visualData: { bars: '흐름 ▰▰▰▱▱' }
+    }));
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
 
     await runtime.run(makeMessage(), '1 2 3', makeOptions({
       tarotPending: { topic: '연애운', spreadCount: 3, spreadName: '세 장 흐름', expiresAt: Date.parse('2026-05-22T18:25:00.000Z') }
@@ -121,6 +134,7 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).toContain('tarotPending');
     expect(prompt).toContain('연애운');
     expect(prompt).toContain('tarot.reveal_selection');
+    expect(prompt).toContain('"selectedNumbers":[1,2,3]');
     expect(prompt).not.toContain('타로라는 단어가 있으면');
     expect(prompt.length).toBeLessThan(5400);
   });

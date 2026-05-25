@@ -25,7 +25,7 @@ const AGENT_OUTPUT_CONTRACT = [
   '도구 관찰값이 있으면 not_handled로 넘기지 말고 관찰값만 근거로 final/unavailable/blocked 중 하나로 마무리해요.',
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
-  '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"])으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요.',
+  '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"], spreadCount?: 1..5)으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify+pendingAction을 사용하되, missing에는 사용자가 답할 수 있는 필드만 넣어요.',
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
@@ -129,6 +129,38 @@ export class AgentRuntime {
     const repeatedSuccessfulToolRetryKeys = new Set<string>();
     let validationFailureFallback: AgentRuntimeOutcome | null = null;
 
+    const directTarotTopicStartCall = buildTarotStartCallFromTopicPrompt(prompt, priorContext?.pendingAction);
+    if (directTarotTopicStartCall) {
+      await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration: 0, decisionKind: 'direct_tarot_topic_follow_up' });
+      await this.executeToolCallWithDiagnostics(directTarotTopicStartCall, options, observations, toolCalls, runId, 0);
+      totalToolCalls += 1;
+      const fallback = buildTarotStartFallbackOutcome(observations) ?? buildObservationBasedFallbackOutcome(observations);
+      if (fallback) {
+        this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return fallback;
+      }
+    }
+
+    const directTarotSelection = buildDirectTarotSelectionResolution(prompt, options.tarotPending);
+    if (directTarotSelection?.kind === 'outcome') {
+      await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration: 0, decisionKind: 'tarot_selection_feedback' });
+      this.updateTurnContext(key, directTarotSelection.outcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+      return directTarotSelection.outcome;
+    }
+    if (directTarotSelection?.kind === 'call') {
+      await this.executeToolCallWithDiagnostics(directTarotSelection.call, options, observations, toolCalls, runId, 0);
+      totalToolCalls += 1;
+      const latest = observations.at(-1);
+      if (latest?.status !== 'ok') {
+        const fallback = buildTarotFallbackOutcome(observations);
+        if (fallback) {
+          this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+          return fallback;
+        }
+      }
+      validationFeedback = buildObservationAnswerRequiredFeedback(observations);
+    }
+
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
       const messages = this.buildMessages(message, prompt, options, priorContext, observations, validationFeedback);
       await options.onDiagnostic?.({
@@ -216,6 +248,16 @@ export class AgentRuntime {
         continue;
       }
       if (envelope.kind === 'not_handled' && priorContext?.pendingAction) {
+        const recoveredTarotStart = buildTarotStartCallFromTopicPrompt(prompt, priorContext.pendingAction);
+        if (recoveredTarotStart) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_tarot_topic_follow_up' });
+          await this.executeToolCallWithDiagnostics(recoveredTarotStart, options, observations, toolCalls, runId, iteration);
+          const fallback = buildTarotStartFallbackOutcome(observations) ?? buildObservationBasedFallbackOutcome(observations);
+          if (fallback) {
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+        }
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: 'pending_action_not_resolved' });
         this.updateTurnContext(key, { kind: 'clarify', message: 'pending action unresolved', pendingAction: priorContext.pendingAction }, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return buildPendingActionBlockedFallback(priorContext.pendingAction);
@@ -371,22 +413,14 @@ export class AgentRuntime {
       }
 
       for (const call of envelope.calls) {
-        await options.onDiagnostic?.({ stage: 'tool', event: 'tool_call', runId, iteration, toolCallId: call.id, toolName: call.tool, policy: this.registry.get(call.tool)?.policy });
-        const observation = await this.registry.execute(call.tool, call.input, options.executionContext);
-        observation.callId = call.id;
-        observations.push(observation);
-        toolCalls.push(call);
+        await this.executeToolCallWithDiagnostics(call, options, observations, toolCalls, runId, iteration);
         totalToolCalls += 1;
-        await options.onDiagnostic?.({
-          stage: 'tool',
-          event: 'observation',
-          runId,
-          iteration,
-          toolCallId: call.id,
-          toolName: call.tool,
-          policy: observation.policy,
-          observationSummary: summarizeObservation(observation)
-        });
+      }
+      const tarotStartOutcome = buildTarotStartFallbackOutcome(observations);
+      if (tarotStartOutcome) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'tarot_start_observation' });
+        this.updateTurnContext(key, tarotStartOutcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return tarotStartOutcome;
       }
       const confirmationOutcome = buildConfirmationRequiredOutcome(observations);
       if (confirmationOutcome) {
@@ -404,6 +438,30 @@ export class AgentRuntime {
 
     await options.onDiagnostic?.({ stage: 'agent', event: 'loop_limit', runId, decisionKind: 'not_handled' });
     return { kind: 'not_handled' };
+  }
+
+  private async executeToolCallWithDiagnostics(
+    call: AgentToolCall,
+    options: AgentRuntimeOptions,
+    observations: AgentToolObservation[],
+    toolCalls: AgentToolCall[],
+    runId: string,
+    iteration: number
+  ): Promise<void> {
+    await options.onDiagnostic?.({ stage: 'tool', event: 'tool_call', runId, iteration, toolCallId: call.id, toolName: call.tool, policy: this.registry.get(call.tool)?.policy });
+    const observation = await this.registry.execute(call.tool, call.input, options.executionContext);
+    observation.callId = call.id;
+    observations.push(observation);
+    toolCalls.push(call);
+    await options.onDiagnostic?.({
+      stage: 'tool',
+      event: 'observation',
+      runId,
+      iteration,
+      toolName: call.tool,
+      policy: observation.policy,
+      observationSummary: summarizeObservation(observation)
+    });
   }
 
   private buildMessages(
@@ -531,6 +589,61 @@ function buildPendingActionBlockedFallback(pendingAction: AgentPendingAction | u
   };
 }
 
+function buildDirectTarotSelectionResolution(
+  prompt: string,
+  tarotPending: AgentRuntimeOptions['tarotPending']
+): { kind: 'call'; call: AgentToolCall } | { kind: 'outcome'; outcome: AgentRuntimeOutcome } | null {
+  if (!tarotPending) return null;
+  const numbers = parseTarotSelectionNumbers(prompt, tarotPending.spreadCount);
+  if (!numbers) {
+    return {
+      kind: 'outcome',
+      outcome: {
+        kind: 'clarify',
+        message: buildTarotSelectionFeedback(tarotPending.spreadCount, '숫자를 찾지 못했어요.')
+      }
+    };
+  }
+  return {
+    kind: 'call',
+    call: {
+      id: 'tarot_reveal_direct',
+      tool: 'tarot.reveal_selection',
+      input: { numbers }
+    }
+  };
+}
+
+function parseTarotSelectionNumbers(prompt: string, expectedCount: number): number[] | null {
+  const trimmed = prompt.trim();
+  if (!trimmed || !/[0-9]/.test(trimmed)) return null;
+  const numericTokens = trimmed.match(/[0-9]+/g) ?? [];
+  if (!numericTokens.length) return null;
+  if (numericTokens.length === 1 && numericTokens[0].length === expectedCount && expectedCount > 1) {
+    return numericTokens[0].split('').map((digit) => Number(digit));
+  }
+  return numericTokens.map((token) => Number(token));
+}
+
+function buildTarotSelectionFeedback(expectedCount: number, reason: string): string {
+  return `${reason} 1~78 사이 숫자 ${expectedCount}개를 중복 없이 골라주세요. 예: 1 23 45`;
+}
+
+function buildTarotStartCallFromTopicPrompt(prompt: string, pendingAction: AgentPendingAction | undefined): AgentToolCall | null {
+  if (!pendingAction || pendingAction.kind !== 'tarot' || !pendingAction.missing.includes('topic')) return null;
+  const topic = prompt.trim();
+  if (!topic) return null;
+  return {
+    id: 'tarot_start_topic_follow_up',
+    tool: 'tarot.start_reading',
+    input: {
+      topic,
+      spreadCount: pendingAction.spreadCount ?? 3,
+      ...(pendingAction.spreadName ? { spreadName: pendingAction.spreadName } : {})
+    }
+  };
+}
+
 function buildPendingConfirmationFeedback(pending: NonNullable<AgentRuntimeOptions['pendingConfirmation']>): string {
   return [
     '현재 사용자 메시지는 대기 중인 확인 작업에 대한 답변일 수 있어요.',
@@ -634,6 +747,8 @@ function parseTarotPendingAction(raw: Record<string, unknown>): AgentPendingActi
     return {
       kind: 'tarot',
       originalPrompt,
+      ...(spreadCount ? { spreadCount } : {}),
+      ...(spreadName ? { spreadName } : {}),
       missing: ['topic']
     };
   }
@@ -752,6 +867,10 @@ function recoverMalformedTarotClarify(raw: unknown): AgentEnvelope | null {
   const originalPrompt = typeof raw.originalPrompt === 'string' && raw.originalPrompt.trim() ? raw.originalPrompt.trim() : '타로';
   const rawTopic = typeof raw.topic === 'string' ? raw.topic.trim() : '';
   const rawMissing = Array.isArray(raw.missing) ? raw.missing : [];
+  const spreadCount = typeof raw.spreadCount === 'number' && Number.isInteger(raw.spreadCount) && raw.spreadCount >= 1 && raw.spreadCount <= 5
+    ? raw.spreadCount
+    : 3;
+  const spreadName = typeof raw.spreadName === 'string' && raw.spreadName.trim() ? raw.spreadName.trim() : undefined;
   if (!rawTopic || rawMissing.includes('topic')) {
     return {
       kind: 'clarify',
@@ -759,14 +878,12 @@ function recoverMalformedTarotClarify(raw: unknown): AgentEnvelope | null {
       pendingAction: {
         kind: 'tarot',
         originalPrompt,
+        ...(spreadCount ? { spreadCount } : {}),
+        ...(spreadName ? { spreadName } : {}),
         missing: ['topic']
       }
     };
   }
-  const spreadCount = typeof raw.spreadCount === 'number' && Number.isInteger(raw.spreadCount) && raw.spreadCount >= 1 && raw.spreadCount <= 5
-    ? raw.spreadCount
-    : 3;
-  const spreadName = typeof raw.spreadName === 'string' && raw.spreadName.trim() ? raw.spreadName.trim() : undefined;
   return {
     kind: 'tool_calls',
     calls: [{
@@ -1422,6 +1539,12 @@ function buildTarotFallbackOutcome(observations: readonly AgentToolObservation[]
   const latest = [...observations].reverse().find((observation) => observation.toolName.startsWith('tarot.'));
   if (!latest) return null;
   if (latest.status !== 'ok') {
+    if (latest.toolName === 'tarot.reveal_selection' && latest.field === 'numbers') {
+      return {
+        kind: 'clarify',
+        message: latest.message ?? '타로 카드 번호를 다시 골라주세요.'
+      };
+    }
     return {
       kind: 'blocked',
       message: latest.message ?? '타로 카드 선택을 처리하지 못했어요. 안내된 개수만큼 1~78 사이 숫자를 중복 없이 골라주세요.',
@@ -1435,6 +1558,23 @@ function buildTarotFallbackOutcome(observations: readonly AgentToolObservation[]
     return presentation ? { kind: 'final', message: outputMessage, presentation } : { kind: 'final', message: outputMessage };
   }
   return { kind: 'clarify', message: outputMessage };
+}
+
+function buildTarotStartFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const latest = [...observations].reverse().find((observation) => observation.toolName === 'tarot.start_reading');
+  if (!latest) return null;
+  if (latest.status !== 'ok') {
+    return {
+      kind: 'blocked',
+      message: latest.message ?? '타로 선택을 시작하지 못했어요. 잠시 뒤에 다시 요청해 주세요.',
+      blockedTools: [latest.toolName]
+    };
+  }
+  if (!isRecord(latest.output)) return null;
+  const message = typeof latest.output.message === 'string' && latest.output.message.trim()
+    ? latest.output.message.trim()
+    : '1~78 사이 숫자를 안내된 개수만큼 중복 없이 골라주세요.';
+  return { kind: 'clarify', message };
 }
 
 function buildVoiceFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
