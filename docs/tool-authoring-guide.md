@@ -9,7 +9,7 @@ adapter, observation shape, and required tests.
 
 Create a tool when the assistant needs deterministic access to repository-owned or
 bot-owned capabilities: reading time/history/search data, joining voice, speaking,
-changing settings, cleanup, or any operation that must be logged, validated, blocked,
+changing settings, cleanup, tarot session/card selection, or any operation that must be logged, validated, blocked,
 or confirmed before execution.
 
 Do not create a tool for ordinary chat, style-only answers, or decisions that can be
@@ -53,6 +53,8 @@ Every tool needs a compact `inputSchema` and a validator. Prefer explicit requir
 fields and small enums over prose rules. Examples:
 
 - `voice.speak`: `{ text: string }`, with a non-empty text length bound.
+- `tarot.start_reading`: `{ topic: string, spreadCount: 1..5, spreadName?: string }`, after AI chooses the spread.
+- `tarot.reveal_selection`: `{ numbers: number[] }`, validated against the active requester/channel session.
 - `command.cleanup`: `{ target: 'self', count: number, evidence: string }`.
 - `settings.prefix`: `{ action: 'set' | 'reset', prefix?: string }`.
 

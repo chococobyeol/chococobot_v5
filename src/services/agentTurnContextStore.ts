@@ -28,7 +28,16 @@ export type AgentHistoryPendingAction = {
   missing: Array<'scope' | 'channel'>;
 };
 
-export type AgentPendingAction = AgentCleanupPendingAction | AgentHistoryPendingAction;
+export type AgentTarotPendingAction = {
+  kind: 'tarot';
+  originalPrompt: string;
+  topic: string;
+  spreadCount: number;
+  spreadName?: string;
+  missing: Array<'numbers'>;
+};
+
+export type AgentPendingAction = AgentCleanupPendingAction | AgentHistoryPendingAction | AgentTarotPendingAction;
 
 export type AgentTurnStoredContext = {
   lastIntent?: string;

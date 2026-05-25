@@ -6,7 +6,9 @@ const guardedSources = [
   'src/services/agentRuntime.ts',
   'src/services/aiCommandPlanner.ts',
   'src/services/nlCommandRouter.ts',
-  'src/services/channelHistoryService.ts'
+  'src/services/channelHistoryService.ts',
+  'src/services/tarotDeck.ts',
+  'src/services/tarotSessionStore.ts'
 ];
 
 const forbiddenSemanticParsers = [
@@ -29,7 +31,12 @@ const forbiddenSemanticParsers = [
   'selectAgentToolDetails',
   'isReadOnlyHistoryFallbackPrompt',
   'isAiChannelSettingIntent',
-  'isAiChannelClearIntent'
+  'isAiChannelClearIntent',
+  'isTarotIntent',
+  'mentionsTarot',
+  'isFortunePrompt',
+  'routeTarotIntent',
+  'parseTarotRequestIntent'
 ];
 
 describe('AI routing guardrails', () => {

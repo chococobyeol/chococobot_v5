@@ -4,6 +4,7 @@ import { clearPendingChannelHistoryRequestsForTests, createPrefixCommands, handl
 import { ConfirmationManager } from '../src/services/confirmationManager.js';
 import { InMemoryVoiceSettingsStore } from '../src/services/voiceSettingsStore.js';
 import { AgentTurnContextStore } from '../src/services/agentTurnContextStore.js';
+import { TarotSessionStore } from '../src/services/tarotSessionStore.js';
 
 function makeMessage(content: string, overrides: Record<string, unknown> = {}) {
   const reply = vi.fn(async () => undefined);
@@ -136,6 +137,177 @@ function makeContext(overrides: Record<string, unknown> = {}) {
 describe('handleMessageCreate', () => {
   beforeEach(() => {
     clearPendingChannelHistoryRequestsForTests();
+  });
+
+
+
+
+  it('bridges tarot clarify pendingAction into TarotSessionStore so plain follow-up routes', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: {
+        run: vi
+          .fn()
+          .mockResolvedValueOnce({
+            kind: 'clarify',
+            message: '연애운은 3장으로 볼게요. 1부터 78 사이 숫자 3개를 골라주세요.',
+            pendingAction: { kind: 'tarot', originalPrompt: '연애운 타로 봐줘', topic: '연애운', spreadCount: 3, missing: ['numbers'] }
+          })
+          .mockResolvedValueOnce({ kind: 'final', message: '타로 해석이에요...' })
+      }
+    });
+    const first = makeMessage('!? 연애운 타로 봐줘', { createdTimestamp: 1_000 });
+    await handleMessageCreate(first, commands, context as any, new ConfirmationManager());
+
+    expect(tarotSessions.get({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, 1_500)).toMatchObject({ topic: '연애운', spreadCount: 3 });
+
+    const second = makeMessage('1 2 3', { id: 'message-2', createdTimestamp: 1_500 });
+    await handleMessageCreate(second, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).toHaveBeenNthCalledWith(2, second, '1 2 3', expect.objectContaining({ tarotPending: expect.objectContaining({ topic: '연애운', spreadCount: 3 }) }));
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+  });
+  it('routes active tarot card-selection replies through AgentRuntime before AI-channel chat or TTS', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      topic: '연애운',
+      spreadCount: 3,
+      requesterDisplayName: '테스터',
+      seed: 'seed-bot'
+    }, 1_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: { run: vi.fn(async () => ({ kind: 'final', message: '타로 해석이에요...' })) }
+    });
+    context.voiceSettings.setAiChannelId('guild-1', 'channel-1');
+    const message = makeMessage('1 2 3', { createdTimestamp: 1_500 });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).toHaveBeenCalledWith(
+      message,
+      '1 2 3',
+      expect.objectContaining({ prefix: '!', tarotPending: expect.objectContaining({ topic: '연애운', spreadCount: 3 }) })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '타로 해석이에요...' }));
+  });
+
+  it('gives wrong-requester tarot feedback without invoking AI or watched-channel TTS', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      topic: '취업운',
+      spreadCount: 2,
+      requesterDisplayName: '테스터',
+      seed: 'seed-other'
+    }, 1_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: { run: vi.fn(async () => ({ kind: 'not_handled' })) }
+    });
+    const message = makeMessage('4 5', {
+      createdTimestamp: 1_500,
+      author: { id: 'user-2', username: 'other', bot: false },
+      member: { displayName: '다른사람', voice: { channel: { id: 'voice-1' } } }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('테스터') }));
+  });
+
+  it('does not hijack unrelated owner messages during an active tarot selection', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      topic: '연애운',
+      spreadCount: 3,
+      requesterDisplayName: '테스터',
+      seed: 'seed-owner-chat'
+    }, 1_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: { run: vi.fn(async () => ({ kind: 'final', message: '타로로 처리되면 안 돼요' })) }
+    });
+    const message = makeMessage('안녕 초코코', { createdTimestamp: 1_500 });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).toHaveBeenCalledWith(message);
+    expect(message.reply).not.toHaveBeenCalled();
+  });
+
+  it('does not block unrelated messages from other users while tarot selection is active', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      topic: '취업운',
+      spreadCount: 2,
+      requesterDisplayName: '테스터',
+      seed: 'seed-other-chat'
+    }, 1_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: { run: vi.fn(async () => ({ kind: 'not_handled' })) }
+    });
+    const message = makeMessage('안녕하세요', {
+      createdTimestamp: 1_500,
+      author: { id: 'user-2', username: 'other', bot: false },
+      member: { displayName: '다른사람', voice: { channel: { id: 'voice-1' } } }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).toHaveBeenCalledWith(message);
+    expect(message.reply).not.toHaveBeenCalled();
+  });
+
+  it('renders trusted tarot presentation with Discord-native files and embeds', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      topic: '오늘 운세',
+      spreadCount: 1,
+      requesterDisplayName: '테스터',
+      seed: 'seed-render'
+    }, 1_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: {
+        run: vi.fn(async () => ({
+          kind: 'final',
+          message: '오늘은 추진력이 좋은 흐름이에요...',
+          presentation: {
+            title: '오늘 운세 타로',
+            summary: '흐름 ▰▰▰▰▱',
+            files: [{ path: 'assets/tarot/07-TheChariot.png', name: 'tarot-07-TheChariot.png' }],
+            cards: [{ selectionNumber: 7, name: '전차', orientation: '정방향', attachmentName: 'tarot-07-TheChariot.png' }]
+          }
+        }))
+      }
+    });
+    const message = makeMessage('7', { createdTimestamp: 1_500 });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: '오늘은 추진력이 좋은 흐름이에요...',
+      embeds: expect.any(Array),
+      files: expect.any(Array)
+    }));
   });
   it('keeps existing prefix commands ahead of the natural-language router', async () => {
     const commands = createPrefixCommands();

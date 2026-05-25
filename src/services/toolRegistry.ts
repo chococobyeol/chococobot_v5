@@ -11,6 +11,13 @@ export type AgentToolDefinition<I = unknown, O = unknown> = {
   execute(input: I, context: AgentToolExecutionContext): Promise<O>;
 };
 
+export type AgentDiscordPresentation = {
+  title?: string;
+  summary?: string;
+  files?: Array<{ path: string; name: string }>;
+  cards?: Array<{ selectionNumber: number; name: string; orientation: string; attachmentName?: string }>;
+};
+
 export type AgentToolRuntimeContext = {
   prefix?: string;
   currentChannelId?: string;
@@ -27,6 +34,7 @@ export type AgentToolRuntimeContext = {
     botVoice: 'botVoiceConnected_and_botVoiceChannel_are_bot_location_source_of_truth';
   };
   webSearch?: { mode: string; provider: string; providerStatus: string; resultCount: number };
+  tarotPending?: { topic: string; spreadCount: number; spreadName?: string; expiresAt?: number; requesterDisplayName?: string };
 };
 
 export type AgentToolExecutionContext = {
@@ -114,6 +122,36 @@ export type WebSearchOutput = {
   }>;
 };
 
+
+export type TarotStartReadingInput = {
+  topic: string;
+  spreadCount: number;
+  spreadName?: string;
+};
+
+export type TarotStartReadingOutput = {
+  sessionId?: string;
+  topic: string;
+  spreadCount: number;
+  spreadName?: string;
+  message: string;
+  expiresAt?: number;
+};
+
+export type TarotRevealSelectionInput = {
+  numbers: number[];
+};
+
+export type TarotRevealSelectionOutput = {
+  message: string;
+  topic?: string;
+  spreadCount?: number;
+  selectedNumbers?: number[];
+  cards?: unknown[];
+  visualData?: { bars?: string; [key: string]: unknown };
+  presentation?: AgentDiscordPresentation;
+};
+
 export type VoiceJoinOutput = {
   message: string;
   channelId?: string;
@@ -183,6 +221,8 @@ export type ToolRegistryHandlers = {
   ttsVoicePreset?: (input: TtsVoicePresetInput, context: AgentToolExecutionContext) => Promise<TtsVoicePresetOutput>;
   ttsEngine?: (input: TtsEngineInput, context: AgentToolExecutionContext) => Promise<TtsEngineOutput>;
   userTimezone?: (input: UserTimezoneInput, context: AgentToolExecutionContext) => Promise<UserTimezoneOutput>;
+  tarotStartReading?: (input: TarotStartReadingInput, context: AgentToolExecutionContext) => Promise<TarotStartReadingOutput>;
+  tarotRevealSelection?: (input: TarotRevealSelectionInput, context: AgentToolExecutionContext) => Promise<TarotRevealSelectionOutput>;
 };
 
 export class ToolRegistry {
@@ -356,6 +396,8 @@ export function createDefaultToolRegistry(handlers: ToolRegistryHandlers = {}): 
     ttsVoicePresetTool(handlers),
     ttsEngineTool(handlers),
     userTimezoneTool(handlers),
+    tarotStartReadingTool(handlers),
+    tarotRevealSelectionTool(handlers),
     cleanupTool(),
     massCleanupTool(),
     prefixSettingsTool(),
@@ -673,6 +715,62 @@ function userTimezoneTool(handlers: ToolRegistryHandlers): AgentToolDefinition<U
     async execute(input, context) {
       if (!handlers.userTimezone) throw new Error('time.user_timezone is unavailable in this runtime');
       return handlers.userTimezone(input, context);
+    }
+  };
+}
+
+
+function tarotStartReadingTool(handlers: ToolRegistryHandlers): AgentToolDefinition<TarotStartReadingInput, TarotStartReadingOutput> {
+  return {
+    name: 'tarot.start_reading',
+    description: 'Start a Discord-chat tarot reading after the AI decides the user wants tarot/fortune and chooses a 1-5 card spread. Creates an active card-selection session and asks the requester to pick numbers from 1 to 78.',
+    inputSchema: '{ topic: string; spreadCount: integer 1..5; spreadName?: string }',
+    policy: 'safe_action_auto',
+    retryable: false,
+    logFields: ['topic', 'spreadCount', 'spreadName'],
+    validate(input) {
+      if (!isRecord(input)) return { ok: false, errors: ['input must be an object'] };
+      const topic = stringField(input.topic, 'topic');
+      const count = boundedInteger(input.spreadCount, 'spreadCount', 1, 5);
+      const spreadName = optionalString(input.spreadName, 'spreadName');
+      const errors = [...topic.errors, ...count.errors, ...spreadName.errors];
+      if (errors.length || !topic.value || count.value === undefined) return { ok: false, errors };
+      return { ok: true, value: { topic: topic.value, spreadCount: count.value, ...(spreadName.value ? { spreadName: spreadName.value } : {}) } };
+    },
+    async execute(input, context) {
+      if (!handlers.tarotStartReading) throw new Error('tarot.start_reading is unavailable in this runtime');
+      return handlers.tarotStartReading(input, context);
+    }
+  };
+}
+
+function tarotRevealSelectionTool(handlers: ToolRegistryHandlers): AgentToolDefinition<TarotRevealSelectionInput, TarotRevealSelectionOutput> {
+  return {
+    name: 'tarot.reveal_selection',
+    description: 'Reveal cards for an active tarot session from requester-selected unique numbers. Code validates active session, exact count, duplicate numbers, and 1-78 range; AI writes the interpretation only from the observation.',
+    inputSchema: '{ numbers: integer[] } // selected card numbers, unique, 1..78, exact count is checked against active tarotPending session',
+    policy: 'safe_action_auto',
+    retryable: false,
+    logFields: ['numbers'],
+    validate(input) {
+      if (!isRecord(input)) return { ok: false, errors: ['input must be an object'] };
+      if (!Array.isArray(input.numbers) || input.numbers.length === 0) return { ok: false, errors: ['numbers must be a non-empty array'] };
+      if (input.numbers.some((number) => typeof number !== 'number' || !Number.isInteger(number))) return { ok: false, errors: ['numbers must contain only integers'] };
+      return { ok: true, value: { numbers: [...input.numbers] } };
+    },
+    async execute(input, context) {
+      const duplicate = new Set(input.numbers).size !== input.numbers.length;
+      if (duplicate) {
+        throw new AgentToolExecutionError('duplicate_numbers', '중복된 숫자는 선택할 수 없어요. 서로 다른 번호를 골라주세요.', 'Retry with unique card numbers.', 'error', 'numbers');
+      }
+      if (input.numbers.some((number) => number < 1 || number > 78)) {
+        throw new AgentToolExecutionError('number_out_of_range', '1~78 사이에서 골라주세요.', 'Retry with only integer card numbers from 1 to 78.', 'error', 'numbers');
+      }
+      if (input.numbers.length > 5) {
+        throw new AgentToolExecutionError('wrong_count', '카드는 한 번에 1~5개만 고를 수 있어요.', 'Retry with the exact number requested by the active tarot session.', 'error', 'numbers');
+      }
+      if (!handlers.tarotRevealSelection) throw new Error('tarot.reveal_selection is unavailable in this runtime');
+      return handlers.tarotRevealSelection(input, context);
     }
   };
 }

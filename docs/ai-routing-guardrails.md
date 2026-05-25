@@ -6,7 +6,7 @@ ChococoBot uses AI to judge user intent. Runtime code may validate safety, permi
 
 - Prefix and command-name parsing for existing command syntax.
 - Permission checks, confirmation storage/consumption, rate limits, count bounds, and Discord API constraints.
-- Exact structural checks on AI output, such as required JSON fields, persisted `pendingAction` slots, or whether a quoted `cleanupEvidence` appears verbatim in the current/prior user text.
+- Exact structural checks on AI output, such as required JSON fields, persisted `pendingAction` slots, tarot card-number bounds, active tarot session ownership, or whether a quoted `cleanupEvidence` appears verbatim in the current/prior user text.
 - Deterministic execution of a stored pending command after the AI has chosen `confirm_pending`.
 - Deterministic loop guards based on tool state, for example refusing to execute another `web.search` after a successful `web.search` observation in the same agent run and asking the AI to answer from existing observations.
 - Safe fallback text based only on already collected tool observations, such as returning source URLs when a web-search run reaches the loop limit before the AI produces a final answer.
@@ -30,5 +30,7 @@ ChococoBot uses AI to judge user intent. Runtime code may validate safety, permi
 3. Persist multi-turn slot state from AI output when clarification is needed; do not rebuild the slot values with keyword parsing.
 4. Validate only the contract/safety boundary in code.
 5. Add a regression test proving code does not contain a prose classifier for that decision.
+
+For tarot/fortune features, code may validate `tarot.start_reading` and `tarot.reveal_selection` fields, active sessions, and card-number constraints, but must not add helpers such as `isTarotIntent`, `mentionsTarot`, or `isFortunePrompt`.
 
 If a future change feels like it needs `isSomethingIntent(...)`, stop and move that decision into the AI contract instead.

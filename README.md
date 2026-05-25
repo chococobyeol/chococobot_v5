@@ -154,6 +154,17 @@ The starter voice preset map is defined in `src/config.ts`:
 - `!기억삭제` / `!ai-memory` clears the guild AI memory and is limited to server administrators.
 - Background memory summarization counts against guild AI usage, not the requesting user's quota.
 
+
+### AI tarot / fortune flow
+
+AI chat can run a Discord-chat tarot reading through the same `!?` path. Example: `!? 오늘 연애운 타로 봐줘`.
+
+- The AI decides whether the request is tarot/fortune-like and chooses a 1-5 card spread from the user context. TypeScript code does not keyword-route tarot intent.
+- The bot asks the requester to choose card numbers from `1~78`. The same requester can answer with plain numbers in the same channel; this follow-up is routed before AI-channel fallback and watched-channel TTS.
+- Invalid selections get structured feedback such as duplicate numbers, out-of-range numbers, or wrong count, and the session stays open for another try.
+- Successful readings reply in Discord chat with the AI interpretation, selected card images from `assets/tarot`, card names/directions, and a compact graph-like summary.
+- Tarot does not use broadcast overlays, TTS voice, admin UI, quotas, or cooldowns.
+
 ### AI web search
 
 AI chat can call a read-only `web.search` tool when the server mode allows it:

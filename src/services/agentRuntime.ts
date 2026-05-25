@@ -2,7 +2,7 @@ import type { Message } from 'discord.js';
 import type { AiDetailedResponse, AiService } from './aiService.js';
 import { extractErrorDetails, type AiChatMessage } from './aiService.js';
 import type { AgentPendingAction, AgentTurnContextStore, AgentTurnStoredContext } from './agentTurnContextStore.js';
-import type { AgentToolDefinition, AgentToolExecutionContext, AgentToolObservation, AgentToolPolicy, ToolRegistry } from './toolRegistry.js';
+import type { AgentDiscordPresentation, AgentToolDefinition, AgentToolExecutionContext, AgentToolObservation, AgentToolPolicy, ToolRegistry } from './toolRegistry.js';
 import type { WebSearchMode, WebSearchProviderName, WebSearchProviderStatus } from './webSearchService.js';
 
 const MAX_ITERATIONS = 4;
@@ -30,11 +30,11 @@ const AGENT_OUTPUT_CONTRACT = [
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
   '일반 대화처럼 도구가 필요 없으면 not_handled를 선택해 기존 AI 채팅으로 넘겨요. 예: {"kind":"not_handled"}',
   'final 스타일: 한국어 초코코봇 말투, 짧고 자연스럽게 답해요. 봇 이름을 직접 말할 때는 초코코봇이라고 써요. 느낌표/물음표/이모지 금지. 문장 끝에 해요나 ...를 접미어처럼 억지로 덧붙이지 마세요.',
-  'outputs={"tool_calls":{"calls":[{"id":"call_1","tool":"registered.tool","input":{}}]},"final":{"message":"..."},"clarify":{"message":"...","pendingAction":{"kind":"cleanup|history","originalPrompt":"...","missing":["field"]}},"unavailable":{"message":"...","reason":"web_search_unavailable?"},"blocked":{"message":"...","blockedTools":["tool.name"]},"confirm_pending":{},"not_handled":{}}'
+  'outputs={"tool_calls":{"calls":[{"id":"call_1","tool":"registered.tool","input":{}}]},"final":{"message":"..."},"clarify":{"message":"...","pendingAction":{"kind":"cleanup|history|tarot","originalPrompt":"...","missing":["field"]}},"unavailable":{"message":"...","reason":"web_search_unavailable?"},"blocked":{"message":"...","blockedTools":["tool.name"]},"confirm_pending":{},"not_handled":{}}'
 ].join('\n');
 
 export type AgentRuntimeOutcome =
-  | { kind: 'final'; message: string }
+  | { kind: 'final'; message: string; presentation?: AgentDiscordPresentation }
   | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
   | { kind: 'unavailable'; message: string; reason?: 'web_search_unavailable' }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
@@ -83,13 +83,14 @@ export type AgentRuntimeOptions = {
     providerStatus: WebSearchProviderStatus;
     resultCount: number;
   };
+  tarotPending?: { topic: string; spreadCount: number; spreadName?: string; expiresAt?: number; requesterDisplayName?: string } | null;
   executionContext: AgentToolExecutionContext;
   onDiagnostic?: (details: AgentRuntimeDiagnostic) => Promise<void> | void;
 };
 
 type AgentEnvelope =
   | { kind: 'tool_calls'; calls: AgentToolCall[] }
-  | { kind: 'final'; message: string }
+  | { kind: 'final'; message: string; presentation?: AgentDiscordPresentation }
   | { kind: 'clarify'; message: string; pendingAction?: AgentPendingAction }
   | { kind: 'unavailable'; message: string; reason?: 'web_search_unavailable' }
   | { kind: 'blocked'; message: string; blockedTools: string[] }
@@ -196,11 +197,7 @@ export class AgentRuntime {
       if (envelope.kind === 'not_handled' && (priorContext?.lastIntent === 'clarify' || priorContext?.pendingAction) && !actionDecisionRetryRequested) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'clarify_follow_up_required' });
         actionDecisionRetryRequested = true;
-        validationFailureFallback = {
-          kind: 'blocked',
-          message: '메시지 삭제 요청의 대상이 아직 명확하지 않아요. 본인 메시지 삭제나 관리자용 전체 채널 삭제만 가능해요.',
-          blockedTools: ['command.cleanup']
-        };
+        validationFailureFallback = buildPendingActionBlockedFallback(priorContext?.pendingAction);
         validationFeedback = buildClarifyFollowUpFeedback(priorContext);
         continue;
       }
@@ -213,11 +210,7 @@ export class AgentRuntime {
       if (envelope.kind === 'not_handled' && priorContext?.pendingAction) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: 'pending_action_not_resolved' });
         this.updateTurnContext(key, { kind: 'clarify', message: 'pending action unresolved', pendingAction: priorContext.pendingAction }, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-        return {
-          kind: 'blocked',
-          message: '메시지 삭제 요청의 대상이 아직 처리되지 않았어요. 제가 처리할 수 있는 건 요청자 본인 메시지 삭제나 관리자용 전체 채널 삭제뿐이에요.',
-          blockedTools: ['command.cleanup']
-        };
+        return buildPendingActionBlockedFallback(priorContext.pendingAction);
       }
       validationFeedback = null;
       const webSearchFailure = buildWebSearchFailureOutcome(observations);
@@ -255,8 +248,9 @@ export class AgentRuntime {
           return { kind: 'not_handled', reason: 'final_without_observation' };
         }
         await options.onDiagnostic?.({ stage: 'agent', event: envelope.kind === 'final' ? 'final' : 'decision', runId, iteration, decisionKind: envelope.kind });
-        this.updateTurnContext(key, envelope, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-        return envelope;
+        const outcome = withTrustedPresentation(envelope, observations);
+        this.updateTurnContext(key, outcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return outcome;
       }
 
       const callErrors = validateToolCallBatch(envelope.calls, this.registry, totalToolCalls);
@@ -496,7 +490,29 @@ export class AgentRuntime {
 }
 
 function isReusableFollowUpIntent(intent: string | undefined): boolean {
-  return intent === 'history' || intent === 'web_search' || intent === 'time';
+  return intent === 'history' || intent === 'web_search' || intent === 'time' || intent === 'tarot';
+}
+
+function buildPendingActionBlockedFallback(pendingAction: AgentPendingAction | undefined): AgentRuntimeOutcome {
+  if (pendingAction?.kind === 'tarot') {
+    return {
+      kind: 'blocked',
+      message: '타로 카드 선택이 아직 처리되지 않았어요. 안내된 개수만큼 1~78 사이 숫자를 중복 없이 골라주세요.',
+      blockedTools: ['tarot.reveal_selection']
+    };
+  }
+  if (pendingAction?.kind === 'history') {
+    return {
+      kind: 'blocked',
+      message: '대화 기록 요청의 필요한 범위가 아직 처리되지 않았어요. 채널이나 서버 범위를 다시 알려주세요.',
+      blockedTools: ['history.search']
+    };
+  }
+  return {
+    kind: 'blocked',
+    message: '메시지 삭제 요청의 대상이 아직 처리되지 않았어요. 제가 처리할 수 있는 건 요청자 본인 메시지 삭제나 관리자용 전체 채널 삭제뿐이에요.',
+    blockedTools: ['command.cleanup']
+  };
 }
 
 function buildPendingConfirmationFeedback(pending: NonNullable<AgentRuntimeOptions['pendingConfirmation']>): string {
@@ -515,11 +531,11 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     priorContext.lastUserPrompt ? `이전 사용자 요청: ${priorContext.lastUserPrompt}` : undefined,
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
-    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 command.cleanup 또는 command.mass_cleanup tool_calls JSON을, history는 history.search tool_calls JSON을 작성하세요.',
+    '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 command.cleanup 또는 command.mass_cleanup tool_calls JSON을, history는 history.search tool_calls JSON을, 타로 카드 선택 후속 답변은 tarot.reveal_selection tool_calls JSON을 작성하세요.',
     'cleanup에서 evidence는 사용자에게 물어보는 값이 아니에요. command.cleanup.evidence는 originalPrompt/현재 답변에 실제로 있는 문구를 그대로 쓰고, command.mass_cleanup에는 evidence를 넣지 마세요.',
-    '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요.',
+    '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요. 이전 질문이 타로 카드 번호를 묻는 clarify였다면, 현재 답변의 번호를 AI가 구조화해 tarot.reveal_selection을 호출하고 숫자 검증 오류는 관찰값 그대로 사용자에게 안내하세요.',
     '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
-    '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 삭제 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
+    '아직 부족하면 업데이트된 pendingAction을 포함한 clarify JSON으로 추가 질문하세요. pendingAction이 남아 있는 동안에는 일반 대화가 아니라 해당 후속 답변으로 우선 처리하고, not_handled는 쓰지 마세요.'
   ].filter(Boolean).join('\n');
 }
 
@@ -548,6 +564,7 @@ function buildEmptyBlockedFeedback(): string {
 function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
   if (!isRecord(raw)) return undefined;
   if (raw.kind === 'history') return parseHistoryPendingAction(raw);
+  if (raw.kind === 'tarot') return parseTarotPendingAction(raw);
   if (raw.kind !== 'cleanup') return undefined;
   const originalPrompt = typeof raw.originalPrompt === 'string' ? raw.originalPrompt.trim() : '';
   if (!originalPrompt) return undefined;
@@ -569,6 +586,28 @@ function parsePendingAction(raw: unknown): AgentPendingAction | undefined {
     ...(target ? { target } : {}),
     ...(count ? { count } : {}),
     ...(cleanupEvidence ? { cleanupEvidence } : {}),
+    missing
+  };
+}
+
+
+function parseTarotPendingAction(raw: Record<string, unknown>): AgentPendingAction | undefined {
+  const originalPrompt = typeof raw.originalPrompt === 'string' ? raw.originalPrompt.trim() : '';
+  const topic = typeof raw.topic === 'string' ? raw.topic.trim() : '';
+  const spreadCount = typeof raw.spreadCount === 'number' && Number.isInteger(raw.spreadCount) && raw.spreadCount >= 1 && raw.spreadCount <= 5
+    ? raw.spreadCount
+    : undefined;
+  const spreadName = typeof raw.spreadName === 'string' && raw.spreadName.trim() ? raw.spreadName.trim() : undefined;
+  if (!originalPrompt || !topic || !spreadCount) return undefined;
+  const rawMissing = Array.isArray(raw.missing) ? raw.missing : [];
+  if (rawMissing.some((item) => item !== 'numbers')) return undefined;
+  const missing = rawMissing.filter((item): item is 'numbers' => item === 'numbers');
+  return {
+    kind: 'tarot',
+    originalPrompt,
+    topic,
+    spreadCount,
+    ...(spreadName ? { spreadName } : {}),
     missing
   };
 }
@@ -643,7 +682,7 @@ function parseAgentEnvelope(response: string): ParseResult {
       if (!message) return { ok: false, errors: ['clarify.message must be non-empty'] };
       const pendingAction = parsePendingAction(parsed.pendingAction);
       if (parsed.pendingAction !== undefined && !pendingAction) {
-        return { ok: false, errors: ['clarify.pendingAction is invalid or uses unsupported missing fields; cleanup missing may only include target/count and must not ask for evidence'] };
+        return { ok: false, errors: ['clarify.pendingAction is invalid or uses unsupported missing fields; pendingAction missing fields must match the action; cleanup missing may only include target/count and must not ask for evidence; tarot missing may only include numbers'] };
       }
       return { ok: true, envelope: pendingAction ? { kind, message, pendingAction } : { kind, message } };
     }
@@ -872,11 +911,59 @@ function compactObservation(observation: AgentToolObservation): unknown {
   };
 }
 
+
+function withTrustedPresentation(envelope: Exclude<AgentEnvelope, { kind: 'tool_calls' }>, observations: readonly AgentToolObservation[]): AgentRuntimeOutcome {
+  if (envelope.kind !== 'final') return envelope;
+  const presentation = extractTrustedPresentation(observations);
+  return presentation ? { ...envelope, presentation } : envelope;
+}
+
+function extractTrustedPresentation(observations: readonly AgentToolObservation[]): AgentDiscordPresentation | undefined {
+  for (const observation of [...observations].reverse()) {
+    if (observation.toolName !== 'tarot.reveal_selection' || observation.status !== 'ok' || !isRecord(observation.output)) continue;
+    const presentation = observation.output.presentation;
+    if (!isRecord(presentation)) continue;
+    return sanitizePresentation(presentation);
+  }
+  return undefined;
+}
+
+function sanitizePresentation(raw: Record<string, unknown>): AgentDiscordPresentation | undefined {
+  const files = Array.isArray(raw.files)
+    ? raw.files.flatMap((file) => {
+      if (!isRecord(file) || typeof file.path !== 'string' || typeof file.name !== 'string') return [];
+      if (!file.path.startsWith('assets/tarot/') || file.path.includes('..') || !file.name.endsWith('.png')) return [];
+      return [{ path: file.path, name: file.name }];
+    }).slice(0, 5)
+    : undefined;
+  const cards = Array.isArray(raw.cards)
+    ? raw.cards.flatMap((card) => {
+      if (!isRecord(card)) return [];
+      const selectionNumber = typeof card.selectionNumber === 'number' && Number.isInteger(card.selectionNumber) ? card.selectionNumber : undefined;
+      const name = typeof card.name === 'string' ? card.name.trim() : '';
+      const orientation = typeof card.orientation === 'string' ? card.orientation.trim() : '';
+      const attachmentName = typeof card.attachmentName === 'string' ? card.attachmentName.trim() : undefined;
+      if (!selectionNumber || !name || !orientation) return [];
+      return [{ selectionNumber, name, orientation, ...(attachmentName ? { attachmentName } : {}) }];
+    }).slice(0, 5)
+    : undefined;
+  const title = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim().slice(0, 120) : undefined;
+  const summary = typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary.trim().slice(0, 1000) : undefined;
+  if (!title && !summary && !files?.length && !cards?.length) return undefined;
+  return {
+    ...(title ? { title } : {}),
+    ...(summary ? { summary } : {}),
+    ...(files?.length ? { files } : {}),
+    ...(cards?.length ? { cards } : {})
+  };
+}
+
 function inferIntent(calls: readonly AgentToolCall[], envelope: AgentRuntimeOutcome): string | undefined {
   if (calls.some((call) => call.tool.startsWith('time.'))) return 'time';
   if (calls.some((call) => call.tool.startsWith('history.'))) return 'history';
   if (calls.some((call) => call.tool === 'web.search')) return 'web_search';
   if (calls.some((call) => call.tool.startsWith('voice.'))) return 'voice';
+  if (calls.some((call) => call.tool.startsWith('tarot.'))) return 'tarot';
   if (envelope.kind === 'unavailable' && envelope.reason === 'web_search_unavailable') return 'web_search';
   return envelope.kind;
 }
@@ -901,6 +988,13 @@ function formatRuntimeContextForPrompt(message: Message, options: AgentRuntimeOp
     channels: channels.map((channel) => ({ id: channel.id, name: channel.name, mention: channel.mention })),
     channelCount: options.availableChannels.length,
     channelsTruncated: options.availableChannels.length > channels.length,
+    tarotPending: options.tarotPending ? {
+      topic: options.tarotPending.topic,
+      spreadCount: options.tarotPending.spreadCount,
+      spreadName: options.tarotPending.spreadName,
+      expiresAt: options.tarotPending.expiresAt,
+      requesterDisplayName: options.tarotPending.requesterDisplayName
+    } : undefined,
     now: `<t:${Math.floor(options.executionContext.nowMs / 1000)}:t>`
   });
 }
@@ -921,11 +1015,30 @@ function selectPromptChannels(
 }
 
 function formatToolCatalogForPrompt(tools: ReturnType<ToolRegistry['list']>): string {
-  return tools.map(formatToolDetailForPrompt).join(' | ');
+  return [...tools].sort(compareToolPromptPriority).map(formatToolDetailForPrompt).join(' | ');
 }
 
 function formatToolDetailForPrompt(tool: AgentToolDefinition): string {
-  return `${tool.name} [${tool.policy}] input=${tool.inputSchema} :: ${truncate(tool.description, 72)}`;
+  return `${tool.name} [${tool.policy}] input=${truncate(tool.inputSchema, 180)} :: ${truncate(tool.description, 44)}`;
+}
+
+const TOOL_PROMPT_PRIORITY = [
+  'runtime.context',
+  'history.search',
+  'history.summarize',
+  'voice.speak',
+  'tarot.start_reading',
+  'tarot.reveal_selection',
+  'web.search'
+] as const;
+
+function compareToolPromptPriority(left: AgentToolDefinition, right: AgentToolDefinition): number {
+  const leftIndex = TOOL_PROMPT_PRIORITY.indexOf(left.name as (typeof TOOL_PROMPT_PRIORITY)[number]);
+  const rightIndex = TOOL_PROMPT_PRIORITY.indexOf(right.name as (typeof TOOL_PROMPT_PRIORITY)[number]);
+  if (leftIndex !== -1 || rightIndex !== -1) {
+    return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+  }
+  return left.name.localeCompare(right.name);
 }
 
 function formatWebSearchPolicy(webSearch: AgentRuntimeOptions['webSearch']): string {
@@ -970,6 +1083,8 @@ function buildObservationBasedFallbackOutcome(observations: readonly AgentToolOb
   if (timeFallback) return timeFallback;
   const voiceFallback = buildVoiceFallbackOutcome(observations);
   if (voiceFallback) return voiceFallback;
+  const tarotFallback = buildTarotFallbackOutcome(observations);
+  if (tarotFallback) return tarotFallback;
   const webSources = extractSuccessfulWebSearchSources(observations);
   if (!webSources.length) return null;
   return {
@@ -1001,7 +1116,13 @@ function hasUsableObservation(observations: readonly AgentToolObservation[]): bo
     || hasSuccessfulHistorySearchObservation(observations)
     || hasSuccessfulHistorySummaryObservation(observations)
     || hasSuccessfulTimeObservation(observations)
-    || hasSuccessfulVoiceObservation(observations);
+    || hasSuccessfulVoiceObservation(observations)
+    || hasTarotObservation(observations);
+}
+
+
+function hasTarotObservation(observations: readonly AgentToolObservation[]): boolean {
+  return observations.some((observation) => observation.toolName.startsWith('tarot.'));
 }
 
 function hasSuccessfulWebSearchObservation(observations: readonly AgentToolObservation[]): boolean {
@@ -1214,6 +1335,26 @@ function extractSuccessfulVoiceMessages(observations: readonly AgentToolObservat
 
 function isMessageFallbackTool(toolName: string): boolean {
   return toolName.startsWith('voice.') || toolName.startsWith('tts.') || toolName === 'time.user_timezone';
+}
+
+
+function buildTarotFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
+  const latest = [...observations].reverse().find((observation) => observation.toolName.startsWith('tarot.'));
+  if (!latest) return null;
+  if (latest.status !== 'ok') {
+    return {
+      kind: 'blocked',
+      message: latest.message ?? '타로 카드 선택을 처리하지 못했어요. 안내된 개수만큼 1~78 사이 숫자를 중복 없이 골라주세요.',
+      blockedTools: [latest.toolName]
+    };
+  }
+  if (!isRecord(latest.output)) return null;
+  const outputMessage = typeof latest.output.message === 'string' ? latest.output.message : '타로 관찰값을 확인했어요.';
+  if (latest.toolName === 'tarot.reveal_selection') {
+    const presentation = extractTrustedPresentation(observations);
+    return presentation ? { kind: 'final', message: outputMessage, presentation } : { kind: 'final', message: outputMessage };
+  }
+  return { kind: 'clarify', message: outputMessage };
 }
 
 function buildVoiceFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {

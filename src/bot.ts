@@ -1,4 +1,4 @@
-import { ChannelType, Client, Collection, Events, GatewayIntentBits, GuildMember, PermissionFlagsBits } from 'discord.js';
+import { AttachmentBuilder, ChannelType, Client, Collection, EmbedBuilder, Events, GatewayIntentBits, GuildMember, PermissionFlagsBits } from 'discord.js';
 import type { GuildTextBasedChannel, Message, TextChannel } from 'discord.js';
 import type { PrefixCommand } from './types.js';
 import type { Settings } from './config.js';
@@ -6,7 +6,7 @@ import type { UsageStore } from './services/usageStore.js';
 import { AiService } from './services/aiService.js';
 import { extractErrorDetails, type AiChatMessage } from './services/aiService.js';
 import { AiCommandPlanner } from './services/aiCommandPlanner.js';
-import { AgentRuntime, type AgentRuntimeDiagnostic } from './services/agentRuntime.js';
+import { AgentRuntime, type AgentRuntimeDiagnostic, type AgentRuntimeOutcome } from './services/agentRuntime.js';
 import { AgentTurnContextStore } from './services/agentTurnContextStore.js';
 import {
   AgentToolExecutionError,
@@ -20,11 +20,17 @@ import {
   type TtsVoicePresetOutput,
   type UserTimezoneInput,
   type UserTimezoneOutput,
+  type TarotRevealSelectionInput,
+  type TarotRevealSelectionOutput,
+  type TarotStartReadingInput,
+  type TarotStartReadingOutput,
   type VoiceSpeakInput,
   type VoiceSpeakOutput,
   type VoiceStopOutput
 } from './services/toolRegistry.js';
 import { createWebSearchProvider, type WebSearchMode, type WebSearchProvider } from './services/webSearchService.js';
+import { drawTarotCardsFromNumbers, formatTarotEnergyBars, validateTarotSelectionNumbers } from './services/tarotDeck.js';
+import { TarotSessionStore, type TarotSessionKey } from './services/tarotSessionStore.js';
 import { AiChatService, parseAiChatTrigger, type AiChatRuntimeContext } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
 import { ConfirmationManager, type ConfirmationScope, type PendingConfirmation } from './services/confirmationManager.js';
@@ -80,6 +86,7 @@ export type BotContext = {
   aiCommandPlanner?: AiCommandPlanner;
   agentRuntime?: AgentRuntime;
   agentTurnContextStore?: AgentTurnContextStore;
+  tarotSessions?: TarotSessionStore;
   webSearchProvider?: WebSearchProvider;
   voice: VoiceService;
   voiceSettings: import('./services/voiceSettingsStore.js').VoiceSettingsStore;
@@ -974,6 +981,48 @@ async function replyWithChunks(message: Message, content: string): Promise<void>
   }
 }
 
+
+
+type TarotPresentationMessage = Extract<AgentRuntimeOutcome, { kind: 'final' }>['presentation'];
+
+async function replyWithAgentOutcome(message: Message, outcome: Extract<AgentRuntimeOutcome, { kind: 'final' | 'clarify' | 'unavailable' | 'blocked' }>): Promise<void> {
+  if (outcome.kind === 'final' && outcome.presentation) {
+    await replyWithTarotPresentation(message, outcome.message, outcome.presentation);
+    return;
+  }
+  await replyWithChunks(message, outcome.message);
+}
+
+async function replyWithTarotPresentation(message: Message, content: string, presentation: TarotPresentationMessage): Promise<void> {
+  if (!presentation) {
+    await replyWithChunks(message, content);
+    return;
+  }
+  const chunks = chunkDiscordMessage(content);
+  const files = (presentation.files ?? [])
+    .filter((file) => file.path.startsWith('assets/tarot/') && !file.path.includes('..') && file.name.endsWith('.png'))
+    .slice(0, 5)
+    .map((file) => new AttachmentBuilder(file.path, { name: file.name }));
+  const embed = new EmbedBuilder();
+  if (presentation.title) embed.setTitle(presentation.title);
+  const cardLines = (presentation.cards ?? []).map((card) => `${card.selectionNumber}. ${card.name} · ${card.orientation}`);
+  const description = [presentation.summary, cardLines.length ? `카드\n${cardLines.join('\n')}` : undefined].filter(Boolean).join('\n\n');
+  if (description) embed.setDescription(description.slice(0, 4000));
+  const firstAttachmentName = files[0]?.name;
+  if (firstAttachmentName) embed.setThumbnail(`attachment://${firstAttachmentName}`);
+  const embeds = description || presentation.title ? [embed] : [];
+  await message.reply({
+    content: chunks[0] ?? '타로 결과예요...',
+    ...(embeds.length ? { embeds } : {}),
+    ...(files.length ? { files } : {}),
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+  const channel = message.channel as GuildTextBasedChannel;
+  for (const chunk of chunks.slice(1)) {
+    await channel.send({ content: chunk, allowedMentions: { parse: [], repliedUser: false } });
+  }
+}
+
 async function rememberAiExchange(context: BotContext, message: Message, prompt: string, answer: string): Promise<void> {
   const aiChat = context.aiChat as AiChatService & { rememberExchange?: (message: Message, prompt: string, answer: string) => Promise<void> };
   if (typeof aiChat.rememberExchange !== 'function') return;
@@ -1675,6 +1724,97 @@ async function executeHistorySearchTool(
   };
 }
 
+
+function resolveTarotToolContext(executionContext: AgentToolExecutionContext): { message: Message; context: BotContext } {
+  const message = executionContext.message as Message | undefined;
+  const context = executionContext.botContext as BotContext | undefined;
+  if (!message || !context) {
+    throw new AgentToolExecutionError(
+      'tarot_context_missing',
+      '타로 도구 실행 문맥을 찾지 못했어요.',
+      'Retry only when the runtime provides the triggering Discord message and bot context.'
+    );
+  }
+  return { message, context };
+}
+
+async function executeTarotStartReadingTool(input: TarotStartReadingInput, executionContext: AgentToolExecutionContext): Promise<TarotStartReadingOutput> {
+  const { message, context } = resolveTarotToolContext(executionContext);
+  if (!message.guildId) {
+    throw new AgentToolExecutionError('guild_required', '서버 채널에서만 타로를 볼 수 있어요.', 'Ask the user to use tarot in a server text channel.');
+  }
+  if (!context.tarotSessions) {
+    throw new AgentToolExecutionError('tarot_store_unavailable', '타로 세션 저장소를 사용할 수 없어요.', 'Tell the user to retry later.');
+  }
+  const key = tarotSessionKeyFor(message);
+  if (!key) {
+    throw new AgentToolExecutionError('guild_required', '서버 채널에서만 타로를 볼 수 있어요.', 'Ask the user to use tarot in a server text channel.');
+  }
+  const session = context.tarotSessions.start(key, {
+    topic: input.topic,
+    spreadCount: input.spreadCount,
+    ...(input.spreadName ? { spreadName: input.spreadName } : {}),
+    requesterDisplayName: requesterDisplayName(message)
+  }, executionContext.nowMs);
+  const spreadLabel = input.spreadName ? `${input.spreadName}으로 ` : '';
+  return {
+    sessionId: `${key.guildId}:${key.channelId}:${key.userId}`,
+    topic: session.topic,
+    spreadCount: session.spreadCount,
+    ...(session.spreadName ? { spreadName: session.spreadName } : {}),
+    expiresAt: session.expiresAt,
+    message: `${session.topic}은 ${spreadLabel}${session.spreadCount}장으로 볼게요. 1~78 사이 숫자 ${session.spreadCount}개를 중복 없이 골라주세요.`
+  };
+}
+
+async function executeTarotRevealSelectionTool(input: TarotRevealSelectionInput, executionContext: AgentToolExecutionContext): Promise<TarotRevealSelectionOutput> {
+  const { message, context } = resolveTarotToolContext(executionContext);
+  const key = tarotSessionKeyFor(message);
+  if (!key || !context.tarotSessions) {
+    throw new AgentToolExecutionError('tarot_session_not_found', '진행 중인 타로 선택을 찾지 못했어요. 먼저 타로를 봐달라고 요청해 주세요.', 'Start a tarot reading before revealing card numbers.', 'error', 'numbers');
+  }
+  const session = context.tarotSessions.get(key, executionContext.nowMs);
+  if (!session) {
+    throw new AgentToolExecutionError('tarot_session_not_found', '진행 중인 타로 선택을 찾지 못했어요. 먼저 타로를 봐달라고 요청해 주세요.', 'Start a tarot reading before revealing card numbers.', 'error', 'numbers');
+  }
+  const validation = validateTarotSelectionNumbers(input.numbers, session.spreadCount);
+  if (!validation.ok) {
+    throw new AgentToolExecutionError(validation.code, validation.message, validation.hint, 'error', validation.field);
+  }
+  const consumed = context.tarotSessions.consume(key, executionContext.nowMs) ?? session;
+  const drawn = drawTarotCardsFromNumbers(validation.numbers, consumed.deckOrder);
+  const bars = formatTarotEnergyBars(drawn);
+  const cards = drawn.map((item) => ({
+    selectionNumber: item.selectionNumber,
+    nameKo: item.card.nameKo,
+    nameEn: item.card.nameEn,
+    orientation: item.orientation,
+    orientationKo: item.orientation === 'reversed' ? '역방향' : '정방향',
+    keywords: item.card.keywords,
+    assetPath: item.assetPath,
+    attachmentName: item.attachmentName
+  }));
+  return {
+    message: `${consumed.topic} 타로 카드 ${drawn.length}장을 확인했어요. 관찰값의 카드, 방향, 키워드, 그래프를 근거로 해석해 주세요.`,
+    topic: consumed.topic,
+    spreadCount: consumed.spreadCount,
+    selectedNumbers: validation.numbers,
+    cards,
+    visualData: { bars },
+    presentation: {
+      title: `${consumed.topic} 타로`,
+      summary: bars,
+      files: drawn.map((item) => ({ path: item.assetPath, name: item.attachmentName })),
+      cards: cards.map((card) => ({
+        selectionNumber: card.selectionNumber,
+        name: card.nameKo,
+        orientation: card.orientationKo,
+        attachmentName: card.attachmentName
+      }))
+    }
+  };
+}
+
 function resolveVoiceToolContext(executionContext: AgentToolExecutionContext): { message: Message; context: BotContext } {
   const message = executionContext.message as Message | undefined;
   const context = executionContext.botContext as BotContext | undefined;
@@ -2316,6 +2456,7 @@ async function handleAiPrompt(
         pendingHistory: pendingHistoryRequest ? { mode: pendingHistoryRequest.mode, query: pendingHistoryRequest.query } : null,
         pendingConfirmation: pendingConfirmationPromptContext(pendingConfirmation),
         conversationContext: conversationContextFor(context, message),
+        tarotPending: tarotPendingFor(message, context),
         webSearch: {
           mode: getGuildWebSearchMode(context, message.guildId),
           provider: context.settings.webSearchProvider,
@@ -2338,6 +2479,7 @@ async function handleAiPrompt(
               userVoice: 'requester_voice_channel_not_bot_location',
               botVoice: 'botVoiceConnected_and_botVoiceChannel_are_bot_location_source_of_truth'
             },
+            tarotPending: tarotPendingFor(message, context),
             webSearch: {
               mode: getGuildWebSearchMode(context, message.guildId),
               provider: context.settings.webSearchProvider,
@@ -2354,7 +2496,8 @@ async function handleAiPrompt(
         case 'unavailable':
         case 'blocked':
           clearPendingChannelHistoryRequest(message);
-          await replyWithChunks(message, outcome.message);
+          if (outcome.kind === 'clarify') rememberTarotClarifySession(message, context, outcome);
+          await replyWithAgentOutcome(message, outcome);
           await rememberAiExchange(context, message, prompt, outcome.message);
           return true;
         case 'confirmation_required':
@@ -2411,6 +2554,70 @@ function parseAiChannelPrompt(message: Message, context: BotContext, prefix: str
   return trimmed;
 }
 
+
+function tarotSessionKeyFor(message: Message): TarotSessionKey | null {
+  if (!message.guildId) return null;
+  return { guildId: message.guildId, channelId: message.channelId, userId: message.author.id };
+}
+
+function tarotPendingFor(message: Message, context: BotContext): { topic: string; spreadCount: number; spreadName?: string; expiresAt?: number; requesterDisplayName?: string } | undefined {
+  const key = tarotSessionKeyFor(message);
+  if (!key || !context.tarotSessions) return undefined;
+  const session = context.tarotSessions.get(key, message.createdTimestamp);
+  if (!session) return undefined;
+  return {
+    topic: session.topic,
+    spreadCount: session.spreadCount,
+    ...(session.spreadName ? { spreadName: session.spreadName } : {}),
+    expiresAt: session.expiresAt,
+    ...(session.requesterDisplayName ? { requesterDisplayName: session.requesterDisplayName } : {})
+  };
+}
+
+
+function rememberTarotClarifySession(message: Message, context: BotContext, outcome: Extract<AgentRuntimeOutcome, { kind: 'clarify' }>): void {
+  const pending = outcome.pendingAction;
+  const key = tarotSessionKeyFor(message);
+  if (!key || !context.tarotSessions || pending?.kind !== 'tarot') return;
+  if (context.tarotSessions.get(key, message.createdTimestamp)) return;
+  context.tarotSessions.start(key, {
+    topic: pending.topic,
+    spreadCount: pending.spreadCount,
+    ...(pending.spreadName ? { spreadName: pending.spreadName } : {}),
+    requesterDisplayName: requesterDisplayName(message)
+  }, message.createdTimestamp);
+}
+
+function hasOnlyCardNumberSelectionSyntax(content: string): boolean {
+  const trimmed = content.trim();
+  return Boolean(trimmed) && /[0-9]/.test(trimmed) && /^[0-9\s,，、.]+$/.test(trimmed);
+}
+
+async function handleActiveTarotSessionReply(
+  message: Message,
+  prefix: string,
+  commands: Collection<string, PrefixCommand>,
+  context: BotContext,
+  confirmations: ConfirmationManager
+): Promise<boolean> {
+  if (!message.guildId || message.author.bot || !context.tarotSessions) return false;
+  if (!hasOnlyCardNumberSelectionSyntax(message.content)) return false;
+  const ownKey = tarotSessionKeyFor(message);
+  if (!ownKey) return false;
+  const ownSession = context.tarotSessions.get(ownKey, message.createdTimestamp);
+  if (ownSession) {
+    return handleAiPrompt(message, message.content.trim(), prefix, `${prefix}? ${message.content.trim()}`, commands, context, confirmations);
+  }
+  const active = context.tarotSessions.getActiveInChannel(message.guildId, message.channelId, message.createdTimestamp);
+  if (!active) return false;
+  const name = active.session.requesterDisplayName ?? '다른 사용자';
+  await message.reply({
+    content: `지금은 ${name}님의 타로 카드 선택을 기다리고 있어요. 잠시 뒤에 다시 요청해 주세요.`,
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+  return true;
+}
+
 export async function handleMessageCreate(
   message: Message,
   commands: Collection<string, PrefixCommand>,
@@ -2429,6 +2636,7 @@ export async function handleMessageCreate(
     if (aiPrompt) {
       return handleAiPrompt(message, aiPrompt, prefix, message.content, commands, context, confirmations);
     }
+    if (await handleActiveTarotSessionReply(message, prefix, commands, context, confirmations)) return true;
     const routed = routeNaturalLanguageCommand(message.content, prefix);
     if (routed && (await handleNaturalLanguageRoute(message, routed, context, commands, confirmations))) {
       return true;
@@ -2497,6 +2705,7 @@ export async function createBot(
   const ai = new AiService(settings, usageStore);
   const aiCommandPlanner = new AiCommandPlanner(ai);
   const agentTurnContextStore = new AgentTurnContextStore();
+  const tarotSessions = new TarotSessionStore();
   const webSearchProvider = createWebSearchProvider(settings);
   const agentRuntime = new AgentRuntime(
     ai,
@@ -2510,7 +2719,9 @@ export async function createBot(
       voiceSpeak: executeVoiceSpeakTool,
       ttsVoicePreset: executeTtsVoicePresetTool,
       ttsEngine: executeTtsEngineTool,
-      userTimezone: executeUserTimezoneTool
+      userTimezone: executeUserTimezoneTool,
+      tarotStartReading: executeTarotStartReadingTool,
+      tarotRevealSelection: executeTarotRevealSelectionTool
     }),
     agentTurnContextStore
   );
@@ -2530,6 +2741,7 @@ export async function createBot(
     aiCommandPlanner,
     agentRuntime,
     agentTurnContextStore,
+    tarotSessions,
     webSearchProvider,
     activityLog,
     voiceSettings,

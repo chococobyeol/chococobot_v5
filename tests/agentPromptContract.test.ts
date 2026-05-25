@@ -46,6 +46,8 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).toContain('runtime.context');
     expect(prompt).toContain('history.search');
     expect(prompt).toContain('voice.speak');
+    expect(prompt).toContain('tarot.start_reading');
+    expect(prompt).toContain('tarot.reveal_selection');
     expect(prompt).toContain('requester_voice_channel_not_bot_location');
     expect(prompt).toContain('literal quote from current/stored user text');
     expect(prompt).toContain('channel-wide cleanup has no evidence field');
@@ -53,7 +55,7 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).not.toContain('cleanup evidence는 내부 안전 근거예요');
     expect(prompt).not.toContain('지원 prefix 명령:');
     expect(prompt).not.toContain('{"kind":"legacy_command","query":"..."}');
-    expect(prompt.length).toBeLessThan(5200);
+    expect(prompt.length).toBeLessThan(5400);
   });
 
   it('keeps the output envelope contract before truncatable channel/tool context', async () => {
@@ -106,4 +108,21 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).not.toContain('{"kind":"legacy_command","query":"말 안녕"}');
     expect(prompt).not.toContain('{"kind":"legacy_command","query":"청소 3"');
   });
+
+  it('includes compact active tarot session context without adding semantic router prose', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await runtime.run(makeMessage(), '1 2 3', makeOptions({
+      tarotPending: { topic: '연애운', spreadCount: 3, spreadName: '세 장 흐름', expiresAt: Date.parse('2026-05-22T18:25:00.000Z') }
+    }));
+
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('tarotPending');
+    expect(prompt).toContain('연애운');
+    expect(prompt).toContain('tarot.reveal_selection');
+    expect(prompt).not.toContain('타로라는 단어가 있으면');
+    expect(prompt.length).toBeLessThan(5400);
+  });
+
 });
