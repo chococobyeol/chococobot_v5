@@ -2705,23 +2705,27 @@ function rememberTarotClarifySession(message: Message, context: BotContext, outc
 
 function hasOnlyCardNumberSelectionSyntax(content: string): boolean {
   const trimmed = content.trim();
-  return Boolean(trimmed) && /[0-9]/.test(trimmed) && /^[0-9\s,，、.]+$/.test(trimmed);
+  if (!trimmed) return false;
+  if (/[0-9]/.test(trimmed) && /^[0-9\s,，、.]+$/.test(trimmed)) return true;
+  const compact = trimmed.replace(/[\s,，、.]+/g, '');
+  return /[영공일이삼사오육칠팔구]/.test(compact) && /^[영공일이삼사오육칠팔구십백천만]+$/.test(compact);
 }
 
 async function handleActiveTarotSessionReply(
   message: Message,
+  selectionContent: string,
   prefix: string,
   commands: Collection<string, PrefixCommand>,
   context: BotContext,
   confirmations: ConfirmationManager
 ): Promise<boolean> {
   if (!message.guildId || message.author.bot || !context.tarotSessions) return false;
-  if (!hasOnlyCardNumberSelectionSyntax(message.content)) return false;
+  if (!hasOnlyCardNumberSelectionSyntax(selectionContent)) return false;
   const ownKey = tarotSessionKeyFor(message);
   if (!ownKey) return false;
   const ownSession = context.tarotSessions.get(ownKey, message.createdTimestamp);
   if (ownSession) {
-    return handleAiPrompt(message, message.content.trim(), prefix, `${prefix}? ${message.content.trim()}`, commands, context, confirmations);
+    return handleAiPrompt(message, selectionContent.trim(), prefix, `${prefix}? ${selectionContent.trim()}`, commands, context, confirmations);
   }
   const active = context.tarotSessions.getActiveInChannel(message.guildId, message.channelId, message.createdTimestamp);
   if (!active) return false;
@@ -2749,9 +2753,10 @@ export async function handleMessageCreate(
     }
     const aiPrompt = parseAiChatTrigger(message.content, prefix);
     if (aiPrompt) {
+      if (await handleActiveTarotSessionReply(message, aiPrompt, prefix, commands, context, confirmations)) return true;
       return handleAiPrompt(message, aiPrompt, prefix, message.content, commands, context, confirmations);
     }
-    if (await handleActiveTarotSessionReply(message, prefix, commands, context, confirmations)) return true;
+    if (await handleActiveTarotSessionReply(message, message.content, prefix, commands, context, confirmations)) return true;
     const routed = routeNaturalLanguageCommand(message.content, prefix);
     if (routed && (await handleNaturalLanguageRoute(message, routed, context, commands, confirmations))) {
       return true;

@@ -225,6 +225,61 @@ describe('handleMessageCreate', () => {
     expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('테스터') }));
   });
 
+  it('gives wrong-requester tarot feedback for prefixed Korean number selections', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      topic: '취업운',
+      spreadCount: 3,
+      requesterDisplayName: '테스터',
+      seed: 'seed-other-korean'
+    }, 1_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: { run: vi.fn(async () => ({ kind: 'not_handled' })) }
+    });
+    const message = makeMessage('!? 일 이 삼', {
+      createdTimestamp: 1_500,
+      author: { id: 'user-2', username: 'other', bot: false },
+      member: { displayName: '다른사람', voice: { channel: { id: 'voice-1' } } }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).not.toHaveBeenCalled();
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('테스터') }));
+  });
+
+  it('routes owner Korean number tarot selections before watched-channel TTS', async () => {
+    const commands = createPrefixCommands();
+    const tarotSessions = new TarotSessionStore(10_000);
+    tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
+      topic: '연애운',
+      spreadCount: 3,
+      requesterDisplayName: '테스터',
+      seed: 'seed-owner-korean'
+    }, 1_000);
+    const context = makeContext({
+      tarotSessions,
+      agentRuntime: { run: vi.fn(async () => ({ kind: 'final', message: '타로 해석이에요...' })) }
+    });
+    context.voiceSettings.setAiChannelId('guild-1', 'channel-1');
+    const message = makeMessage('일 이 삼', { createdTimestamp: 1_500 });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(context.agentRuntime.run).toHaveBeenCalledWith(
+      message,
+      '일 이 삼',
+      expect.objectContaining({ tarotPending: expect.objectContaining({ topic: '연애운', spreadCount: 3 }) })
+    );
+    expect(context.aiChat.handlePrompt).not.toHaveBeenCalled();
+    expect(context.voice.enqueueMessage).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '타로 해석이에요...' }));
+  });
+
   it('does not hijack unrelated owner messages during an active tarot selection', async () => {
     const commands = createPrefixCommands();
     const tarotSessions = new TarotSessionStore(10_000);
