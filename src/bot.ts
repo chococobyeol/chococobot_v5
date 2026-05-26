@@ -1787,14 +1787,14 @@ async function executeTarotStartReadingTool(input: TarotStartReadingInput, execu
     ...(input.spreadName ? { spreadName: input.spreadName } : {}),
     requesterDisplayName: requesterDisplayName(message)
   }, executionContext.nowMs);
-  const spreadLabel = input.spreadName ? `${input.spreadName}으로 ` : '';
   return {
     sessionId: `${key.guildId}:${key.channelId}:${key.userId}`,
     topic: session.topic,
     spreadCount: session.spreadCount,
     ...(session.spreadName ? { spreadName: session.spreadName } : {}),
     expiresAt: session.expiresAt,
-    message: `${session.topic} 주제로 ${spreadLabel}${session.spreadCount}장 볼게요. 1~78 사이 숫자 ${session.spreadCount}개를 중복 없이 골라주세요.`
+    selection: { min: 1, max: 78, count: session.spreadCount, unique: true },
+    responseInstruction: '사용자에게 바로 보낼 clarify.message를 자연스러운 한국어로 작성하세요. topic을 목적어처럼 다루고, 카드 번호 범위와 필요한 개수, 중복 금지를 안내하세요.'
   };
 }
 

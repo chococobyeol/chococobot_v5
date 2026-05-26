@@ -134,7 +134,8 @@ export type TarotStartReadingOutput = {
   topic: string;
   spreadCount: number;
   spreadName?: string;
-  message: string;
+  selection?: { min: number; max: number; count: number; unique: boolean };
+  responseInstruction?: string;
   expiresAt?: number;
 };
 

@@ -26,6 +26,7 @@ const AGENT_OUTPUT_CONTRACT = [
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"], spreadCount?: 1..5)으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요. 예: "내일 점심 뭐먹을지 타로 봐줘"는 topic="내일 점심 뭐먹을지"로 tarot.start_reading을 호출하세요.',
+  '타로 시작/결과 안내 문장은 AI가 자연스럽게 작성하세요. topic을 \"주제로/기준으로\"에 억지로 붙이는 번역투를 피하고, 예: \"‘내일 점심 뭐 먹을지’를 3장으로 볼게요\"처럼 말하세요.',
   '타로 해석은 카드별 뜻만 나열하지 말고 질문에 대한 결론을 먼저 말한 뒤 근거를 붙이세요. 그래프 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름으로 해석하세요.',
   '건강/병원/증상 관련 타로는 오락적 참고라고 밝히고, 증상이 있거나 판단이 애매하면 병원/의료진 확인을 우선하라고 답하세요. 병원 방문을 미루라는 식으로 단정하지 마세요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
@@ -189,7 +190,11 @@ export class AgentRuntime {
       let envelope: AgentEnvelope;
       if (!parsed.ok) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'parse_error', runId, iteration, validationErrors: parsed.errors, responseSnippet: response.slice(0, 500) });
-        if (validationFeedback && parsed.recovery) {
+        const plainTextRecovery = validationFeedback && shouldRecoverPlainTextFinal(validationFeedback, observations, priorContext) ? recoverPlainTextFinalEnvelope(response) : null;
+        if (plainTextRecovery) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_plain_text_final' });
+          envelope = plainTextRecovery;
+        } else if (validationFeedback && parsed.recovery) {
           await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_malformed_tarot_clarify' });
           envelope = parsed.recovery;
         } else {
@@ -415,11 +420,11 @@ export class AgentRuntime {
         validationFeedback = toolInputCorrectionFeedback;
         continue;
       }
-      const tarotStartOutcome = buildTarotStartFallbackOutcome(observations);
-      if (tarotStartOutcome) {
-        await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'tarot_start_observation' });
-        this.updateTurnContext(key, tarotStartOutcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-        return tarotStartOutcome;
+      const tarotStartFeedback = buildTarotStartAnswerRequiredFeedback(observations);
+      if (tarotStartFeedback) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'tarot_start_answer_required' });
+        validationFeedback = tarotStartFeedback;
+        continue;
       }
       const confirmationOutcome = buildConfirmationRequiredOutcome(observations);
       if (confirmationOutcome) {
@@ -853,6 +858,25 @@ function parseAgentEnvelope(response: string): ParseResult {
   }
 }
 
+
+function shouldRecoverPlainTextFinal(
+  validationFeedback: string,
+  observations: readonly AgentToolObservation[],
+  priorContext: AgentTurnStoredContext | undefined
+): boolean {
+  if (observations.some((observation) => observation.toolName.startsWith('tarot.'))) return true;
+  if (priorContext?.lastIntent === 'tarot' || priorContext?.pendingAction?.kind === 'tarot') return true;
+  return validationFeedback.includes('타로') || validationFeedback.includes('tarot.');
+}
+
+function recoverPlainTextFinalEnvelope(response: string): AgentEnvelope | null {
+  const message = response.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim();
+  if (!message || message.length < 2) return null;
+  if (message.startsWith('{') || message.includes('"kind"')) return null;
+  if (/응답이\s*비어\s*있어요/u.test(message)) return null;
+  if (/JSON object not found|Invalid JSON|validationErrors/u.test(message)) return null;
+  return { kind: 'final', message: truncate(message, 900) };
+}
 
 function envelopeBody(parsed: Record<string, unknown>, kind: string): Record<string, unknown> {
   const nested = parsed[kind];
@@ -1381,6 +1405,8 @@ function formatObservationEvidenceForFeedback(observations: readonly AgentToolOb
 }
 
 function buildObservationAnswerRequiredFeedback(observations: readonly AgentToolObservation[]): string {
+  const tarotStartFeedback = buildTarotStartAnswerRequiredFeedback(observations);
+  if (tarotStartFeedback) return tarotStartFeedback;
   const parts = [
     '도구 관찰값을 이미 받았기 때문에 not_handled를 사용할 수 없어요.',
     '추가 도구 호출 없이 현재 도구 관찰 JSON만 근거로 final/unavailable/blocked 중 하나를 작성하세요.'
@@ -1410,6 +1436,22 @@ function buildObservationAnswerRequiredFeedback(observations: readonly AgentTool
   return parts.join('\n');
 }
 
+function buildTarotStartAnswerRequiredFeedback(observations: readonly AgentToolObservation[]): string | null {
+  const latest = [...observations].reverse().find((observation) => observation.toolName === 'tarot.start_reading');
+  if (!latest || latest.status !== 'ok' || !isRecord(latest.output)) return null;
+  const topic = typeof latest.output.topic === 'string' && latest.output.topic.trim() ? latest.output.topic.trim() : '타로';
+  const spreadCount = typeof latest.output.spreadCount === 'number' && Number.isInteger(latest.output.spreadCount) ? latest.output.spreadCount : 3;
+  const spreadName = typeof latest.output.spreadName === 'string' && latest.output.spreadName.trim() ? latest.output.spreadName.trim() : undefined;
+  return [
+    'tarot.start_reading은 이미 성공했고 카드 선택 세션이 만들어졌어요.',
+    '추가 도구 호출 없이 사용자에게 바로 보낼 clarify JSON을 작성하세요.',
+    `관찰값: topic=${JSON.stringify(topic)}, spreadCount=${spreadCount}${spreadName ? `, spreadName=${JSON.stringify(spreadName)}` : ''}, numberRange=1..78, unique=true`,
+    'pendingAction은 넣지 마세요. 이미 세션은 코드에 저장되어 있고, 사용자는 다음 메시지에서 숫자만 고르면 됩니다.',
+    '문장은 AI가 자연스럽게 쓰세요. topic을 "주제로"에 억지로 붙이지 말고 목적어로 다루세요.',
+    '예시 형식만 참고: {"kind":"clarify","message":"‘질문’을 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요."}'
+  ].join('\n');
+}
+
 function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservation[]): string[] {
   const latest = [...observations].reverse().find((observation) => observation.toolName === 'tarot.reveal_selection' && observation.status === 'ok' && isRecord(observation.output));
   if (!latest || !isRecord(latest.output)) return [];
@@ -1422,7 +1464,7 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
     `타로 관찰: ${topic}`,
     ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
     ...(bars ? [`그래프:\n${bars}`] : []),
-    '해석 규칙: 질문에 대한 결론을 먼저 말하고 카드 근거를 붙이세요. 1~2/5는 낮음/부담, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다. 건강/병원 질문이면 타로보다 증상과 의료진 확인을 우선하라고 안내하세요.',
+    '해석 규칙: 질문에 대한 결론을 먼저 말하고 카드 근거를 붙이세요. 1~2/5는 낮은 지원/에너지/부담, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다. 건강/병원 질문이면 타로보다 증상과 의료진 확인을 우선하라고 안내하세요. topic을 "기준으로"에 억지로 붙이지 말고 자연스럽게 말하세요.',
     '위 카드/방향/키워드/그래프만 근거로 사용자에게 바로 보낼 final.message를 작성하세요. 사용자에게 해석해 달라고 요청하지 마세요.'
   ];
 }
@@ -1670,26 +1712,7 @@ function buildTarotFallbackOutcome(observations: readonly AgentToolObservation[]
     const presentation = extractTrustedPresentation(observations);
     return presentation ? { kind: 'final', message: outputMessage, presentation } : { kind: 'final', message: outputMessage };
   }
-  const outputMessage = typeof latest.output.message === 'string' ? latest.output.message : '타로 관찰값을 확인했어요.';
-  return { kind: 'clarify', message: outputMessage };
-}
-
-function buildTarotStartFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
-  const latest = [...observations].reverse().find((observation) => observation.toolName === 'tarot.start_reading');
-  if (!latest) return null;
-  if (latest.status !== 'ok') {
-    if (latest.code === 'validation_error') return null;
-    return {
-      kind: 'blocked',
-      message: latest.message ?? '타로 선택을 시작하지 못했어요. 잠시 뒤에 다시 요청해 주세요.',
-      blockedTools: [latest.toolName]
-    };
-  }
-  if (!isRecord(latest.output)) return null;
-  const message = typeof latest.output.message === 'string' && latest.output.message.trim()
-    ? latest.output.message.trim()
-    : '1~78 사이 숫자를 안내된 개수만큼 중복 없이 골라주세요.';
-  return { kind: 'clarify', message };
+  return null;
 }
 
 function buildVoiceFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {

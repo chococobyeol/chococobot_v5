@@ -84,19 +84,22 @@ describe('AgentRuntime', () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '이따 병원갈까',
       spreadCount: 3,
-      message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+      selection: { min: 1, max: 78, count: 3, unique: true }
     }));
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
-        kind: 'tool_calls',
-        calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '이따 병원갈까', count: 3 } }]
-      }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '이따 병원갈까', count: 3 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '‘이따 병원갈까’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '이따 병원갈까', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'clarify', message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
+    expect(outcome).toEqual({ kind: 'clarify', message: '‘이따 병원갈까’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' });
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '이따 병원갈까', spreadCount: 3 }, expect.any(Object));
   });
 
@@ -1976,7 +1979,7 @@ describe('AgentRuntime', () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '연애운',
       spreadCount: 3,
-      message: '연애운 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+      selection: { min: 1, max: 78, count: 3, unique: true }
     }));
     const ai = {
       askMessages: vi
@@ -1995,6 +1998,7 @@ describe('AgentRuntime', () => {
           kind: 'tool_calls',
           calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '연애운', spreadCount: 3 } }]
         }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '‘연애운’을 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' }))
     };
     const store = new AgentTurnContextStore();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), store);
@@ -2010,9 +2014,9 @@ describe('AgentRuntime', () => {
     });
     const outcome = await runtime.run(makeMessage(), '연애운', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'clarify', message: '연애운 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
+    expect(outcome).toEqual({ kind: 'clarify', message: '‘연애운’을 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' });
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '연애운', spreadCount: 3 }, expect.any(Object));
-    expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    expect(ai.askMessages).toHaveBeenCalledTimes(4);
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('clarify 질문에 대한 후속 답변');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('tarot.start_reading');
   });
@@ -2056,8 +2060,8 @@ describe('AgentRuntime', () => {
   });
 
 
-  it('returns the tarot start observation immediately instead of letting the model repeat start_reading', async () => {
-    const tarotStartReading = vi.fn(async () => ({ topic: '연애운', spreadCount: 3, message: '1~78 사이 숫자 3개를 골라주세요.' }));
+  it('lets the model phrase the tarot start observation instead of displaying tool copy', async () => {
+    const tarotStartReading = vi.fn(async () => ({ topic: '연애운', spreadCount: 3, selection: { min: 1, max: 78, count: 3, unique: true } }));
     const ai = {
       askMessages: vi
         .fn()
@@ -2073,7 +2077,7 @@ describe('AgentRuntime', () => {
     const outcome = await runtime.run(makeMessage(), '연애운 타로 봐줘', makeOptions({ requesterDisplayName: '테스터' }));
 
     expect(outcome).toEqual({ kind: 'clarify', message: '1~78 사이 숫자 3개를 골라주세요.' });
-    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages).toHaveBeenCalledTimes(3);
     expect(tarotStartReading).toHaveBeenCalledTimes(1);
   });
 
@@ -2081,13 +2085,16 @@ describe('AgentRuntime', () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '내일 점심 뭐먹을지',
       spreadCount: 3,
-      message: '내일 점심 뭐먹을지 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+      selection: { min: 1, max: 78, count: 3, unique: true }
     }));
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
-        kind: 'tool_calls',
-        calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '내일 점심 뭐먹을지', spreadCount: 3 } }]
-      }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '내일 점심 뭐먹을지', spreadCount: 3 } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '‘내일 점심 뭐먹을지’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
 
@@ -2095,7 +2102,7 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'clarify',
-      message: '내일 점심 뭐먹을지 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+      message: '‘내일 점심 뭐먹을지’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.'
     });
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '내일 점심 뭐먹을지', spreadCount: 3 }, expect.any(Object));
   });
@@ -2104,7 +2111,7 @@ describe('AgentRuntime', () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '밖에 나가는게 좋을까',
       spreadCount: 3,
-      message: '밖에 나가는게 좋을까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+      selection: { min: 1, max: 78, count: 3, unique: true }
     }));
     const ai = {
       askMessages: vi
@@ -2113,6 +2120,7 @@ describe('AgentRuntime', () => {
           kind: 'tool_calls',
           calls: [{ id: 'bad', tool: 'tarot.start_reading', input: { topic: '밖에 나가는게 좋을까', cardCount: 3 } }]
         }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '‘밖에 나가는게 좋을까’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' }))
     };
     const diagnostics: unknown[] = [];
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
@@ -2124,11 +2132,11 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'clarify',
-      message: '밖에 나가는게 좋을까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+      message: '‘밖에 나가는게 좋을까’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.'
     });
     expect(tarotStartReading).toHaveBeenCalledTimes(1);
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '밖에 나가는게 좋을까', spreadCount: 3 }, expect.any(Object));
-    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(outcome)).not.toContain('spreadCount must be an integer');
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'tool_input_correction_required' })
@@ -2139,7 +2147,7 @@ describe('AgentRuntime', () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '이따 병원갈까',
       spreadCount: 3,
-      message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+      selection: { min: 1, max: 78, count: 3, unique: true }
     }));
     const ai = {
       askMessages: vi
@@ -2154,13 +2162,14 @@ describe('AgentRuntime', () => {
           kind: 'tool_calls',
           calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '이따 병원갈까', count: 3 } }]
         }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '‘이따 병원갈까’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
 
     await runtime.run(makeMessage(), '타로봐줘', makeOptions({ requesterDisplayName: '테스터' }));
     const outcome = await runtime.run(makeMessage(), '이따 병원갈까', makeOptions({ requesterDisplayName: '테스터' }));
 
-    expect(outcome).toEqual({ kind: 'clarify', message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
+    expect(outcome).toEqual({ kind: 'clarify', message: '‘이따 병원갈까’를 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요.' });
     expect(JSON.stringify(outcome)).not.toContain('전문가와 상의');
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '이따 병원갈까', spreadCount: 3 }, expect.any(Object));
   });
