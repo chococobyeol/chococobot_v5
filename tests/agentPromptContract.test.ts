@@ -148,7 +148,7 @@ describe('AgentRuntime prompt contract', () => {
     const ai = {
       askMessages: vi
         .fn()
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'tool_calls', calls: [{ id: 'reveal', tool: 'tarot.reveal_selection', input: { numbers: [1, 2, 3] } }] }))
         .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '관찰값 기준으로 해석했어요.' }))
     };
     const tarotRevealSelection = vi.fn(async () => ({
@@ -165,15 +165,19 @@ describe('AgentRuntime prompt contract', () => {
       tarotPending: { topic: '연애운', spreadCount: 3, spreadName: '세 장 흐름', expiresAt: Date.parse('2026-05-22T18:25:00.000Z') }
     }));
 
-    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    const evidence = ai.askMessages.mock.calls[0][0].messages[1].content;
-    expect(prompt).toContain('타로 해석 전용 작성자');
-    expect(prompt).toContain('도구는 이미 실행됐고 카드는 확정됐습니다');
-    expect(prompt).not.toContain('tarot.reveal_selection [safe_action_auto]');
+    const selectionPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    const interpretationPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    const evidence = ai.askMessages.mock.calls[1][0].messages[1].content;
+    expect(selectionPrompt).toContain('tarotPending');
+    expect(selectionPrompt).toContain('연애운');
+    expect(selectionPrompt).toContain('현재 타로 카드 번호 선택 단계예요');
+    expect(interpretationPrompt).toContain('타로 해석 전용 작성자');
+    expect(interpretationPrompt).toContain('도구는 이미 실행됐고 카드는 확정됐습니다');
+    expect(interpretationPrompt).not.toContain('tarot.reveal_selection [safe_action_auto]');
     expect(evidence).toContain('연애운');
     expect(evidence).toContain('타로 관찰');
     expect(evidence).not.toContain('타로라는 단어가 있으면');
-    expect((prompt + evidence).length).toBeLessThan(5400);
+    expect((selectionPrompt + interpretationPrompt + evidence).length).toBeLessThan(9000);
   });
 
 });

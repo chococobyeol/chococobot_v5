@@ -1939,8 +1939,9 @@ describe('AgentRuntime', () => {
       message: '32.1처럼 소수로는 고를 수 없어요. 1부터 78 사이의 정수 3개를 다시 골라주세요.'
     });
     const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    expect(prompt).toContain('문구는 AI가 새로 자연스럽게 쓰세요');
-    expect(prompt).toContain('카드 번호는 소수나 음수 없이 정수로 골라주세요');
+    expect(prompt).toContain('현재 타로 카드 번호 선택 단계예요');
+    expect(prompt).toContain('사용자가 숫자 말, 한글 숫자, 취소, 메타질문 중 하나로 답했을 수 있어요');
+    expect(prompt).toContain('도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요');
   });
 
   it('does not tell the model to mention duplicate prevention when retrying one-card tarot selections', async () => {
@@ -1956,8 +1957,8 @@ describe('AgentRuntime', () => {
       message: '소수점이 들어간 번호는 쓸 수 없어요. 1부터 78 사이에서 번호 하나만 다시 골라주세요.'
     });
     const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    expect(prompt).toContain('1장 선택에서는 중복 금지/중복 허용을 언급하지 말고');
-    expect(prompt).not.toContain('서로 다른 번호를 골라야 한다는 점');
+    expect(prompt).toContain('중복 허용: 해당 없음');
+    expect(prompt).toContain('번호가 부족하거나 애매하면 도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요');
     expect(JSON.stringify(outcome)).not.toContain('중복');
   });
 
@@ -1980,7 +1981,12 @@ describe('AgentRuntime', () => {
         cards: [{ selectionNumber: 2, name: '여사제', orientation: '역방향', attachmentName: 'tarot-2.png' }]
       }
     }));
-    const ai = { askMessages: vi.fn().mockResolvedValue('응답이 비어 있어요...') };
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'tool_calls', calls: [{ id: 'reveal', tool: 'tarot.reveal_selection', input: { numbers: [2, 5, 1] } }] }))
+        .mockResolvedValue('응답이 비어 있어요...')
+    };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '2 5 1', makeOptions({
@@ -2311,7 +2317,10 @@ describe('AgentRuntime', () => {
       visualData: { bars: '흐름 ▰▰▰▱▱' }
     }));
     const ai = {
-      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '가볍고 따뜻한 메뉴가 좋아 보여요...' }))
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'tool_calls', calls: [{ id: 'reveal', tool: 'tarot.reveal_selection', input: { numbers: [1, 2, 3] } }] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '가볍고 따뜻한 메뉴가 좋아 보여요...' }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
 
@@ -2322,8 +2331,10 @@ describe('AgentRuntime', () => {
 
     expect(tarotRevealSelection).toHaveBeenCalledWith({ numbers: [1, 2, 3] }, expect.any(Object));
     expect(outcome).toEqual({ kind: 'final', message: '가볍고 따뜻한 메뉴가 좋아 보여요...' });
-    const systemPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    const evidencePrompt = ai.askMessages.mock.calls[0][0].messages[1].content;
+    const selectionPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    const systemPrompt = ai.askMessages.mock.calls[1][0].messages[0].content;
+    const evidencePrompt = ai.askMessages.mock.calls[1][0].messages[1].content;
+    expect(selectionPrompt).toContain('현재 타로 카드 번호 선택 단계예요');
     expect(systemPrompt).toContain('타로 해석 전용 작성자');
     expect(systemPrompt).toContain('tool_calls, clarify, not_handled, unavailable, blocked를 쓰지 마세요');
     expect(evidencePrompt).toContain('카드 이름과 키워드를 그대로 나열하지 말고');
@@ -2334,7 +2345,7 @@ describe('AgentRuntime', () => {
     expect(evidencePrompt).toContain('“기운이 먼저 보이고”');
     expect(evidencePrompt).toContain('진행되고 있다/나타난다/필요하다');
     expect(evidencePrompt).toContain('presentation이 카드/그래프를 따로 보여주므로');
-    expect(ai.askMessages.mock.calls[0][0].maxCompletionTokens).toBe(2000);
+    expect(ai.askMessages.mock.calls[1][0].maxCompletionTokens).toBe(2000);
   });
 
   it('lets the model parse Korean tarot number words but normalizes invented select-card tool aliases', async () => {
@@ -2415,7 +2426,8 @@ describe('AgentRuntime', () => {
     });
     expect(tarotRevealSelection).not.toHaveBeenCalled();
     expect(ai.askMessages).toHaveBeenCalledTimes(1);
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('검증 코드: number_out_of_range');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('현재 타로 카드 번호 선택 단계예요');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('사용자가 말하지 않은 번호를 대신 고르지 마세요');
   });
 
   it('lets the model handle non-numeric active tarot replies so users can cancel', async () => {
@@ -2483,8 +2495,8 @@ describe('AgentRuntime', () => {
       message: '지금은 2개만 보여요. 카드 번호 3개를 한 번에 다시 골라주세요.'
     });
     expect(ai.askMessages).toHaveBeenCalledTimes(2);
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('상태: short');
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('부족한 입력에 “N개만”처럼');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('현재 타로 카드 번호 선택 단계예요');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('번호가 부족하거나 애매하면 도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요');
   });
 
   it('rejects malformed tarot clarify that asks for spreadCount and recovers to a topic-only question', async () => {

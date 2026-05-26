@@ -137,33 +137,7 @@ export class AgentRuntime {
     const repeatedSuccessfulToolRetryKeys = new Set<string>();
     let validationFailureFallback: AgentRuntimeOutcome | null = null;
 
-    const directTarotSelection = buildDirectTarotSelectionResolution(prompt, options.tarotPending);
-    if (directTarotSelection?.kind === 'feedback') {
-      await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration: 0, decisionKind: 'tarot_selection_feedback_required' });
-      validationFeedback = directTarotSelection.feedback;
-    }
-    if (directTarotSelection?.kind === 'call') {
-      await this.executeToolCallWithDiagnostics(directTarotSelection.call, options, observations, toolCalls, runId, 0);
-      totalToolCalls += 1;
-      const latest = observations.at(-1);
-      if (latest?.status !== 'ok') {
-        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration: 0, decisionKind: 'tarot_selection_feedback_required' });
-        validationFeedback = buildTarotSelectionCorrectionFeedback(prompt, options.tarotPending!, {
-          code: latest?.code,
-          message: latest?.message,
-          hint: latest?.hint
-        });
-      } else {
-        const tarotInterpretationOutcome = await this.tryBuildTarotInterpretationOutcome(message, options, observations, runId, 0);
-        if (tarotInterpretationOutcome) {
-          await options.onDiagnostic?.({ stage: 'agent', event: 'final', runId, iteration: 0, decisionKind: 'tarot_interpretation_final' });
-          this.updateTurnContext(key, tarotInterpretationOutcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-          return tarotInterpretationOutcome;
-        }
-        validationFeedback = buildObservationAnswerRequiredFeedback(observations);
-      }
-    }
-    if (!directTarotSelection && options.tarotPending && prompt.trim()) {
+    if (options.tarotPending && prompt.trim()) {
       validationFeedback = buildTarotNaturalSelectionFeedback(prompt, options.tarotPending);
     }
 
@@ -700,77 +674,6 @@ function buildPendingActionFailureFallback(priorContext: AgentTurnStoredContext 
     message: '메시지 삭제 요청의 대상이 아직 처리되지 않았어요. 제가 처리할 수 있는 건 요청자 본인 메시지 삭제나 관리자용 전체 채널 삭제뿐이에요.',
     blockedTools: ['command.cleanup']
   };
-}
-
-function containsKoreanNumeralCandidate(prompt: string): boolean {
-  return /(?:스물|서른|마흔|쉰|예순|일흔|여든|아흔|열|이십|삼십|사십|오십|육십|칠십|팔십|구십|영|공|하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|일|이|삼|사|오|육|칠|팔|구)/.test(prompt);
-}
-
-function buildDirectTarotSelectionResolution(
-  prompt: string,
-  tarotPending: AgentRuntimeOptions['tarotPending']
-): { kind: 'call'; call: AgentToolCall } | { kind: 'feedback'; feedback: string } | null {
-  if (!tarotPending) return null;
-  if (containsKoreanNumeralCandidate(prompt)) return null;
-  const numbers = parseTarotSelectionNumbers(prompt);
-  if (!numbers.ok && numbers.reason === '숫자를 찾지 못했어요.') return null;
-  if (!numbers.ok) {
-    return {
-      kind: 'feedback',
-      feedback: buildTarotSelectionCorrectionFeedback(prompt, tarotPending, { reason: numbers.reason })
-    };
-  }
-  return {
-    kind: 'call',
-    call: {
-      id: 'tarot_reveal_direct',
-      tool: 'tarot.reveal_selection',
-      input: { numbers: numbers.value }
-    }
-  };
-}
-
-function parseTarotSelectionNumbers(prompt: string): { ok: true; value: number[] } | { ok: false; reason: string } {
-  const trimmed = prompt.trim();
-  if (!trimmed || !/[0-9]/.test(trimmed)) return { ok: false, reason: '숫자를 찾지 못했어요.' };
-  const numericTokens = trimmed.match(/[+-]?\d+(?:\.\d+)?/g) ?? [];
-  if (!numericTokens.length) return { ok: false, reason: '숫자를 찾지 못했어요.' };
-  if (numericTokens.some((token) => token.includes('.') || token.startsWith('-') || token.startsWith('+'))) {
-    return { ok: false, reason: '카드 번호는 소수나 음수 없이 정수로 골라주세요.' };
-  }
-  return { ok: true, value: numericTokens.map((token) => Number(token)) };
-}
-
-function buildTarotSelectionCorrectionFeedback(
-  prompt: string,
-  tarotPending: NonNullable<AgentRuntimeOptions['tarotPending']>,
-  details: { reason?: string; code?: string; message?: string; hint?: string }
-): string {
-  const parsed = parseTarotSelectionNumbers(prompt);
-  const providedCount = parsed.ok ? parsed.value.length : undefined;
-  const countRelation = providedCount === undefined
-    ? 'unknown'
-    : providedCount < tarotPending.spreadCount
-      ? 'short'
-      : providedCount > tarotPending.spreadCount
-        ? 'too_many'
-        : 'invalid_values';
-  return [
-    '현재 타로 카드 번호 선택 단계예요. 선택 입력이 유효하지 않으니 도구를 호출하지 말고 사용자에게 보낼 clarify JSON만 작성하세요.',
-    `사용자 입력: ${JSON.stringify(prompt.trim())}`,
-    `타로 주제: ${JSON.stringify(tarotPending.topic)}, 필요한 카드 수: ${tarotPending.spreadCount}, 허용 범위: 1..78, 중복 허용: ${tarotPending.spreadCount === 1 ? '해당 없음' : 'false'}`,
-    providedCount !== undefined ? `인식된 숫자 개수: ${providedCount}, 상태: ${countRelation}` : undefined,
-    details.code ? `검증 코드: ${details.code}` : undefined,
-    details.reason ? `검증 이유: ${details.reason}` : undefined,
-    details.message ? `검증 관찰 메시지: ${details.message}` : undefined,
-    details.hint ? `검증 힌트: ${details.hint}` : undefined,
-    '문구는 AI가 새로 자연스럽게 쓰세요. 코드/검증 메시지를 그대로 복사하지 말고, 왜 다시 골라야 하는지 한 문장으로 설명하세요.',
-    '부족한 경우와 너무 많은 경우를 구분하세요. 부족한 입력에 “N개만”처럼 초과를 줄이라는 뉘앙스를 쓰지 마세요.',
-    tarotPending.spreadCount === 1
-      ? '1장 선택에서는 중복 금지/중복 허용을 언급하지 말고, 1~78 사이 번호 하나를 다시 고르라고만 안내하세요.'
-      : '2장 이상 선택에서는 필요하면 서로 다른 번호를 골라야 한다는 점을 자연스럽게 포함하세요.',
-    '출력은 반드시 {"kind":"clarify","message":"..."} 형태의 JSON 하나만 쓰세요. pendingAction은 넣지 마세요.'
-  ].filter(Boolean).join('\n');
 }
 
 function buildTarotNaturalSelectionFeedback(
