@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { AttachmentBuilder, ChannelType, Client, Collection, EmbedBuilder, Events, GatewayIntentBits, GuildMember, PermissionFlagsBits } from 'discord.js';
-import type { GuildTextBasedChannel, Message, TextChannel } from 'discord.js';
+import type { Guild, GuildTextBasedChannel, Message, TextChannel } from 'discord.js';
 import type { PrefixCommand } from './types.js';
 import type { Settings } from './config.js';
 import type { UsageStore } from './services/usageStore.js';
@@ -300,6 +300,34 @@ function findTextChannelFromNaturalReference(message: Message, prompt: string): 
 function requireGuildMember(message: Message): GuildMember {
   if (!message.member) throw new Error('서버 멤버 정보가 필요해요...');
   return message.member as GuildMember;
+}
+
+
+async function resolveGuildLeaveTarget(message: Message, args: string[]): Promise<Guild | null | 'ambiguous'> {
+  const rawTarget = args.join(' ').trim() || sourceGuildIdFromLogChannelTopic(message.channel && 'topic' in message.channel ? message.channel.topic : undefined);
+  if (!rawTarget) return null;
+  const client = message.client;
+  const guildManager = client.guilds;
+  const cachedGuilds = Array.from(guildManager.cache.values());
+  const byId = cachedGuilds.find((guild) => guild.id === rawTarget);
+  if (byId) return byId;
+  if (/^\d{10,}$/u.test(rawTarget)) {
+    return await guildManager.fetch(rawTarget).catch(() => null);
+  }
+  const normalizedTarget = normalizeGuildLookupText(rawTarget);
+  const byName = cachedGuilds.filter((guild) => normalizeGuildLookupText(guild.name).includes(normalizedTarget));
+  if (byName.length === 1) return byName[0]!;
+  if (byName.length > 1) return 'ambiguous';
+  return null;
+}
+
+function sourceGuildIdFromLogChannelTopic(topic: string | null | undefined): string | null {
+  const match = topic?.match(/Source guild:\s*.*\((\d{10,})\)/u);
+  return match?.[1] ?? null;
+}
+
+function normalizeGuildLookupText(value: string): string {
+  return value.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, '');
 }
 
 function registerPrefixCommand(commands: Collection<string, PrefixCommand>, command: PrefixCommand): void {
@@ -813,6 +841,35 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
         }
         await context.aiChat.resetGuildMemory(message.guildId);
         await message.reply({ content: '서버 AI 기억을 지웠어요...', allowedMentions: { repliedUser: false } });
+      }
+    },
+    {
+      name: '서버탈퇴',
+      aliases: ['봇서버탈퇴', 'guild-leave', 'leave-guild', 'server-leave', 'bot-leave-guild'],
+      description: '로그 서버에서만 봇이 가입된 대상 서버를 탈퇴합니다.',
+      aiVisible: false,
+      async execute(message, args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        if (message.guildId !== context.settings.loggingGuildId) {
+          throw new Error('로그 서버에서만 사용할 수 있어요...');
+        }
+        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+          throw new Error('서버 관리자만 봇 서버 탈퇴를 실행할 수 있어요...');
+        }
+        const targetGuild = await resolveGuildLeaveTarget(message, args);
+        if (targetGuild === 'ambiguous') {
+          throw new Error('같은 이름으로 보이는 서버가 여러 개예요... 서버 ID로 다시 입력해 주세요...');
+        }
+        if (!targetGuild) {
+          throw new Error('탈퇴할 서버를 찾지 못했어요... 로그 채널에서 실행하거나 서버 ID를 입력해 주세요...');
+        }
+        if (targetGuild.id === context.settings.loggingGuildId) {
+          throw new Error('로그 서버에서는 탈퇴할 수 없어요...');
+        }
+        const targetName = targetGuild.name;
+        const targetId = targetGuild.id;
+        await targetGuild.leave();
+        await message.reply({ content: `${targetName} (${targetId}) 서버에서 탈퇴했어요...`, allowedMentions: { repliedUser: false } });
       }
     },
     {
@@ -2701,7 +2758,7 @@ function uniqueCommandDefinitions(commands: Collection<string, PrefixCommand>): 
   const seen = new Set<string>();
   const result: Array<{ name: string; aliases: readonly string[]; description: string }> = [];
   for (const command of commands.values()) {
-    if (seen.has(command.name)) continue;
+    if (command.aiVisible === false || seen.has(command.name)) continue;
     seen.add(command.name);
     result.push({ name: command.name, aliases: command.aliases, description: command.description });
   }

@@ -229,7 +229,7 @@ export function formatCommandCatalog(commands: Collection<string, PrefixCommand>
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const command of commands.values()) {
-    if (seen.has(command.name)) continue;
+    if (command.aiVisible === false || seen.has(command.name)) continue;
     seen.add(command.name);
     const aliases = command.aliases.filter((alias) => alias.toLowerCase() !== command.name.toLowerCase()).slice(0, MAX_ALIASES);
     const name = [command.name, ...aliases].join(' / ');

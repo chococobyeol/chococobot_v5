@@ -17,6 +17,7 @@ describe('classifyCommandQuery', () => {
     expect(classifyCommandQuery('ai채널 #ai')).toMatchObject({ level: 'needs-confirmation', intent: 'ai-channel' });
     expect(classifyCommandQuery('청소 10')).toMatchObject({ level: 'needs-confirmation', intent: 'cleanup' });
     expect(classifyCommandQuery('대청소 10')).toMatchObject({ level: 'destructive', intent: 'cleanup' });
+    expect(classifyCommandQuery('서버탈퇴 123456789012345678')).toMatchObject({ level: 'unknown', reason: 'log-server direct prefix command only' });
     expect(classifyCommandQuery('없는명령')).toMatchObject({ level: 'unknown' });
   });
 
