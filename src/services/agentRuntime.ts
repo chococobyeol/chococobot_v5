@@ -1464,42 +1464,25 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
     `타로 관찰: ${topic}`,
     ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
     ...(bars ? [`그래프:\n${bars}`] : []),
-    '해석 규칙: 질문에 대한 결론을 먼저 말하고 카드 근거를 붙이세요. 1~2/5는 낮은 지원/에너지/부담, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다. 건강/병원 질문이면 타로보다 증상과 의료진 확인을 우선하라고 안내하세요. topic을 "기준으로"에 억지로 붙이지 말고 자연스럽게 말하세요.',
-    '위 카드/방향/키워드/그래프만 근거로 사용자에게 바로 보낼 final.message를 작성하세요. 사용자에게 해석해 달라고 요청하지 마세요.'
+    '타로 해석 작성 규칙:',
+    '- 첫 문장은 카드 소개가 아니라 사용자의 질문에 대한 방향/결론으로 시작하세요. 예/아니오형이면 “해도 괜찮지만…”, “지금은 미루는 쪽…”처럼 조건까지 말하세요.',
+    '- 카드 이름과 키워드를 그대로 나열하지 말고, 각 카드를 질문 맥락의 역할로 연결하세요: 현재 흐름, 걸림돌, 조언/행동.',
+    '- 같은 카드·비슷한 키워드가 정방향/역방향으로 엇갈리면 “하고 싶은 마음과 브레이크가 같이 나온다”처럼 긴장으로 해석하세요.',
+    '- 그래프는 숫자를 반복하지 말고 판단에 녹이세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다.',
+    '- “기준으로 카드 결과”, “기운이 먼저 보이고”, “쪽을 조심”, “안전한 선택을 우선” 같은 템플릿 문장을 쓰지 마세요.',
+    '- presentation이 카드/그래프를 따로 보여주므로 final.message에는 카드 목록이나 그래프 목록을 반복하지 마세요.',
+    '- 4~6문장, 450자 이내, Discord 채팅에 바로 보낼 자연스러운 한국어로 쓰세요. 사용자에게 해석해 달라고 요청하지 마세요.',
+    '- 건강/병원/증상 질문은 오락적 참고라고 선을 긋고, 증상이 있거나 애매하면 의료진/병원 확인을 우선하라고 안내하세요.'
   ];
 }
 
 function buildTarotRevealFallbackMessage(output: Record<string, unknown>): string | null {
-  const topic = typeof output.topic === 'string' && output.topic.trim() ? output.topic.trim() : '타로';
   const cards = extractTarotCards(output);
   if (!cards.length) return null;
-  const bars = isRecord(output.visualData) && typeof output.visualData.bars === 'string'
-    ? output.visualData.bars.trim()
-    : '';
-  const strongest = cards[0];
-  const actionCard = cards.find((card) => card.orientationKo === '역방향') ?? cards[cards.length - 1] ?? strongest;
-  const caution = topic.includes('병원') || topic.includes('건강') || topic.includes('아프')
-    ? '\n건강이나 병원 결정은 타로보다 실제 증상과 의료진 안내를 우선해 주세요. 불편함이 있으면 확인하러 가는 쪽이 더 안전해요.'
-    : '';
-  const graphHint = bars ? ` 그래프는 ${summarizeTarotBars(bars)} 쪽으로 보여요.` : '';
   return [
-    `${topic} 기준으로 카드 결과를 확인했어요.`,
-    '',
-    `해석하면 ${strongest.nameKo}의 ${strongest.keywords[0] ?? '흐름'} 기운이 먼저 보이고, ${actionCard.nameKo} ${actionCard.orientationKo}은 ${actionCard.keywords.join(', ')} 쪽을 조심하라는 신호로 볼 수 있어요.${graphHint} 서두르기보다 몸 상태와 현실적인 일정을 확인하고, 불안하거나 애매하면 안전한 선택을 우선하는 쪽이 좋아 보여요.${caution}`
+    '카드 결과는 확인했지만 해석 문장을 제대로 만들지 못했어요.',
+    '카드와 그래프만 먼저 표시할게요. 같은 카드로 다시 해석을 요청하면 이어서 볼 수 있어요.'
   ].join('\n');
-}
-
-function summarizeTarotBars(bars: string): string {
-  const labels = [...bars.matchAll(/(흐름|감정|행동)\s+[▰▱]+\s+(\d)\/5/gu)]
-    .map((match) => ({ label: match[1] ?? '', score: Number(match[2]) }))
-    .filter((item) => item.label && Number.isFinite(item.score));
-  if (!labels.length) return '카드에 나온 흐름';
-  const high = labels.filter((item) => item.score >= 4).map((item) => item.label);
-  const low = labels.filter((item) => item.score <= 2).map((item) => item.label);
-  if (high.length && low.length) return `${high.join(', ')}은 강하지만 ${low.join(', ')}은 낮은`;
-  if (high.length) return `${high.join(', ')}이 강한`;
-  if (low.length) return `${low.join(', ')}이 낮은`;
-  return '전체적으로 보통인';
 }
 
 type TarotObservationCard = {

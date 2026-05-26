@@ -1941,7 +1941,7 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).not.toHaveBeenCalled();
   });
 
-  it('uses a user-safe tarot interpretation fallback when the model fails after reveal', async () => {
+  it('does not invent a canned tarot interpretation when the model fails after reveal', async () => {
     const tarotRevealSelection = vi.fn(async () => ({
       message: '이따 병원갈지 타로 카드 3장을 확인했어요.',
       topic: '이따 병원갈지',
@@ -1969,9 +1969,12 @@ describe('AgentRuntime', () => {
 
     expect(outcome.kind).toBe('final');
     expect(JSON.stringify(outcome)).not.toContain('해석해 주세요');
-    expect(outcome.kind === 'final' ? outcome.message : '').not.toContain('카드\n');
-    expect(outcome.kind === 'final' ? outcome.message : '').not.toContain('흐름 ▰');
-    expect(JSON.stringify(outcome)).toContain('의료진 안내');
+    const message = outcome.kind === 'final' ? outcome.message : '';
+    expect(message).toContain('해석 문장을 제대로 만들지 못했어요');
+    expect(message).not.toContain('기준으로');
+    expect(message).not.toContain('기운이 먼저 보이고');
+    expect(message).not.toContain('쪽을 조심');
+    expect(message).not.toContain('흐름 ▰');
     expect(JSON.stringify(outcome)).toContain('여사제');
   });
 
@@ -2267,7 +2270,11 @@ describe('AgentRuntime', () => {
 
     expect(tarotRevealSelection).toHaveBeenCalledWith({ numbers: [1, 2, 3] }, expect.any(Object));
     expect(outcome).toEqual({ kind: 'final', message: '가볍고 따뜻한 메뉴가 좋아 보여요...' });
-    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('"toolName":"tarot.reveal_selection"');
+    const systemPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(systemPrompt).toContain('"toolName":"tarot.reveal_selection"');
+    expect(systemPrompt).toContain('카드 이름과 키워드를 그대로 나열하지 말고');
+    expect(systemPrompt).toContain('“기운이 먼저 보이고”');
+    expect(systemPrompt).toContain('presentation이 카드/그래프를 따로 보여주므로');
   });
 
   it('treats a contiguous tarot number like 123 as one out-of-range card number', async () => {
