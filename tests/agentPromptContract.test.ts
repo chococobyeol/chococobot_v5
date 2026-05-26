@@ -90,6 +90,7 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).toContain('질문은 5장');
     expect(prompt).toContain('tarot.cancel_reading');
     expect(prompt).toContain('타로 시작/결과 안내 문장');
+    expect(prompt).toContain('1장 선택 안내에는 중복 금지를 말하지 말고');
   });
 
   it('keeps the output envelope contract before truncatable channel/tool context', async () => {

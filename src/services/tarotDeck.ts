@@ -117,11 +117,17 @@ export function validateTarotSelectionNumbers(numbers: unknown, expectedCount: n
   if (normalized.some((number) => !Number.isInteger(number) || number < 1 || number > TAROT_CARD_COUNT)) {
     return { ok: false, code: 'number_out_of_range', field: 'numbers', message: '1~78 사이에서 골라주세요.', hint: 'Retry with only integer card numbers from 1 to 78.' };
   }
+  if (normalized.length !== expectedCount) {
+    return {
+      ok: false,
+      code: 'wrong_count',
+      field: 'numbers',
+      message: `${expectedCount}개만 골라주세요.`,
+      hint: expectedCount === 1 ? 'Retry with exactly one card number.' : `Retry with exactly ${expectedCount} unique card numbers.`
+    };
+  }
   if (new Set(normalized).size !== normalized.length) {
     return { ok: false, code: 'duplicate_numbers', field: 'numbers', message: '중복된 숫자는 선택할 수 없어요. 서로 다른 번호를 골라주세요.', hint: 'Retry with unique card numbers.' };
-  }
-  if (normalized.length !== expectedCount) {
-    return { ok: false, code: 'wrong_count', field: 'numbers', message: `${expectedCount}개만 골라주세요.`, hint: `Retry with exactly ${expectedCount} unique card numbers.` };
   }
   return { ok: true, numbers: normalized };
 }

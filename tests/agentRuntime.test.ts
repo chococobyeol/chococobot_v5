@@ -1941,6 +1941,22 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).not.toHaveBeenCalled();
   });
 
+  it('does not mention duplicate prevention when retrying one-card tarot selections', async () => {
+    const ai = { askMessages: vi.fn() };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '32.1', makeOptions({
+      tarotPending: { topic: '이따 밥먹을지', spreadCount: 1, requesterDisplayName: '테스터' }
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '카드 번호는 소수나 음수 없이 정수로 골라주세요. 1~78 사이 숫자 1개를 골라주세요. 예: 23'
+    });
+    expect(JSON.stringify(outcome)).not.toContain('중복');
+    expect(ai.askMessages).not.toHaveBeenCalled();
+  });
+
   it('does not invent a canned tarot interpretation when the model fails after reveal', async () => {
     const tarotRevealSelection = vi.fn(async () => ({
       message: '이따 병원갈지 타로 카드 3장을 확인했어요.',

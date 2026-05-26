@@ -37,7 +37,7 @@ const TAROT_AGENT_GUIDANCE = [
   '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"], spreadCount?:1..5)으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 정해 tarot.start_reading을 호출하세요. 예: "내일 점심 뭐먹을지 타로 봐줘" topic="내일 점심 뭐먹을지".',
   '타로 spreadCount: 한 장/1장, 예/아니오, 오늘 조심할 한 가지, 지금 필요한 핵심 조언처럼 단일 신호 질문은 1장. 일반 흐름/가벼운 운세는 3장. 장기 전망, 복잡한 관계, 여러 선택지 비교, 원인-현재-조언처럼 넓은 질문은 5장.',
   '타로 카드 선택 대기 중 취소/그만/안 본다는 뜻이면 tarot.cancel_reading. 숫자가 없는 말을 카드 선택으로 단정하지 말고 AI가 취소/메타질문/재안내를 판단하세요. 사용자가 직접 번호를 주지 않았는데 대신 고르지 마세요.',
-  '타로 시작/결과 안내 문장은 AI가 자연스럽게 작성하세요. 고정 예문을 복사하지 말고, 안내에 반드시 포함할 요소만 지키세요: 사용자가 물은 대상 확인, 카드 장수, 1~78 범위, 중복 금지. topic을 "주제로/기준으로"나 "~를 N장으로"에 억지로 붙이는 번역투를 피하고, "가볍게" 같은 장식어를 반복하지 마세요.',
+  '타로 시작/결과 안내 문장은 AI가 자연스럽게 작성하세요. 고정 예문을 복사하지 말고, 안내에 반드시 포함할 요소만 지키세요: 사용자가 물은 대상 확인, 카드 장수, 1~78 범위. 1장 선택 안내에는 중복 금지를 말하지 말고, 2장 이상일 때만 중복 금지를 말하세요. topic을 "주제로/기준으로"나 "~를 N장으로"에 억지로 붙이는 번역투를 피하고, "가볍게" 같은 장식어를 반복하지 마세요.',
   '타로 해석은 카드별 뜻만 나열하지 말고 질문에 대한 결론을 먼저 말한 뒤 근거를 붙이세요. 그래프 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름으로 해석하세요.',
   '건강/병원/증상 관련 타로는 오락적 참고라고 밝히고, 증상이 있거나 판단이 애매하면 병원/의료진 확인을 우선하라고 답하세요. 병원 방문을 미루라는 식으로 단정하지 마세요.'
 ].join('\n');
@@ -647,6 +647,7 @@ function parseTarotSelectionNumbers(prompt: string): { ok: true; value: number[]
 }
 
 function buildTarotSelectionFeedback(expectedCount: number, reason: string): string {
+  if (expectedCount === 1) return `${reason} 1~78 사이 숫자 1개를 골라주세요. 예: 23`;
   return `${reason} 1~78 사이 숫자 ${expectedCount}개를 중복 없이 골라주세요. 예: 1 23 45`;
 }
 
@@ -1478,13 +1479,17 @@ function buildTarotStartAnswerRequiredFeedback(observations: readonly AgentToolO
   const topic = typeof latest.output.topic === 'string' && latest.output.topic.trim() ? latest.output.topic.trim() : '타로';
   const spreadCount = typeof latest.output.spreadCount === 'number' && Number.isInteger(latest.output.spreadCount) ? latest.output.spreadCount : 3;
   const spreadName = typeof latest.output.spreadName === 'string' && latest.output.spreadName.trim() ? latest.output.spreadName.trim() : undefined;
+  const selectionInstruction = spreadCount === 1
+    ? '선택 안내는 1~78 범위에서 번호 하나만 고르라고 쓰고, 중복 금지/중복 허용 여부는 말하지 마세요.'
+    : '선택 안내는 1~78 범위, 필요한 개수, 중복 금지를 포함하세요.';
   return [
     'tarot.start_reading은 이미 성공했고 카드 선택 세션이 만들어졌어요.',
     '추가 도구 호출 없이 사용자에게 바로 보낼 clarify JSON을 작성하세요.',
-    `관찰값: topic=${JSON.stringify(topic)}, spreadCount=${spreadCount}${spreadName ? `, spreadName=${JSON.stringify(spreadName)}` : ''}, numberRange=1..78, unique=true`,
+    `관찰값: topic=${JSON.stringify(topic)}, spreadCount=${spreadCount}${spreadName ? `, spreadName=${JSON.stringify(spreadName)}` : ''}, numberRange=1..78, unique=${spreadCount > 1}`,
     'pendingAction은 넣지 마세요. 이미 세션은 코드에 저장되어 있고, 사용자는 다음 메시지에서 숫자만 고르면 됩니다.',
     '문장은 AI가 자연스럽게 쓰세요. 고정 예문을 복사하지 말고, 사용자가 물은 일을 일상어로 다루세요.',
-    '출력에는 사용자가 물은 대상 확인, 카드 장수, 1~78 범위, 중복 금지만 포함하세요. topic을 "주제로/기준으로"나 "~를 N장으로"에 억지로 붙이지 말고, "가볍게" 같은 장식어를 반복하지 마세요.'
+    selectionInstruction,
+    'topic을 "주제로/기준으로"나 "~를 N장으로"에 억지로 붙이지 말고, "가볍게" 같은 장식어를 반복하지 마세요.'
   ].join('\n');
 }
 
