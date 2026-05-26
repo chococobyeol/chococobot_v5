@@ -1966,6 +1966,8 @@ describe('AgentRuntime', () => {
 
     expect(outcome.kind).toBe('final');
     expect(JSON.stringify(outcome)).not.toContain('해석해 주세요');
+    expect(outcome.kind === 'final' ? outcome.message : '').not.toContain('카드\n');
+    expect(outcome.kind === 'final' ? outcome.message : '').not.toContain('흐름 ▰');
     expect(JSON.stringify(outcome)).toContain('의료진 안내');
     expect(JSON.stringify(outcome)).toContain('여사제');
   });

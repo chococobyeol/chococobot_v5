@@ -1006,8 +1006,11 @@ async function replyWithTarotPresentation(message: Message, content: string, pre
   const files = spreadAttachment ? [spreadAttachment] : [];
   const embed = new EmbedBuilder();
   if (presentation.title) embed.setTitle(presentation.title);
-  const cardLines = (presentation.cards ?? []).map((card) => `${card.selectionNumber}. ${card.name} · ${card.orientation}`);
-  const description = [presentation.summary, cardLines.length ? `카드\n${cardLines.join('\n')}` : undefined].filter(Boolean).join('\n\n');
+  const contentHasSummary = presentation.summary ? content.includes(presentation.summary.trim()) : false;
+  const contentHasCards = (presentation.cards ?? []).some((card) => content.includes(card.name));
+  const cardLines = contentHasCards ? [] : (presentation.cards ?? []).map((card) => `${card.selectionNumber}. ${card.name} · ${card.orientation}`);
+  const summary = contentHasSummary ? undefined : presentation.summary;
+  const description = [summary, cardLines.length ? `카드\n${cardLines.join('\n')}` : undefined].filter(Boolean).join('\n\n');
   if (description) embed.setDescription(description.slice(0, 4000));
   const firstAttachmentName = files[0]?.name;
   if (firstAttachmentName) embed.setImage(`attachment://${firstAttachmentName}`);

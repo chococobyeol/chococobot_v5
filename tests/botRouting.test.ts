@@ -322,6 +322,31 @@ describe('handleMessageCreate', () => {
     expect(payload.embeds[0].data.image.url).toBe('attachment://tarot-spread.png');
   });
 
+  it('omits tarot embed summary and card text already present in the answer body', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      agentRuntime: {
+        run: vi.fn(async () => ({
+          kind: 'final',
+          message: '오늘 운세 기준이에요.\n\n흐름 ▰▰▰▰▱ 4/5\n\n전차가 강하게 보여요.',
+          presentation: {
+            title: '오늘 운세 타로',
+            summary: '흐름 ▰▰▰▰▱ 4/5',
+            files: [{ path: 'assets/tarot/tarot_chariot.png', name: 'tarot-chariot.png' }],
+            cards: [{ selectionNumber: 7, name: '전차', orientation: '정방향', attachmentName: 'tarot-chariot.png' }]
+          }
+        }))
+      }
+    });
+    const message = makeMessage('!? 7', { createdTimestamp: 1_500 });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    const payload = message.reply.mock.calls[0][0];
+    expect(payload.embeds[0].data.description).toBeUndefined();
+    expect(payload.embeds[0].data.image.url).toBe('attachment://tarot-spread.png');
+  });
+
   it('does not fail tarot replies when a trusted presentation file is missing', async () => {
     const commands = createPrefixCommands();
     const context = makeContext({

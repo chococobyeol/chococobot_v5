@@ -1434,21 +1434,30 @@ function buildTarotRevealFallbackMessage(output: Record<string, unknown>): strin
   const bars = isRecord(output.visualData) && typeof output.visualData.bars === 'string'
     ? output.visualData.bars.trim()
     : '';
-  const cardLines = cards.map((card) => `${card.selectionNumber}. ${card.nameKo} · ${card.orientationKo} · ${card.keywords.join(', ')}`);
   const strongest = cards[0];
   const actionCard = cards.find((card) => card.orientationKo === '역방향') ?? cards[cards.length - 1] ?? strongest;
   const caution = topic.includes('병원') || topic.includes('건강') || topic.includes('아프')
     ? '\n건강이나 병원 결정은 타로보다 실제 증상과 의료진 안내를 우선해 주세요. 불편함이 있으면 확인하러 가는 쪽이 더 안전해요.'
     : '';
+  const graphHint = bars ? ` 그래프는 ${summarizeTarotBars(bars)} 쪽으로 보여요.` : '';
   return [
     `${topic} 기준으로 카드 결과를 확인했어요.`,
     '',
-    '카드',
-    ...cardLines,
-    ...(bars ? ['', bars] : []),
-    '',
-    `해석하면 ${strongest.nameKo}의 ${strongest.keywords[0] ?? '흐름'} 기운이 먼저 보이고, ${actionCard.nameKo} ${actionCard.orientationKo}은 ${actionCard.keywords.join(', ')} 쪽을 조심하라는 신호로 볼 수 있어요. 서두르기보다 몸 상태와 현실적인 일정을 확인하고, 불안하거나 애매하면 안전한 선택을 우선하는 쪽이 좋아 보여요.${caution}`
+    `해석하면 ${strongest.nameKo}의 ${strongest.keywords[0] ?? '흐름'} 기운이 먼저 보이고, ${actionCard.nameKo} ${actionCard.orientationKo}은 ${actionCard.keywords.join(', ')} 쪽을 조심하라는 신호로 볼 수 있어요.${graphHint} 서두르기보다 몸 상태와 현실적인 일정을 확인하고, 불안하거나 애매하면 안전한 선택을 우선하는 쪽이 좋아 보여요.${caution}`
   ].join('\n');
+}
+
+function summarizeTarotBars(bars: string): string {
+  const labels = [...bars.matchAll(/(흐름|감정|행동)\s+[▰▱]+\s+(\d)\/5/gu)]
+    .map((match) => ({ label: match[1] ?? '', score: Number(match[2]) }))
+    .filter((item) => item.label && Number.isFinite(item.score));
+  if (!labels.length) return '카드에 나온 흐름';
+  const high = labels.filter((item) => item.score >= 4).map((item) => item.label);
+  const low = labels.filter((item) => item.score <= 2).map((item) => item.label);
+  if (high.length && low.length) return `${high.join(', ')}은 강하지만 ${low.join(', ')}은 낮은`;
+  if (high.length) return `${high.join(', ')}이 강한`;
+  if (low.length) return `${low.join(', ')}이 낮은`;
+  return '전체적으로 보통인';
 }
 
 type TarotObservationCard = {
