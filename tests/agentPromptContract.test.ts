@@ -48,6 +48,11 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).toContain('voice.speak');
     expect(prompt).toContain('tarot.start_reading');
     expect(prompt).toContain('tarot.reveal_selection');
+    expect(prompt).toContain('tarot.cancel_reading');
+    expect(prompt).not.toContain('오늘 조심할 한 가지');
+    expect(prompt).not.toContain('질문은 1장');
+    expect(prompt).not.toContain('질문은 5장');
+    expect(prompt).not.toContain('타로 시작/결과 안내 문장');
     expect(prompt).toContain('requester_voice_channel_not_bot_location');
     expect(prompt).toContain('literal quote from current/stored user text');
     expect(prompt).toContain('channel-wide cleanup has no evidence field');
@@ -55,7 +60,36 @@ describe('AgentRuntime prompt contract', () => {
     expect(prompt).not.toContain('cleanup evidence는 내부 안전 근거예요');
     expect(prompt).not.toContain('지원 prefix 명령:');
     expect(prompt).not.toContain('{"kind":"legacy_command","query":"..."}');
-    expect(prompt.length).toBeLessThan(5400);
+    expect(prompt.length).toBeLessThan(5000);
+  });
+
+  it('does not inject tarot-specific guidance just because prose says tarot', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await runtime.run(makeMessage(), '오늘 내가 조심하면 좋을게 뭔지 타로로 봐줘', makeOptions());
+
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('tarot.start_reading');
+    expect(prompt).toContain('tarot.reveal_selection');
+    expect(prompt).not.toContain('오늘 조심할 한 가지');
+    expect(prompt).not.toContain('타로 시작/결과 안내 문장');
+  });
+
+  it('adds tarot-specific guidance for active tarot sessions', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    await runtime.run(makeMessage(), '아냐 안볼래', makeOptions({
+      tarotPending: { topic: '오늘 조심할 것', spreadCount: 1, expiresAt: Date.parse('2026-05-22T18:25:00.000Z') }
+    }));
+
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('오늘 조심할 한 가지');
+    expect(prompt).toContain('질문은 1장');
+    expect(prompt).toContain('질문은 5장');
+    expect(prompt).toContain('tarot.cancel_reading');
+    expect(prompt).toContain('타로 시작/결과 안내 문장');
   });
 
   it('keeps the output envelope contract before truncatable channel/tool context', async () => {

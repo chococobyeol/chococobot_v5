@@ -154,6 +154,11 @@ export type TarotRevealSelectionOutput = {
   presentation?: AgentDiscordPresentation;
 };
 
+export type TarotCancelReadingOutput = {
+  message: string;
+  cancelled: boolean;
+};
+
 export type VoiceJoinOutput = {
   message: string;
   channelId?: string;
@@ -225,6 +230,7 @@ export type ToolRegistryHandlers = {
   userTimezone?: (input: UserTimezoneInput, context: AgentToolExecutionContext) => Promise<UserTimezoneOutput>;
   tarotStartReading?: (input: TarotStartReadingInput, context: AgentToolExecutionContext) => Promise<TarotStartReadingOutput>;
   tarotRevealSelection?: (input: TarotRevealSelectionInput, context: AgentToolExecutionContext) => Promise<TarotRevealSelectionOutput>;
+  tarotCancelReading?: (input: Record<string, never>, context: AgentToolExecutionContext) => Promise<TarotCancelReadingOutput>;
 };
 
 export class ToolRegistry {
@@ -400,6 +406,7 @@ export function createDefaultToolRegistry(handlers: ToolRegistryHandlers = {}): 
     userTimezoneTool(handlers),
     tarotStartReadingTool(handlers),
     tarotRevealSelectionTool(handlers),
+    tarotCancelReadingTool(handlers),
     cleanupTool(),
     massCleanupTool(),
     prefixSettingsTool(),
@@ -773,6 +780,25 @@ function tarotRevealSelectionTool(handlers: ToolRegistryHandlers): AgentToolDefi
       }
       if (!handlers.tarotRevealSelection) throw new Error('tarot.reveal_selection is unavailable in this runtime');
       return handlers.tarotRevealSelection(input, context);
+    }
+  };
+}
+
+function tarotCancelReadingTool(handlers: ToolRegistryHandlers): AgentToolDefinition<Record<string, never>, TarotCancelReadingOutput> {
+  return {
+    name: 'tarot.cancel_reading',
+    description: 'Cancel the requester active tarot card-selection session when the user declines, stops, or says they do not want to continue.',
+    inputSchema: '{}',
+    policy: 'safe_action_auto',
+    retryable: false,
+    validate(input) {
+      if (!isRecord(input)) return { ok: false, errors: ['input must be an object'] };
+      if (Object.keys(input).length > 0) return { ok: false, errors: ['input must be empty'] };
+      return { ok: true, value: {} };
+    },
+    async execute(input, context) {
+      if (!handlers.tarotCancelReading) throw new Error('tarot.cancel_reading is unavailable in this runtime');
+      return handlers.tarotCancelReading(input, context);
     }
   };
 }

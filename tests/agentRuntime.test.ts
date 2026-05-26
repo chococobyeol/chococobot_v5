@@ -2022,6 +2022,8 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).toHaveBeenCalledTimes(4);
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('clarify 질문에 대한 후속 답변');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('tarot.start_reading');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('오늘 조심할 한 가지');
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('spreadCount 1');
     expect(ai.askMessages.mock.calls[3][0].messages[0].content).toContain('"~를 N장으로"에 억지로 붙이지 말고');
     expect(ai.askMessages.mock.calls[3][0].messages[0].content).toContain('고정 예문을 복사하지 말고');
     expect(ai.askMessages.mock.calls[3][0].messages[0].content).not.toContain('타로로 가볍게 볼게요');
@@ -2301,22 +2303,31 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).not.toHaveBeenCalled();
   });
 
-  it('gives immediate feedback for non-numeric active tarot selections without asking the model', async () => {
-    const ai = { askMessages: vi.fn().mockResolvedValue(JSON.stringify({ kind: 'not_handled' })) };
+  it('lets the model handle non-numeric active tarot replies so users can cancel', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'cancel', tool: 'tarot.cancel_reading', input: {} }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '타로 선택을 취소했어요.' }))
+    };
     const tarotRevealSelection = vi.fn();
-    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
+    const tarotCancelReading = vi.fn(async () => ({ message: '타로 선택을 취소했어요.', cancelled: true }));
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection, tarotCancelReading }), new AgentTurnContextStore());
 
-    const outcome = await runtime.run(makeMessage(), '아무거나 골라줘', makeOptions({
+    const outcome = await runtime.run(makeMessage(), '아냐 안볼래', makeOptions({
       requesterDisplayName: '테스터',
       tarotPending: { topic: '저녁 뭐 먹을지', spreadCount: 3 }
     }));
 
-    expect(outcome).toEqual({
-      kind: 'clarify',
-      message: '숫자를 찾지 못했어요. 1~78 사이 숫자 3개를 중복 없이 골라주세요. 예: 1 23 45'
-    });
+    expect(outcome).toEqual({ kind: 'final', message: '타로 선택을 취소했어요.' });
+    expect(ai.askMessages).toHaveBeenCalled();
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('tarot.cancel_reading');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('숫자가 없는 말을 카드 선택으로 단정하지 말고');
     expect(tarotRevealSelection).not.toHaveBeenCalled();
-    expect(ai.askMessages).not.toHaveBeenCalled();
+    expect(tarotCancelReading).toHaveBeenCalledWith({}, expect.any(Object));
   });
 
   it('returns tool feedback for duplicate or wrong-count active tarot selections', async () => {

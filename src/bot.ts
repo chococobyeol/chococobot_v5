@@ -26,6 +26,7 @@ import {
   type TarotRevealSelectionOutput,
   type TarotStartReadingInput,
   type TarotStartReadingOutput,
+  type TarotCancelReadingOutput,
   type VoiceSpeakInput,
   type VoiceSpeakOutput,
   type VoiceStopOutput
@@ -1913,6 +1914,18 @@ async function executeTarotRevealSelectionTool(input: TarotRevealSelectionInput,
   };
 }
 
+async function executeTarotCancelReadingTool(_input: Record<string, never>, executionContext: AgentToolExecutionContext): Promise<TarotCancelReadingOutput> {
+  const { message, context } = resolveTarotToolContext(executionContext);
+  const key = tarotSessionKeyFor(message);
+  if (!key || !context.tarotSessions) {
+    return { message: '진행 중인 타로가 없어요.', cancelled: false };
+  }
+  const session = context.tarotSessions.get(key, executionContext.nowMs);
+  if (!session) return { message: '진행 중인 타로가 없어요.', cancelled: false };
+  context.tarotSessions.clear(key);
+  return { message: '타로 선택을 취소했어요.', cancelled: true };
+}
+
 function resolveVoiceToolContext(executionContext: AgentToolExecutionContext): { message: Message; context: BotContext } {
   const message = executionContext.message as Message | undefined;
   const context = executionContext.botContext as BotContext | undefined;
@@ -2820,7 +2833,8 @@ export async function createBot(
       ttsEngine: executeTtsEngineTool,
       userTimezone: executeUserTimezoneTool,
       tarotStartReading: executeTarotStartReadingTool,
-      tarotRevealSelection: executeTarotRevealSelectionTool
+      tarotRevealSelection: executeTarotRevealSelectionTool,
+      tarotCancelReading: executeTarotCancelReadingTool
     }),
     agentTurnContextStore
   );

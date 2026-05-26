@@ -234,22 +234,29 @@ describe('ToolRegistry observation contract', () => {
   it('registers tarot tools as safe structured actions with strict schemas', async () => {
     const tarotStartReading = vi.fn(async () => ({ sessionId: 'session-1', topic: '연애운', spreadCount: 3, message: '1부터 78 사이에서 3개를 골라주세요.' }));
     const tarotRevealSelection = vi.fn(async () => ({ message: '타로 결과예요...', cards: [], visualData: { bars: '흐름 ▰▰▰' } }));
-    const registry = createDefaultToolRegistry({ tarotStartReading, tarotRevealSelection });
+    const tarotCancelReading = vi.fn(async () => ({ message: '타로 선택을 취소했어요.', cancelled: true }));
+    const registry = createDefaultToolRegistry({ tarotStartReading, tarotRevealSelection, tarotCancelReading });
 
     expect(registry.get('tarot.start_reading')).toMatchObject({ policy: 'safe_action_auto', retryable: false });
     expect(registry.get('tarot.reveal_selection')).toMatchObject({ policy: 'safe_action_auto', retryable: false });
+    expect(registry.get('tarot.cancel_reading')).toMatchObject({ policy: 'safe_action_auto', retryable: false });
 
     const invalidStart = await registry.execute('tarot.start_reading', { topic: '연애운', spreadCount: 6 }, { nowMs: 0 });
     const invalidReveal = await registry.execute('tarot.reveal_selection', { numbers: [1, 1, 2] }, { nowMs: 0 });
+    const invalidCancel = await registry.execute('tarot.cancel_reading', { reason: 'stop' }, { nowMs: 0 });
     const start = await registry.execute('tarot.start_reading', { topic: '연애운', spreadCount: 3, spreadName: '세 장 흐름' }, { nowMs: 0 });
     const reveal = await registry.execute('tarot.reveal_selection', { numbers: [1, 2, 3] }, { nowMs: 0 });
+    const cancel = await registry.execute('tarot.cancel_reading', {}, { nowMs: 0 });
 
     expect(invalidStart).toMatchObject({ toolName: 'tarot.start_reading', status: 'error', code: 'validation_error', field: 'spreadCount' });
     expect(invalidReveal).toMatchObject({ toolName: 'tarot.reveal_selection', status: 'error', code: 'duplicate_numbers', field: 'numbers', message: expect.stringContaining('중복') });
+    expect(invalidCancel).toMatchObject({ toolName: 'tarot.cancel_reading', status: 'error', code: 'validation_error' });
     expect(start).toMatchObject({ toolName: 'tarot.start_reading', status: 'ok', output: expect.objectContaining({ topic: '연애운', spreadCount: 3 }) });
     expect(reveal).toMatchObject({ toolName: 'tarot.reveal_selection', status: 'ok', output: expect.objectContaining({ visualData: expect.objectContaining({ bars: expect.stringContaining('흐름') }) }) });
+    expect(cancel).toMatchObject({ toolName: 'tarot.cancel_reading', status: 'ok', output: { message: '타로 선택을 취소했어요.', cancelled: true } });
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '연애운', spreadCount: 3, spreadName: '세 장 흐름' }, { nowMs: 0 });
     expect(tarotRevealSelection).toHaveBeenCalledWith({ numbers: [1, 2, 3] }, { nowMs: 0 });
+    expect(tarotCancelReading).toHaveBeenCalledWith({}, { nowMs: 0 });
   });
 
 });
