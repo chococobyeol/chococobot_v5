@@ -1905,6 +1905,7 @@ async function executeTarotRevealSelectionTool(input: TarotRevealSelectionInput,
     visualData: { bars },
     presentation: {
       title: `${consumed.topic} 타로`,
+      summary: bars,
       files: drawn.map((item) => ({ path: item.assetPath, name: item.attachmentName })),
       cards: cards.map((card) => ({
         selectionNumber: card.selectionNumber,

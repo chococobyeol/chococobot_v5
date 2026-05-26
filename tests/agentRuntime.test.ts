@@ -2376,12 +2376,51 @@ describe('AgentRuntime', () => {
     expect(evidencePrompt).toContain('카드 이름과 키워드를 그대로 나열하지 말고');
     expect(evidencePrompt).toContain('결론 → 원인 → 조심할 점 → 하면 좋은 행동');
     expect(evidencePrompt).toContain('1 현재 흐름, 2 원인, 3 조심할 점');
-    expect(evidencePrompt).toContain('질문 맞춤 그래프를 한 번 직접 넣으세요');
-    expect(evidencePrompt).toContain('흐름/감정/행동만 반복하지 마세요');
+    expect(evidencePrompt).toContain('본문에는 막대 그래프를 다시 쓰지 말고');
+    expect(evidencePrompt).toContain('그래프는 Discord embed가 따로 표시합니다');
+    expect(evidencePrompt).not.toContain('질문 맞춤 그래프를 한 번 직접 넣으세요');
     expect(evidencePrompt).toContain('“기운이 먼저 보이고”');
     expect(evidencePrompt).toContain('진행되고 있다/나타난다/필요하다');
     expect(evidencePrompt).toContain('presentation이 카드/그래프를 따로 보여주므로');
     expect(ai.askMessages.mock.calls[1][0].maxCompletionTokens).toBe(2000);
+  });
+
+  it('keeps tarot graph bars in the trusted presentation instead of the answer body', async () => {
+    const tarotRevealSelection = vi.fn(async () => ({
+      message: '밥 뭐먹을지 타로 카드 1장을 확인했어요.',
+      topic: '밥 뭐먹을지',
+      spreadCount: 1,
+      selectedNumbers: [34],
+      cards: [{ selectionNumber: 34, nameKo: '펜타클 왕', orientation: 'upright', orientationKo: '정방향', keywords: ['현실', '관리'], assetPath: 'assets/tarot/tarot_pentacles_king.png', attachmentName: 'tarot-34.png' }],
+      visualData: { bars: '흐름 ▰▱▱▱▱ 1/5\n감정 ▰▰▰▱▱ 3/5\n행동 ▰▰▰▰▱ 4/5' },
+      presentation: {
+        title: '밥 뭐먹을지 타로',
+        summary: '흐름 ▰▱▱▱▱ 1/5\n감정 ▰▰▰▱▱ 3/5\n행동 ▰▰▰▰▱ 4/5',
+        files: [{ path: 'assets/tarot/tarot_pentacles_king.png', name: 'tarot-34.png' }],
+        cards: [{ selectionNumber: 34, name: '펜타클 왕', orientation: '정방향', attachmentName: 'tarot-34.png' }]
+      }
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'tool_calls', calls: [{ id: 'reveal', tool: 'tarot.reveal_selection', input: { numbers: [34] } }] }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '지금 식사는 안정적인 선택이 좋아 보여요. 현재 결정 흐름은 약하지만(▰▱▱▱▱) 식욕은 보통(▰▰▰▱▱)이며 행동 의지는 강합니다(▰▰▰▰▱). 한 줄 요약: 실용적인 한 끼가 좋겠어요.' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '34', makeOptions({
+      requesterDisplayName: '테스터',
+      tarotPending: { topic: '밥 뭐먹을지', spreadCount: 1 }
+    }));
+
+    expect(outcome).toMatchObject({
+      kind: 'final',
+      message: '지금 식사는 안정적인 선택이 좋아 보여요. 현재 결정 흐름은 약하지만 식욕은 보통이며 행동 의지는 강합니다. 한 줄 요약: 실용적인 한 끼가 좋겠어요.',
+      presentation: expect.objectContaining({
+        summary: expect.stringContaining('흐름 ▰▱▱▱▱ 1/5')
+      })
+    });
+    expect(JSON.stringify(outcome)).toContain('presentation');
   });
 
   it('lets the model parse Korean tarot number words but normalizes invented select-card tool aliases', async () => {

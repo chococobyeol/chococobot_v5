@@ -513,7 +513,7 @@ export class AgentRuntime {
     }
     if (!messageText) return null;
     const presentation = extractTrustedPresentation(observations);
-    return presentation ? { kind: 'final', message: messageText, presentation } : { kind: 'final', message: messageText };
+    return presentation ? { kind: 'final', message: stripTarotGraphGlyphsFromMessage(messageText), presentation } : { kind: 'final', message: messageText };
   }
 
   private async executeToolCallWithDiagnostics(
@@ -1590,7 +1590,7 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
   return [
     `타로 관찰: ${topic}`,
     ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
-    ...(bars ? [`기본 에너지 참고값(그대로 표시하지 말고 질문 맞춤 그래프로 바꿔 해석):\n${bars}`] : []),
+    ...(bars ? [`기본 에너지 참고값(Discord embed 그래프로 별도 표시됨. 본문에는 막대 그래프를 다시 쓰지 말고 해석 근거로만 사용):\n${bars}`] : []),
     '타로 해석 작성 규칙:',
     '- 선택→공개 흐름에서는 카드가 이미 백엔드에서 확정된 입력입니다. 카드를 다시 뽑거나 번호를 요구하지 말고, 관찰된 카드와 그래프만 근거로 해석하세요.',
     '- 첫 문장은 카드 소개가 아니라 사용자의 질문에 대한 방향/결론으로 시작하세요. 예/아니오형이면 “해도 괜찮지만…”, “지금은 미루는 쪽…”처럼 조건까지 말하세요.',
@@ -1598,13 +1598,25 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
     '- 5장 복합 질문에서는 카드를 역할로 배정해 해석하세요: 1 현재 흐름, 2 원인, 3 조심할 점, 4 도움이 되는 행동, 5 한 달의 흐름/결과. 실제 카드 이름은 근거에 자연스럽게 섞고 키워드만 나열하지 마세요.',
     '- 1~3장 질문도 카드 이름과 키워드를 그대로 나열하지 말고, 각 카드를 질문 맥락의 현재 흐름, 걸림돌, 조언/행동으로 연결하세요.',
     '- 같은 카드·비슷한 키워드가 정방향/역방향으로 엇갈리면 “하고 싶은 마음과 브레이크가 같이 나온다”처럼 긴장으로 해석하세요.',
-    '- final.message 안에 질문 맞춤 그래프를 한 번 직접 넣으세요. 축 이름은 질문에서 뽑은 3~5개 항목으로 만들고, 흐름/감정/행동만 반복하지 마세요. 점수는 1~5 막대(▰▱)로 표시하되 해석과 모순되면 안 됩니다.',
-    '- 기본 에너지 참고값은 그대로 복사하지 말고 맞춤 축 점수의 근거로만 쓰세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다.',
+    '- final.message에는 ▰▱ 막대 그래프, 점수표, "맞춤 그래프" 단락을 넣지 마세요. 그래프는 Discord embed가 따로 표시합니다.',
+    '- 기본 에너지 참고값은 본문에 복사하지 말고 해석의 근거로만 쓰세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다.',
     '- “기준으로 카드 결과”, “기운이 먼저 보이고”, “쪽을 조심”, “안전한 선택을 우선”, “진행되고 있다/나타난다/필요하다”만 반복하는 문어체 템플릿을 쓰지 마세요.',
     '- presentation이 카드/그래프를 따로 보여주므로 final.message에는 카드 목록이나 그래프 목록을 반복하지 마세요.',
     '- Discord 채팅에 바로 보낼 자연스러운 한국어로 쓰세요. 1~3장은 4~6문장 450자 이내, 4~5장 복합 질문은 5~8문장 650자 이내로 답하세요. 사용자에게 해석해 달라고 요청하지 마세요.',
     '- 건강/병원/증상/컨디션 질문은 오락적 참고라고 선을 긋고, 증상이 있거나 애매하면 의료진/병원 확인을 우선하라고 안내하세요. 병원 방문을 미루라는 식으로 단정하지 마세요.'
   ];
+}
+
+function stripTarotGraphGlyphsFromMessage(message: string): string {
+  const stripped = message
+    .replace(/\s*[（(]\s*[▰▱\s]+(?:\d\s*\/\s*5)?\s*[）)]/g, '')
+    .split('\n')
+    .filter((line) => !/[▰▱]/.test(line))
+    .join('\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return stripped || message.trim();
 }
 
 function buildTarotRevealFallbackMessage(output: Record<string, unknown>): string | null {
