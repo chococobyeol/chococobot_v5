@@ -2023,6 +2023,8 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('clarify 질문에 대한 후속 답변');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('tarot.start_reading');
     expect(ai.askMessages.mock.calls[3][0].messages[0].content).toContain('"~를 N장으로"에 억지로 붙이지 말고');
+    expect(ai.askMessages.mock.calls[3][0].messages[0].content).toContain('고정 예문을 복사하지 말고');
+    expect(ai.askMessages.mock.calls[3][0].messages[0].content).not.toContain('타로로 가볍게 볼게요');
   });
 
   it('returns trusted tarot presentation metadata with the final interpretation', async () => {
