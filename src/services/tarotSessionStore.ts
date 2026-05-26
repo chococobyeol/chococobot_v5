@@ -27,7 +27,7 @@ export type TarotSessionStartInput = {
 export class TarotSessionStore {
   private readonly sessions = new Map<string, { key: TarotSessionKey; session: TarotSession }>();
 
-  constructor(private readonly ttlMs = 10 * 60 * 1000) {}
+  constructor(private readonly ttlMs = 5 * 60 * 1000) {}
 
   start(key: TarotSessionKey, input: TarotSessionStartInput, now = Date.now()): TarotSession {
     const seed = input.seed ?? `${key.guildId}:${key.channelId}:${key.userId}:${input.topic}:${now}`;

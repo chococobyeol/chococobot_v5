@@ -4,6 +4,15 @@ import { TarotSessionStore } from '../src/services/tarotSessionStore.js';
 describe('TarotSessionStore', () => {
   const key = { guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' };
 
+  it('uses a five-minute default selection TTL', () => {
+    const store = new TarotSessionStore();
+    const session = store.start(key, { topic: '오늘 조심할 것', spreadCount: 1, requesterDisplayName: '테스터', seed: 'seed-default' }, 1_000);
+
+    expect(session.expiresAt).toBe(301_000);
+    expect(store.get(key, 300_999)).toBeDefined();
+    expect(store.get(key, 301_000)).toBeUndefined();
+  });
+
   it('stores requester/channel scoped tarot sessions with TTL', () => {
     const store = new TarotSessionStore(10_000);
     const session = store.start(key, {
