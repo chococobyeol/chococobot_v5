@@ -32,6 +32,7 @@ import {
 } from './services/toolRegistry.js';
 import { createWebSearchProvider, type WebSearchMode, type WebSearchProvider } from './services/webSearchService.js';
 import { drawTarotCardsFromNumbers, formatTarotEnergyBars, validateTarotSelectionNumbers } from './services/tarotDeck.js';
+import { buildHorizontalPngComposite } from './services/pngComposite.js';
 import { TarotSessionStore, type TarotSessionKey } from './services/tarotSessionStore.js';
 import { AiChatService, parseAiChatTrigger, type AiChatRuntimeContext } from './services/aiChatService.js';
 import { BotActivityLogService } from './services/botActivityLogService.js';
@@ -1001,17 +1002,15 @@ async function replyWithTarotPresentation(message: Message, content: string, pre
     return;
   }
   const chunks = chunkDiscordMessage(content);
-  const files = (presentation.files ?? [])
-    .map((file) => toTarotAttachment(file))
-    .filter((file): file is AttachmentBuilder => Boolean(file))
-    .slice(0, 5);
+  const spreadAttachment = toTarotSpreadAttachment(presentation.files ?? []);
+  const files = spreadAttachment ? [spreadAttachment] : [];
   const embed = new EmbedBuilder();
   if (presentation.title) embed.setTitle(presentation.title);
   const cardLines = (presentation.cards ?? []).map((card) => `${card.selectionNumber}. ${card.name} · ${card.orientation}`);
   const description = [presentation.summary, cardLines.length ? `카드\n${cardLines.join('\n')}` : undefined].filter(Boolean).join('\n\n');
   if (description) embed.setDescription(description.slice(0, 4000));
   const firstAttachmentName = files[0]?.name;
-  if (firstAttachmentName) embed.setThumbnail(`attachment://${firstAttachmentName}`);
+  if (firstAttachmentName) embed.setImage(`attachment://${firstAttachmentName}`);
   const embeds = description || presentation.title ? [embed] : [];
   await message.reply({
     content: chunks[0] ?? '타로 결과예요...',
@@ -1025,7 +1024,22 @@ async function replyWithTarotPresentation(message: Message, content: string, pre
   }
 }
 
-function toTarotAttachment(file: { path: string; name: string }): AttachmentBuilder | null {
+function toTarotSpreadAttachment(files: readonly { path: string; name: string }[]): AttachmentBuilder | null {
+  const paths = files
+    .map((file) => resolveTrustedTarotFile(file))
+    .filter((file): file is { absolutePath: string; name: string } => Boolean(file))
+    .slice(0, 5);
+  if (!paths.length) return null;
+  try {
+    const image = buildHorizontalPngComposite(paths.map((file) => file.absolutePath));
+    return new AttachmentBuilder(image, { name: 'tarot-spread.png' });
+  } catch (error) {
+    logger.warn('Failed to build tarot spread attachment:', error);
+    return null;
+  }
+}
+
+function resolveTrustedTarotFile(file: { path: string; name: string }): { absolutePath: string; name: string } | null {
   if (!file.path.startsWith('assets/tarot/') || file.path.includes('..') || !file.name.endsWith('.png')) return null;
   const tarotRoot = resolve('assets/tarot');
   const absolutePath = resolve(file.path);
@@ -1034,7 +1048,7 @@ function toTarotAttachment(file: { path: string; name: string }): AttachmentBuil
     logger.warn('Trusted tarot attachment file is missing:', absolutePath);
     return null;
   }
-  return new AttachmentBuilder(absolutePath, { name: file.name });
+  return { absolutePath, name: file.name };
 }
 
 async function rememberAiExchange(context: BotContext, message: Message, prompt: string, answer: string): Promise<void> {
@@ -1809,7 +1823,8 @@ async function executeTarotRevealSelectionTool(input: TarotRevealSelectionInput,
     attachmentName: item.attachmentName
   }));
   return {
-    message: `${consumed.topic} 타로 카드 ${drawn.length}장을 확인했어요. 관찰값의 카드, 방향, 키워드, 그래프를 근거로 해석해 주세요.`,
+    message: `${consumed.topic} 타로 카드 ${drawn.length}장을 확인했어요.`,
+    interpretationInstruction: '카드, 방향, 키워드, 그래프만 근거로 사용자에게 바로 보낼 타로 해석 final.message를 작성하세요. 사용자에게 해석해 달라고 요청하지 마세요.',
     topic: consumed.topic,
     spreadCount: consumed.spreadCount,
     selectedNumbers: validation.numbers,

@@ -53,6 +53,53 @@ describe('AgentRuntime', () => {
     expect(actionAi.askMessages).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts nested final and clarify envelopes that small models often emit', async () => {
+    const clarifyAi = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'clarify',
+        clarify: {
+          message: '어떤 주제로 타로를 볼까요?',
+          pendingAction: { kind: 'tarot', originalPrompt: '타로봐줘', missing: ['topic'] }
+        }
+      }))
+    };
+    const finalAi = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'final',
+        final: { message: '이전 대화 기준으로 답할게요.' }
+      }))
+    };
+
+    await expect(new AgentRuntime(clarifyAi as any, createDefaultToolRegistry(), new AgentTurnContextStore()).run(makeMessage(), '타로봐줘', makeOptions()))
+      .resolves.toEqual({
+        kind: 'clarify',
+        message: '어떤 주제로 타로를 볼까요?',
+        pendingAction: { kind: 'tarot', originalPrompt: '타로봐줘', missing: ['topic'] }
+      });
+    await expect(new AgentRuntime(finalAi as any, createDefaultToolRegistry(), new AgentTurnContextStore()).run(makeMessage(), '이어 말해줘', makeOptions({ conversationContext: '이전 대화' })))
+      .resolves.toEqual({ kind: 'final', message: '이전 대화 기준으로 답할게요.' });
+  });
+
+  it('repairs common tarot spread count aliases before tool schema validation', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '이따 병원갈까',
+      spreadCount: 3,
+      message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+    }));
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'tool_calls',
+        calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '이따 병원갈까', count: 3 } }]
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '이따 병원갈까', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({ kind: 'clarify', message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
+    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '이따 병원갈까', spreadCount: 3 }, expect.any(Object));
+  });
+
   it('does not recover status/action aliases into executable tool calls', async () => {
     const historySearch = vi.fn(async () => ({
       scope: 'channel',
@@ -1876,6 +1923,53 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('타로 pendingAction.missing에 numbers가 있으면');
   });
 
+  it('rejects decimal tarot card selections before splitting them into extra cards', async () => {
+    const ai = { askMessages: vi.fn() };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '2 32.1 5', makeOptions({
+      tarotPending: { topic: '이따 병원갈지', spreadCount: 3, requesterDisplayName: '테스터' }
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '카드 번호는 소수나 음수 없이 정수로 골라주세요. 1~78 사이 숫자 3개를 중복 없이 골라주세요. 예: 1 23 45'
+    });
+    expect(ai.askMessages).not.toHaveBeenCalled();
+  });
+
+  it('uses a user-safe tarot interpretation fallback when the model fails after reveal', async () => {
+    const tarotRevealSelection = vi.fn(async () => ({
+      message: '이따 병원갈지 타로 카드 3장을 확인했어요.',
+      topic: '이따 병원갈지',
+      spreadCount: 3,
+      selectedNumbers: [2, 5, 1],
+      cards: [
+        { selectionNumber: 2, nameKo: '여사제', orientation: 'reversed', orientationKo: '역방향', keywords: ['직감', '비밀', '관찰'], assetPath: 'assets/tarot/tarot_high_priestess.png', attachmentName: 'tarot-2.png' },
+        { selectionNumber: 5, nameKo: '컵 기사', orientation: 'upright', orientationKo: '정방향', keywords: ['추진', '이동'], assetPath: 'assets/tarot/tarot_cups_knight.png', attachmentName: 'tarot-5.png' },
+        { selectionNumber: 1, nameKo: '펜타클 기사', orientation: 'reversed', orientationKo: '역방향', keywords: ['현실', '관리'], assetPath: 'assets/tarot/tarot_pentacles_knight.png', attachmentName: 'tarot-1.png' }
+      ],
+      visualData: { bars: '흐름 ▰▰▰▱▱ 3/5\n감정 ▰▰▰▰▱ 4/5\n행동 ▰▰▰▱▱ 3/5' },
+      presentation: {
+        title: '이따 병원갈지 타로',
+        summary: '흐름 ▰▰▰▱▱ 3/5',
+        files: [{ path: 'assets/tarot/tarot_high_priestess.png', name: 'tarot-2.png' }],
+        cards: [{ selectionNumber: 2, name: '여사제', orientation: '역방향', attachmentName: 'tarot-2.png' }]
+      }
+    }));
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce('응답이 비어 있어요...') };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '2 5 1', makeOptions({
+      tarotPending: { topic: '이따 병원갈지', spreadCount: 3, requesterDisplayName: '테스터' }
+    }));
+
+    expect(outcome.kind).toBe('final');
+    expect(JSON.stringify(outcome)).not.toContain('해석해 주세요');
+    expect(JSON.stringify(outcome)).toContain('의료진 안내');
+    expect(JSON.stringify(outcome)).toContain('여사제');
+  });
+
   it('asks for a tarot topic first when the request has no subject, then starts a spread from the follow-up', async () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '연애운',
@@ -2004,7 +2098,7 @@ describe('AgentRuntime', () => {
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '내일 점심 뭐먹을지', spreadCount: 3 }, expect.any(Object));
   });
 
-  it('feeds tarot.start_reading schema errors back to the model instead of the user', async () => {
+  it('repairs tarot.start_reading cardCount aliases before exposing schema errors', async () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '밖에 나가는게 좋을까',
       spreadCount: 3,
@@ -2016,10 +2110,6 @@ describe('AgentRuntime', () => {
         .mockResolvedValueOnce(JSON.stringify({
           kind: 'tool_calls',
           calls: [{ id: 'bad', tool: 'tarot.start_reading', input: { topic: '밖에 나가는게 좋을까', cardCount: 3 } }]
-        }))
-        .mockResolvedValueOnce(JSON.stringify({
-          kind: 'tool_calls',
-          calls: [{ id: 'fixed', tool: 'tarot.start_reading', input: { topic: '밖에 나가는게 좋을까', spreadCount: 3 } }]
         }))
     };
     const diagnostics: unknown[] = [];
@@ -2036,12 +2126,41 @@ describe('AgentRuntime', () => {
     });
     expect(tarotStartReading).toHaveBeenCalledTimes(1);
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '밖에 나가는게 좋을까', spreadCount: 3 }, expect.any(Object));
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('spreadCount');
-    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('cardCount');
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(outcome)).not.toContain('spreadCount must be an integer');
-    expect(diagnostics).toEqual(expect.arrayContaining([
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'tool_input_correction_required' })
     ]));
+  });
+
+  it('does not accept a plain final answer when a tarot topic follow-up must start the reading', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '이따 병원갈까',
+      spreadCount: 3,
+      message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.'
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '어떤 주제로 타로를 볼까요?',
+          pendingAction: { kind: 'tarot', originalPrompt: '타로봐줘', missing: ['topic'] }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', final: { message: '건강은 전문가와 상의하는 것이 좋습니다.' } }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '이따 병원갈까', count: 3 } }]
+        }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
+
+    await runtime.run(makeMessage(), '타로봐줘', makeOptions({ requesterDisplayName: '테스터' }));
+    const outcome = await runtime.run(makeMessage(), '이따 병원갈까', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({ kind: 'clarify', message: '이따 병원갈까 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
+    expect(JSON.stringify(outcome)).not.toContain('전문가와 상의');
+    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '이따 병원갈까', spreadCount: 3 }, expect.any(Object));
   });
 
   it('recovers a tarot topic follow-up when the model keeps returning not_handled', async () => {

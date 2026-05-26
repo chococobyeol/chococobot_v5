@@ -275,7 +275,7 @@ describe('handleMessageCreate', () => {
     expect(message.reply).not.toHaveBeenCalled();
   });
 
-  it('renders trusted tarot presentation with Discord-native files and embeds', async () => {
+  it('renders trusted tarot presentation as one spread image inside the embed', async () => {
     const commands = createPrefixCommands();
     const tarotSessions = new TarotSessionStore(10_000);
     tarotSessions.start({ guildId: 'guild-1', channelId: 'channel-1', userId: 'user-1' }, {
@@ -293,8 +293,16 @@ describe('handleMessageCreate', () => {
           presentation: {
             title: '오늘 운세 타로',
             summary: '흐름 ▰▰▰▰▱',
-            files: [{ path: 'assets/tarot/tarot_chariot.png', name: 'tarot-chariot.png' }],
-            cards: [{ selectionNumber: 7, name: '전차', orientation: '정방향', attachmentName: 'tarot-chariot.png' }]
+            files: [
+              { path: 'assets/tarot/tarot_chariot.png', name: 'tarot-chariot.png' },
+              { path: 'assets/tarot/tarot_high_priestess.png', name: 'tarot-high-priestess.png' },
+              { path: 'assets/tarot/tarot_cups_knight.png', name: 'tarot-cups-knight.png' }
+            ],
+            cards: [
+              { selectionNumber: 7, name: '전차', orientation: '정방향', attachmentName: 'tarot-chariot.png' },
+              { selectionNumber: 2, name: '여사제', orientation: '역방향', attachmentName: 'tarot-high-priestess.png' },
+              { selectionNumber: 32, name: '컵 기사', orientation: '정방향', attachmentName: 'tarot-cups-knight.png' }
+            ]
           }
         }))
       }
@@ -303,11 +311,15 @@ describe('handleMessageCreate', () => {
 
     await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
 
-    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+    const payload = message.reply.mock.calls[0][0];
+    expect(payload).toEqual(expect.objectContaining({
       content: '오늘은 추진력이 좋은 흐름이에요...',
       embeds: expect.any(Array),
       files: expect.any(Array)
     }));
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].name).toBe('tarot-spread.png');
+    expect(payload.embeds[0].data.image.url).toBe('attachment://tarot-spread.png');
   });
 
   it('does not fail tarot replies when a trusted presentation file is missing', async () => {

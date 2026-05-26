@@ -266,6 +266,28 @@ export class AgentRuntime {
         this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return fallback;
       }
+      if (envelope.kind === 'final' && priorContext?.pendingAction && observations.length === 0 && toolCalls.length === 0) {
+        if (!actionDecisionRetryRequested) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'clarify_follow_up_required' });
+          actionDecisionRetryRequested = true;
+          validationFailureFallback = buildPendingActionFailureFallback(priorContext);
+          validationFeedback = buildClarifyFollowUpFeedback(priorContext);
+          continue;
+        }
+        const recoveredTarotStart = buildTarotStartCallFromTopicPrompt(prompt, priorContext.pendingAction);
+        if (recoveredTarotStart) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_tarot_topic_follow_up' });
+          await this.executeToolCallWithDiagnostics(recoveredTarotStart, options, observations, toolCalls, runId, iteration);
+          const fallback = buildTarotStartFallbackOutcome(observations) ?? buildObservationBasedFallbackOutcome(observations);
+          if (fallback) {
+            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+            return fallback;
+          }
+        }
+        const fallback = buildPendingActionFailureFallback(priorContext);
+        this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return fallback;
+      }
       validationFeedback = null;
       const webSearchFailure = buildWebSearchFailureOutcome(observations);
       if ((envelope.kind === 'not_handled' || envelope.kind === 'final') && webSearchFailure) {
@@ -594,12 +616,12 @@ function buildDirectTarotSelectionResolution(
 ): { kind: 'call'; call: AgentToolCall } | { kind: 'outcome'; outcome: AgentRuntimeOutcome } | null {
   if (!tarotPending) return null;
   const numbers = parseTarotSelectionNumbers(prompt);
-  if (!numbers) {
+  if (!numbers.ok) {
     return {
       kind: 'outcome',
       outcome: {
         kind: 'clarify',
-        message: buildTarotSelectionFeedback(tarotPending.spreadCount, '숫자를 찾지 못했어요.')
+        message: buildTarotSelectionFeedback(tarotPending.spreadCount, numbers.reason)
       }
     };
   }
@@ -608,17 +630,20 @@ function buildDirectTarotSelectionResolution(
     call: {
       id: 'tarot_reveal_direct',
       tool: 'tarot.reveal_selection',
-      input: { numbers }
+      input: { numbers: numbers.value }
     }
   };
 }
 
-function parseTarotSelectionNumbers(prompt: string): number[] | null {
+function parseTarotSelectionNumbers(prompt: string): { ok: true; value: number[] } | { ok: false; reason: string } {
   const trimmed = prompt.trim();
-  if (!trimmed || !/[0-9]/.test(trimmed)) return null;
-  const numericTokens = trimmed.match(/[0-9]+/g) ?? [];
-  if (!numericTokens.length) return null;
-  return numericTokens.map((token) => Number(token));
+  if (!trimmed || !/[0-9]/.test(trimmed)) return { ok: false, reason: '숫자를 찾지 못했어요.' };
+  const numericTokens = trimmed.match(/[+-]?\d+(?:\.\d+)?/g) ?? [];
+  if (!numericTokens.length) return { ok: false, reason: '숫자를 찾지 못했어요.' };
+  if (numericTokens.some((token) => token.includes('.') || token.startsWith('-') || token.startsWith('+'))) {
+    return { ok: false, reason: '카드 번호는 소수나 음수 없이 정수로 골라주세요.' };
+  }
+  return { ok: true, value: numericTokens.map((token) => Number(token)) };
 }
 
 function buildTarotSelectionFeedback(expectedCount: number, reason: string): string {
@@ -794,12 +819,13 @@ function parseAgentEnvelope(response: string): ParseResult {
   }
   if (!isRecord(parsed)) return { ok: false, errors: ['Envelope must be an object'] };
   const kind = parseEnvelopeKind(parsed);
+  const body = envelopeBody(parsed, kind);
   switch (kind) {
     case 'tool_calls': {
-      if (!Array.isArray(parsed.calls)) return { ok: false, errors: ['tool_calls.calls must be an array'] };
+      if (!Array.isArray(body.calls)) return { ok: false, errors: ['tool_calls.calls must be an array'] };
       const calls: AgentToolCall[] = [];
       const errors: string[] = [];
-      for (const [index, raw] of parsed.calls.entries()) {
+      for (const [index, raw] of body.calls.entries()) {
         if (!isRecord(raw)) {
           errors.push(`calls[${index}] must be an object`);
           continue;
@@ -808,28 +834,28 @@ function parseAgentEnvelope(response: string): ParseResult {
         const tool = typeof raw.tool === 'string' ? raw.tool.trim() : '';
         if (!id) errors.push(`calls[${index}].id must be non-empty`);
         if (!tool) errors.push(`calls[${index}].tool must be non-empty`);
-        calls.push({ id, tool, input: raw.input ?? {} });
+        calls.push({ id, tool, input: normalizeToolInput(tool, raw.input ?? {}) });
       }
       if (errors.length) return { ok: false, errors };
       return { ok: true, envelope: { kind: 'tool_calls', calls } };
     }
     case 'final': {
-      const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
       if (!message) return { ok: false, errors: ['final.message must be non-empty'] };
       return { ok: true, envelope: { kind, message } };
     }
     case 'unavailable': {
-      const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
       if (!message) return { ok: false, errors: ['unavailable.message must be non-empty'] };
-      const reason = parsed.reason === 'web_search_unavailable' ? parsed.reason : undefined;
+      const reason = body.reason === 'web_search_unavailable' ? body.reason : undefined;
       return { ok: true, envelope: reason ? { kind, message, reason } : { kind, message } };
     }
     case 'clarify': {
-      const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
       if (!message) return { ok: false, errors: ['clarify.message must be non-empty'] };
-      const pendingAction = parsePendingAction(parsed.pendingAction);
-      if (parsed.pendingAction !== undefined && !pendingAction) {
-        const recoveredTarot = recoverMalformedTarotClarify(parsed.pendingAction);
+      const pendingAction = parsePendingAction(body.pendingAction);
+      if (body.pendingAction !== undefined && !pendingAction) {
+        const recoveredTarot = recoverMalformedTarotClarify(body.pendingAction);
         if (recoveredTarot) {
           return {
             ok: false,
@@ -844,8 +870,8 @@ function parseAgentEnvelope(response: string): ParseResult {
       return { ok: true, envelope: pendingAction ? { kind, message, pendingAction } : { kind, message } };
     }
     case 'blocked': {
-      const message = typeof parsed.message === 'string' ? parsed.message.trim() : '';
-      const blockedTools = Array.isArray(parsed.blockedTools) ? parsed.blockedTools.filter((item): item is string => typeof item === 'string') : [];
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
+      const blockedTools = Array.isArray(body.blockedTools) ? body.blockedTools.filter((item): item is string => typeof item === 'string') : [];
       if (!message) return { ok: false, errors: ['blocked.message must be non-empty'] };
       return { ok: true, envelope: { kind: 'blocked', message, blockedTools } };
     }
@@ -856,6 +882,24 @@ function parseAgentEnvelope(response: string): ParseResult {
     default:
       return { ok: false, errors: [`Unknown kind: ${kind || '(missing)'}`] };
   }
+}
+
+
+function envelopeBody(parsed: Record<string, unknown>, kind: string): Record<string, unknown> {
+  const nested = parsed[kind];
+  return isRecord(nested) ? nested : parsed;
+}
+
+function normalizeToolInput(tool: string, input: unknown): unknown {
+  if (tool !== 'tarot.start_reading' || !isRecord(input)) return input;
+  const next: Record<string, unknown> = { ...input };
+  if (next.spreadCount === undefined) {
+    next.spreadCount = next.count ?? next.cardCount ?? next.card_count;
+  }
+  if (typeof next.spreadCount === 'string' && /^\d+$/.test(next.spreadCount.trim())) {
+    next.spreadCount = Number(next.spreadCount.trim());
+  }
+  return next;
 }
 
 function recoverMalformedTarotClarify(raw: unknown): AgentEnvelope | null {
@@ -1362,6 +1406,8 @@ function formatObservationEvidenceForFeedback(observations: readonly AgentToolOb
   if (timeOutputs.length) parts.push('시간 관찰:', ...timeOutputs.map((item, index) => `[${index + 1}] ${item.label}: ${item.display} (${item.timeZone})`));
   const voiceMessages = extractSuccessfulVoiceMessages(observations);
   if (voiceMessages.length) parts.push('작업 관찰:', ...voiceMessages.map((message, index) => `[${index + 1}] ${message}`));
+  const tarotEvidence = formatTarotEvidenceForFeedback(observations);
+  if (tarotEvidence.length) parts.push(...tarotEvidence);
   return parts;
 }
 
@@ -1390,7 +1436,75 @@ function buildObservationAnswerRequiredFeedback(observations: readonly AgentTool
   if (voiceMessages.length) {
     parts.push('작업 관찰:', ...voiceMessages.map((message, index) => `[${index + 1}] ${message}`));
   }
+  const tarotEvidence = formatTarotEvidenceForFeedback(observations);
+  if (tarotEvidence.length) parts.push(...tarotEvidence);
   return parts.join('\n');
+}
+
+function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservation[]): string[] {
+  const latest = [...observations].reverse().find((observation) => observation.toolName === 'tarot.reveal_selection' && observation.status === 'ok' && isRecord(observation.output));
+  if (!latest || !isRecord(latest.output)) return [];
+  const topic = typeof latest.output.topic === 'string' ? latest.output.topic : '타로';
+  const cards = extractTarotCards(latest.output);
+  const bars = isRecord(latest.output.visualData) && typeof latest.output.visualData.bars === 'string'
+    ? latest.output.visualData.bars.trim()
+    : '';
+  return [
+    `타로 관찰: ${topic}`,
+    ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
+    ...(bars ? [`그래프:\n${bars}`] : []),
+    '위 카드/방향/키워드/그래프만 근거로 사용자에게 바로 보낼 final.message를 작성하세요. 사용자에게 해석해 달라고 요청하지 마세요.'
+  ];
+}
+
+function buildTarotRevealFallbackMessage(output: Record<string, unknown>): string | null {
+  const topic = typeof output.topic === 'string' && output.topic.trim() ? output.topic.trim() : '타로';
+  const cards = extractTarotCards(output);
+  if (!cards.length) return null;
+  const bars = isRecord(output.visualData) && typeof output.visualData.bars === 'string'
+    ? output.visualData.bars.trim()
+    : '';
+  const cardLines = cards.map((card) => `${card.selectionNumber}. ${card.nameKo} · ${card.orientationKo} · ${card.keywords.join(', ')}`);
+  const strongest = cards[0];
+  const actionCard = cards.find((card) => card.orientationKo === '역방향') ?? cards[cards.length - 1] ?? strongest;
+  const caution = topic.includes('병원') || topic.includes('건강') || topic.includes('아프')
+    ? '\n건강이나 병원 결정은 타로보다 실제 증상과 의료진 안내를 우선해 주세요. 불편함이 있으면 확인하러 가는 쪽이 더 안전해요.'
+    : '';
+  return [
+    `${topic} 기준으로 카드 결과를 확인했어요.`,
+    '',
+    '카드',
+    ...cardLines,
+    ...(bars ? ['', bars] : []),
+    '',
+    `해석하면 ${strongest.nameKo}의 ${strongest.keywords[0] ?? '흐름'} 기운이 먼저 보이고, ${actionCard.nameKo} ${actionCard.orientationKo}은 ${actionCard.keywords.join(', ')} 쪽을 조심하라는 신호로 볼 수 있어요. 서두르기보다 몸 상태와 현실적인 일정을 확인하고, 불안하거나 애매하면 안전한 선택을 우선하는 쪽이 좋아 보여요.${caution}`
+  ].join('\n');
+}
+
+type TarotObservationCard = {
+  selectionNumber: number;
+  nameKo: string;
+  orientationKo: string;
+  keywords: string[];
+};
+
+function extractTarotCards(output: Record<string, unknown>): TarotObservationCard[] {
+  const rawCards = Array.isArray(output.cards) ? output.cards : [];
+  return rawCards.flatMap((raw) => {
+    if (!isRecord(raw)) return [];
+    const selectionNumber = typeof raw.selectionNumber === 'number' && Number.isInteger(raw.selectionNumber) ? raw.selectionNumber : undefined;
+    const nameKo = typeof raw.nameKo === 'string' && raw.nameKo.trim() ? raw.nameKo.trim() : undefined;
+    const orientationKo = typeof raw.orientationKo === 'string' && raw.orientationKo.trim()
+      ? raw.orientationKo.trim()
+      : raw.orientation === 'reversed'
+        ? '역방향'
+        : '정방향';
+    const keywords = Array.isArray(raw.keywords)
+      ? raw.keywords.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()).slice(0, 4)
+      : [];
+    if (!selectionNumber || !nameKo) return [];
+    return [{ selectionNumber, nameKo, orientationKo, keywords }];
+  }).slice(0, 5);
 }
 
 function buildToolInputCorrectionFeedback(observations: readonly AgentToolObservation[]): string | null {
@@ -1571,11 +1685,13 @@ function buildTarotFallbackOutcome(observations: readonly AgentToolObservation[]
     };
   }
   if (!isRecord(latest.output)) return null;
-  const outputMessage = typeof latest.output.message === 'string' ? latest.output.message : '타로 관찰값을 확인했어요.';
   if (latest.toolName === 'tarot.reveal_selection') {
+    const outputMessage = buildTarotRevealFallbackMessage(latest.output)
+      ?? (typeof latest.output.message === 'string' && !latest.output.message.includes('해석해 주세요') ? latest.output.message : '타로 결과를 확인했어요.');
     const presentation = extractTrustedPresentation(observations);
     return presentation ? { kind: 'final', message: outputMessage, presentation } : { kind: 'final', message: outputMessage };
   }
+  const outputMessage = typeof latest.output.message === 'string' ? latest.output.message : '타로 관찰값을 확인했어요.';
   return { kind: 'clarify', message: outputMessage };
 }
 

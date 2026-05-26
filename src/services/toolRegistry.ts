@@ -144,6 +144,7 @@ export type TarotRevealSelectionInput = {
 
 export type TarotRevealSelectionOutput = {
   message: string;
+  interpretationInstruction?: string;
   topic?: string;
   spreadCount?: number;
   selectedNumbers?: number[];
@@ -747,7 +748,7 @@ function tarotStartReadingTool(handlers: ToolRegistryHandlers): AgentToolDefinit
 function tarotRevealSelectionTool(handlers: ToolRegistryHandlers): AgentToolDefinition<TarotRevealSelectionInput, TarotRevealSelectionOutput> {
   return {
     name: 'tarot.reveal_selection',
-    description: 'Reveal cards for an active tarot session from requester-selected unique numbers. Code validates active session, exact count, duplicate numbers, and 1-78 range; AI writes the interpretation only from the observation.',
+    description: 'Reveal cards for an active tarot session from requester-selected unique numbers. Code validates active session, exact count, duplicate numbers, and 1-78 range; AI writes the interpretation only from the observation; if the model fails, runtime returns a safe observation-based fallback.',
     inputSchema: '{ numbers: integer[] } // selected card numbers, unique, 1..78, exact count is checked against active tarotPending session',
     policy: 'safe_action_auto',
     retryable: false,
