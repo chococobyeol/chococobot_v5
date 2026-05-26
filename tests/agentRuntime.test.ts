@@ -1944,6 +1944,40 @@ describe('AgentRuntime', () => {
     expect(prompt).toContain('도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요');
   });
 
+  it('preserves active tarot selection feedback when the model incorrectly adds a numbers pendingAction', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'clarify',
+        message: '중복된 번호가 있어요. 1부터 78 사이의 서로 다른 5개의 번호를 다시 알려 주세요.',
+        pendingAction: {
+          kind: 'tarot',
+          originalPrompt: '1부터 78 사이의 번호 중 5개를 골라 주세요. 같은 번호를 여러 번 선택하지 않도록 해 주세요.',
+          missing: ['numbers']
+        }
+      }))
+    };
+    const tarotRevealSelection = vi.fn();
+    const diagnostics: unknown[] = [];
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '일 이 삼 3 6', makeOptions({
+      requesterDisplayName: '테스터',
+      tarotPending: { topic: '한 달 컨디션', spreadCount: 5 },
+      onDiagnostic: (event: unknown) => diagnostics.push(event)
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '중복된 번호가 있어요. 1부터 78 사이의 서로 다른 5개의 번호를 다시 알려 주세요.'
+    });
+    expect(tarotRevealSelection).not.toHaveBeenCalled();
+    expect(JSON.stringify(outcome)).not.toContain('무엇에 대해 타로');
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'agent', event: 'parse_error' })
+    ]));
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('선택 단계 clarify에는 pendingAction을 넣지 마세요');
+  });
+
   it('does not tell the model to mention duplicate prevention when retrying one-card tarot selections', async () => {
     const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '소수점이 들어간 번호는 쓸 수 없어요. 1부터 78 사이에서 번호 하나만 다시 골라주세요.' })) };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());

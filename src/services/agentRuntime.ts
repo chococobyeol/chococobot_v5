@@ -688,7 +688,7 @@ function buildTarotNaturalSelectionFeedback(
     '정확히 필요한 개수의 1~78 번호를 사용자가 직접 말했다고 판단되면 반드시 tarot.reveal_selection tool_calls JSON만 작성하세요. 입력은 { "numbers": [...] }만 사용하세요.',
     'tarot.select_cards, tarot.draw_cards, sessionId/cards/selection 필드는 존재하지 않으니 절대 쓰지 마세요.',
     '취소/그만/안 본다는 뜻이면 tarot.cancel_reading을 호출하세요.',
-    '번호가 부족하거나 애매하면 도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요. 사용자가 말하지 않은 번호를 대신 고르지 마세요.'
+    '번호가 부족하거나 애매하면 도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요. 선택 단계 clarify에는 pendingAction을 넣지 마세요. 세션은 코드가 이미 보관합니다. 사용자가 말하지 않은 번호를 대신 고르지 마세요.'
   ].join('\n');
 }
 
@@ -813,6 +813,12 @@ function parseTarotPendingAction(raw: Record<string, unknown>): AgentPendingActi
   };
 }
 
+function isTarotNumbersClarifyPendingAction(raw: unknown): boolean {
+  if (!isRecord(raw) || raw.kind !== 'tarot') return false;
+  const rawMissing = Array.isArray(raw.missing) ? raw.missing : [];
+  return rawMissing.includes('numbers') && !rawMissing.includes('topic');
+}
+
 function parseHistoryPendingAction(raw: Record<string, unknown>): AgentPendingAction | undefined {
   const originalPrompt = typeof raw.originalPrompt === 'string' ? raw.originalPrompt.trim() : '';
   if (!originalPrompt) return undefined;
@@ -884,6 +890,9 @@ function parseAgentEnvelope(response: string): ParseResult {
       if (!message) return { ok: false, errors: ['clarify.message must be non-empty'] };
       const pendingAction = parsePendingAction(body.pendingAction);
       if (body.pendingAction !== undefined && !pendingAction) {
+        if (isTarotNumbersClarifyPendingAction(body.pendingAction)) {
+          return { ok: true, envelope: { kind, message } };
+        }
         const recoveredTarot = recoverMalformedTarotClarify(body.pendingAction);
         if (recoveredTarot) {
           return {
