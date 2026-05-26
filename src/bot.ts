@@ -2705,9 +2705,9 @@ function rememberTarotClarifySession(message: Message, context: BotContext, outc
 function hasOnlyCardNumberSelectionSyntax(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed) return false;
-  if (/[0-9]/.test(trimmed) && /^[0-9\s,，、.]+$/.test(trimmed)) return true;
+  if (!/[0-9영공일이삼사오육칠팔구]/.test(trimmed)) return false;
   const compact = trimmed.replace(/[\s,，、.]+/g, '');
-  return /[영공일이삼사오육칠팔구]/.test(compact) && /^[영공일이삼사오육칠팔구십백천만]+$/.test(compact);
+  return /^[0-9영공일이삼사오육칠팔구십백천만]+$/.test(compact);
 }
 
 async function handleActiveTarotSessionReply(

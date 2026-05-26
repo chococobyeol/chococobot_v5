@@ -2615,6 +2615,32 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('번호가 부족하거나 애매하면 도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요');
   });
 
+  it('preserves tarot number-selection clarify text even if the model adds an obsolete numbers pendingAction', async () => {
+    const ai = {
+      askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({
+        kind: 'clarify',
+        message: '같은 번호가 섞여 있어요. 서로 다른 카드 번호 5개를 다시 골라주세요.',
+        pendingAction: {
+          kind: 'tarot',
+          originalPrompt: '1부터 78 사이의 번호 중 5개를 골라 주세요.',
+          missing: ['numbers']
+        }
+      }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '일 이 삼 3 6', makeOptions({
+      requesterDisplayName: '테스터',
+      tarotPending: { topic: '컨디션 변화', spreadCount: 5 }
+    }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '같은 번호가 섞여 있어요. 서로 다른 카드 번호 5개를 다시 골라주세요.'
+    });
+    expect(JSON.stringify(outcome)).not.toContain('무엇에 대해 타로');
+  });
+
   it('rejects malformed tarot clarify that asks for spreadCount and recovers to a topic-only question', async () => {
     const diagnostics: unknown[] = [];
     const invalidTarotClarify = {
