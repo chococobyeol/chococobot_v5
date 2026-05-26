@@ -154,6 +154,12 @@ export class AgentRuntime {
           hint: latest?.hint
         });
       } else {
+        const tarotInterpretationOutcome = await this.tryBuildTarotInterpretationOutcome(message, options, observations, runId, 0);
+        if (tarotInterpretationOutcome) {
+          await options.onDiagnostic?.({ stage: 'agent', event: 'final', runId, iteration: 0, decisionKind: 'tarot_interpretation_final' });
+          this.updateTurnContext(key, tarotInterpretationOutcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+          return tarotInterpretationOutcome;
+        }
         validationFeedback = buildObservationAnswerRequiredFeedback(observations);
       }
     }
@@ -441,6 +447,12 @@ export class AgentRuntime {
         validationFeedback = toolInputCorrectionFeedback;
         continue;
       }
+      const tarotInterpretationOutcome = await this.tryBuildTarotInterpretationOutcome(message, options, observations, runId, iteration);
+      if (tarotInterpretationOutcome) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'final', runId, iteration, decisionKind: 'tarot_interpretation_final' });
+        this.updateTurnContext(key, tarotInterpretationOutcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return tarotInterpretationOutcome;
+      }
       const tarotStartFeedback = buildTarotStartAnswerRequiredFeedback(observations);
       if (tarotStartFeedback) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'tarot_start_answer_required' });
@@ -463,6 +475,71 @@ export class AgentRuntime {
 
     await options.onDiagnostic?.({ stage: 'agent', event: 'loop_limit', runId, decisionKind: 'not_handled' });
     return { kind: 'not_handled' };
+  }
+
+  private async tryBuildTarotInterpretationOutcome(
+    message: Message,
+    options: AgentRuntimeOptions,
+    observations: readonly AgentToolObservation[],
+    runId: string,
+    iteration: number
+  ): Promise<AgentRuntimeOutcome | null> {
+    if (!hasSuccessfulTarotRevealObservation(observations)) return null;
+    const messages = buildTarotInterpretationMessages(observations);
+    await options.onDiagnostic?.({
+      stage: 'agent',
+      event: 'retry',
+      runId,
+      iteration,
+      decisionKind: 'tarot_interpretation_required',
+      promptSnippet: summarizePromptForDiagnostic(messages)
+    });
+
+    let detailed: string | AiDetailedResponse;
+    try {
+      detailed = await this.askDetailedOrText({
+        guildId: message.guildId!,
+        userId: message.author.id,
+        usageScope: 'agent',
+        maxCompletionTokens: Math.max(options.maxCompletionTokens ?? 0, 2000),
+        messages
+      });
+    } catch (error) {
+      await options.onDiagnostic?.({ stage: 'agent', event: isRateLimitLike(error) ? 'rate_limit' : 'error', runId, iteration, error });
+      throw error;
+    }
+
+    const response = typeof detailed === 'string' ? detailed : detailed.content;
+    await options.onDiagnostic?.({
+      stage: 'agent',
+      event: 'response',
+      runId,
+      iteration,
+      responseSnippet: response.slice(0, 500),
+      ...(typeof detailed === 'string' ? {} : toDiagnosticUsage(detailed))
+    });
+
+    const parsed = parseAgentEnvelope(response);
+    let messageText: string | null = null;
+    if (parsed.ok && parsed.envelope.kind === 'final') {
+      messageText = parsed.envelope.message.trim();
+    } else {
+      const recovered = recoverPlainTextFinalEnvelope(response);
+      messageText = recovered?.kind === 'final' ? recovered.message.trim() : null;
+      if (!messageText) {
+        await options.onDiagnostic?.({
+          stage: 'agent',
+          event: 'parse_error',
+          runId,
+          iteration,
+          validationErrors: parsed.ok ? ['tarot interpretation must be final'] : parsed.errors,
+          responseSnippet: response.slice(0, 500)
+        });
+      }
+    }
+    if (!messageText) return null;
+    const presentation = extractTrustedPresentation(observations);
+    return presentation ? { kind: 'final', message: messageText, presentation } : { kind: 'final', message: messageText };
   }
 
   private async executeToolCallWithDiagnostics(
@@ -625,11 +702,16 @@ function buildPendingActionFailureFallback(priorContext: AgentTurnStoredContext 
   };
 }
 
+function containsKoreanNumeralCandidate(prompt: string): boolean {
+  return /(?:스물|서른|마흔|쉰|예순|일흔|여든|아흔|열|이십|삼십|사십|오십|육십|칠십|팔십|구십|영|공|하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|일|이|삼|사|오|육|칠|팔|구)/.test(prompt);
+}
+
 function buildDirectTarotSelectionResolution(
   prompt: string,
   tarotPending: AgentRuntimeOptions['tarotPending']
 ): { kind: 'call'; call: AgentToolCall } | { kind: 'feedback'; feedback: string } | null {
   if (!tarotPending) return null;
+  if (containsKoreanNumeralCandidate(prompt)) return null;
   const numbers = parseTarotSelectionNumbers(prompt);
   if (!numbers.ok && numbers.reason === '숫자를 찾지 못했어요.') return null;
   if (!numbers.ok) {
@@ -1490,6 +1572,21 @@ function buildRepeatedSuccessfulToolFeedback(repeatedCalls: readonly AgentToolCa
     '관찰값에 없는 내용은 단정하지 말고 확인된 내용 기준이라고 밝혀요.',
     ...formatObservationEvidenceForFeedback(observations)
   ].join('\n');
+}
+
+function buildTarotInterpretationMessages(observations: readonly AgentToolObservation[]): AiChatMessage[] {
+  const system = [
+    '너는 Discord 채팅용 타로 해석 전용 작성자예요.',
+    '반드시 JSON 객체 하나만 출력하세요. 형식은 {"kind":"final","message":"..."} 입니다.',
+    'tool_calls, clarify, not_handled, unavailable, blocked를 쓰지 마세요. 도구는 이미 실행됐고 카드는 확정됐습니다.',
+    'message는 사용자가 바로 읽을 자연스러운 한국어 해석이어야 합니다. 사용자에게 해석해 달라고 요청하지 마세요.',
+    '카드 목록은 Discord 카드 영역에 따로 표시되므로 본문에서 긴 목록을 반복하지 말고, 질문에 대한 결론과 근거에 집중하세요.'
+  ].join('\n');
+  const user = formatTarotEvidenceForFeedback(observations).join('\n');
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: truncate(user, 2600) }
+  ];
 }
 
 function formatObservationEvidenceForFeedback(observations: readonly AgentToolObservation[]): string[] {

@@ -166,12 +166,14 @@ describe('AgentRuntime prompt contract', () => {
     }));
 
     const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
-    expect(prompt).toContain('tarotPending');
-    expect(prompt).toContain('연애운');
-    expect(prompt).toContain('tarot.reveal_selection');
-    expect(prompt).toContain('"selectedNumbers":[1,2,3]');
-    expect(prompt).not.toContain('타로라는 단어가 있으면');
-    expect(prompt.length).toBeLessThan(5400);
+    const evidence = ai.askMessages.mock.calls[0][0].messages[1].content;
+    expect(prompt).toContain('타로 해석 전용 작성자');
+    expect(prompt).toContain('도구는 이미 실행됐고 카드는 확정됐습니다');
+    expect(prompt).not.toContain('tarot.reveal_selection [safe_action_auto]');
+    expect(evidence).toContain('연애운');
+    expect(evidence).toContain('타로 관찰');
+    expect(evidence).not.toContain('타로라는 단어가 있으면');
+    expect((prompt + evidence).length).toBeLessThan(5400);
   });
 
 });
