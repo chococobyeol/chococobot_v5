@@ -157,6 +157,9 @@ export class AgentRuntime {
         validationFeedback = buildObservationAnswerRequiredFeedback(observations);
       }
     }
+    if (!directTarotSelection && options.tarotPending && prompt.trim()) {
+      validationFeedback = buildTarotNaturalSelectionFeedback(prompt, options.tarotPending);
+    }
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
       const messages = this.buildMessages(message, prompt, options, priorContext, observations, validationFeedback);
@@ -688,6 +691,22 @@ function buildTarotSelectionCorrectionFeedback(
   ].filter(Boolean).join('\n');
 }
 
+function buildTarotNaturalSelectionFeedback(
+  prompt: string,
+  tarotPending: NonNullable<AgentRuntimeOptions['tarotPending']>
+): string {
+  return [
+    '현재 타로 카드 번호 선택 단계예요. 사용자가 숫자 말, 한글 숫자, 취소, 메타질문 중 하나로 답했을 수 있어요.',
+    `사용자 입력: ${JSON.stringify(prompt.trim())}`,
+    `타로 주제: ${JSON.stringify(tarotPending.topic)}, 필요한 카드 수: ${tarotPending.spreadCount}, 허용 범위: 1..78, 중복 허용: ${tarotPending.spreadCount === 1 ? '해당 없음' : 'false'}`,
+    '한글 숫자도 의미로 읽으세요. 예: "일 이 삼 사 오"는 [1,2,3,4,5], "스물셋"은 [23], "이십 삼"은 문맥상 23입니다.',
+    '정확히 필요한 개수의 1~78 번호를 사용자가 직접 말했다고 판단되면 반드시 tarot.reveal_selection tool_calls JSON만 작성하세요. 입력은 { "numbers": [...] }만 사용하세요.',
+    'tarot.select_cards, tarot.draw_cards, sessionId/cards/selection 필드는 존재하지 않으니 절대 쓰지 마세요.',
+    '취소/그만/안 본다는 뜻이면 tarot.cancel_reading을 호출하세요.',
+    '번호가 부족하거나 애매하면 도구를 호출하지 말고 clarify JSON으로 자연스럽게 다시 물어보세요. 사용자가 말하지 않은 번호를 대신 고르지 마세요.'
+  ].join('\n');
+}
+
 function buildPendingConfirmationFeedback(pending: NonNullable<AgentRuntimeOptions['pendingConfirmation']>): string {
   return [
     '현재 사용자 메시지는 대기 중인 확인 작업에 대한 답변일 수 있어요.',
@@ -856,7 +875,7 @@ function parseAgentEnvelope(response: string): ParseResult {
           continue;
         }
         const id = typeof raw.id === 'string' ? raw.id.trim() : '';
-        const tool = typeof raw.tool === 'string' ? raw.tool.trim() : '';
+        const tool = normalizeToolName(typeof raw.tool === 'string' ? raw.tool.trim() : '');
         if (!id) errors.push(`calls[${index}].id must be non-empty`);
         if (!tool) errors.push(`calls[${index}].tool must be non-empty`);
         calls.push({ id, tool, input: normalizeToolInput(tool, raw.input ?? {}) });
@@ -951,8 +970,18 @@ function envelopeBody(parsed: Record<string, unknown>, kind: string): Record<str
   return isRecord(nested) ? nested : parsed;
 }
 
+function normalizeToolName(tool: string): string {
+  if (tool === 'tarot.select_cards' || tool === 'tarot.draw_cards' || tool === 'tarot.select') return 'tarot.reveal_selection';
+  return tool;
+}
+
 function normalizeToolInput(tool: string, input: unknown): unknown {
-  if (tool !== 'tarot.start_reading' || !isRecord(input)) return input;
+  if (!isRecord(input)) return input;
+  if (tool === 'tarot.reveal_selection') {
+    const rawNumbers = input.numbers ?? input.cards ?? input.selection ?? input.cardNumbers ?? input.card_numbers;
+    return { numbers: Array.isArray(rawNumbers) ? rawNumbers : [] };
+  }
+  if (tool !== 'tarot.start_reading') return input;
   const next: Record<string, unknown> = { ...input };
   if (next.spreadCount === undefined) {
     next.spreadCount = next.count ?? next.cardCount ?? next.card_count;
@@ -1545,7 +1574,7 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
   return [
     `타로 관찰: ${topic}`,
     ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
-    ...(bars ? [`그래프:\n${bars}`] : []),
+    ...(bars ? [`기본 에너지 참고값(그대로 표시하지 말고 질문 맞춤 그래프로 바꿔 해석):\n${bars}`] : []),
     '타로 해석 작성 규칙:',
     '- 선택→공개 흐름에서는 카드가 이미 백엔드에서 확정된 입력입니다. 카드를 다시 뽑거나 번호를 요구하지 말고, 관찰된 카드와 그래프만 근거로 해석하세요.',
     '- 첫 문장은 카드 소개가 아니라 사용자의 질문에 대한 방향/결론으로 시작하세요. 예/아니오형이면 “해도 괜찮지만…”, “지금은 미루는 쪽…”처럼 조건까지 말하세요.',
@@ -1553,7 +1582,8 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
     '- 5장 복합 질문에서는 카드를 역할로 배정해 해석하세요: 1 현재 흐름, 2 원인, 3 조심할 점, 4 도움이 되는 행동, 5 한 달의 흐름/결과. 실제 카드 이름은 근거에 자연스럽게 섞고 키워드만 나열하지 마세요.',
     '- 1~3장 질문도 카드 이름과 키워드를 그대로 나열하지 말고, 각 카드를 질문 맥락의 현재 흐름, 걸림돌, 조언/행동으로 연결하세요.',
     '- 같은 카드·비슷한 키워드가 정방향/역방향으로 엇갈리면 “하고 싶은 마음과 브레이크가 같이 나온다”처럼 긴장으로 해석하세요.',
-    '- 그래프는 숫자를 반복하지 말고 판단에 녹이세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다. 그래프와 해석이 모순되면 안 됩니다.',
+    '- final.message 안에 질문 맞춤 그래프를 한 번 직접 넣으세요. 축 이름은 질문에서 뽑은 3~5개 항목으로 만들고, 흐름/감정/행동만 반복하지 마세요. 점수는 1~5 막대(▰▱)로 표시하되 해석과 모순되면 안 됩니다.',
+    '- 기본 에너지 참고값은 그대로 복사하지 말고 맞춤 축 점수의 근거로만 쓰세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다.',
     '- “기준으로 카드 결과”, “기운이 먼저 보이고”, “쪽을 조심”, “안전한 선택을 우선”, “진행되고 있다/나타난다/필요하다”만 반복하는 문어체 템플릿을 쓰지 마세요.',
     '- presentation이 카드/그래프를 따로 보여주므로 final.message에는 카드 목록이나 그래프 목록을 반복하지 마세요.',
     '- Discord 채팅에 바로 보낼 자연스러운 한국어로 쓰세요. 1~3장은 4~6문장 450자 이내, 4~5장 복합 질문은 5~8문장 650자 이내로 답하세요. 사용자에게 해석해 달라고 요청하지 마세요.',

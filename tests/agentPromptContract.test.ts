@@ -77,7 +77,7 @@ describe('AgentRuntime prompt contract', () => {
   });
 
   it('adds tarot-specific guidance for active tarot sessions', async () => {
-    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' })) };
+    const ai = { askMessages: vi.fn().mockResolvedValue(JSON.stringify({ kind: 'not_handled' })) };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     await runtime.run(makeMessage(), '아냐 안볼래', makeOptions({

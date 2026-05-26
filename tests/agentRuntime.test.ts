@@ -2329,10 +2329,44 @@ describe('AgentRuntime', () => {
     expect(systemPrompt).toContain('카드 이름과 키워드를 그대로 나열하지 말고');
     expect(systemPrompt).toContain('결론 → 원인 → 조심할 점 → 하면 좋은 행동');
     expect(systemPrompt).toContain('1 현재 흐름, 2 원인, 3 조심할 점');
+    expect(systemPrompt).toContain('질문 맞춤 그래프를 한 번 직접 넣으세요');
+    expect(systemPrompt).toContain('흐름/감정/행동만 반복하지 마세요');
     expect(systemPrompt).toContain('“기운이 먼저 보이고”');
     expect(systemPrompt).toContain('진행되고 있다/나타난다/필요하다');
     expect(systemPrompt).toContain('presentation이 카드/그래프를 따로 보여주므로');
     expect(ai.askMessages.mock.calls[0][0].maxCompletionTokens).toBe(1200);
+  });
+
+  it('lets the model parse Korean tarot number words but normalizes invented select-card tool aliases', async () => {
+    const tarotRevealSelection = vi.fn(async () => ({
+      message: '컨디션 변화 타로 카드 5장을 확인했어요.',
+      topic: '컨디션 변화',
+      spreadCount: 5,
+      selectedNumbers: [1, 2, 3, 4, 5],
+      cards: [],
+      visualData: { bars: '흐름 ▰▰▰▱▱' }
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'select', tool: 'tarot.select_cards', input: { sessionId: 'ignored', cards: [1, 2, 3, 4, 5] } }]
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '맞춤 그래프\n회복력 ▰▰▰▱▱ 3/5\n주의도 ▰▰▰▰▱ 4/5\n행동 도움 ▰▰▰▱▱ 3/5\n\n이번 달 컨디션은 무리하면 흔들릴 수 있지만 관리로 버틸 여지가 있어요.' }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '일 이 삼 사 오', makeOptions({
+      requesterDisplayName: '테스터',
+      tarotPending: { topic: '컨디션 변화', spreadCount: 5 }
+    }));
+
+    expect(tarotRevealSelection).toHaveBeenCalledWith({ numbers: [1, 2, 3, 4, 5] }, expect.any(Object));
+    expect(outcome.kind).toBe('final');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('"일 이 삼 사 오"는 [1,2,3,4,5]');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('tarot.select_cards');
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('tarot.reveal_selection');
   });
 
   it('treats a contiguous tarot number like 123 as one out-of-range card number and lets the model phrase feedback', async () => {
