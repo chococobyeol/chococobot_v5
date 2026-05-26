@@ -43,8 +43,8 @@ describe('tarot deck helpers', () => {
     expect(validateTarotSelectionNumbers([1, 2, 3], 3)).toEqual({ ok: true, numbers: [1, 2, 3] });
     expect(validateTarotSelectionNumbers([1, 1, 2], 3)).toMatchObject({ ok: false, code: 'duplicate_numbers', field: 'numbers', message: expect.stringContaining('중복') });
     expect(validateTarotSelectionNumbers([0, 2, 3], 3)).toMatchObject({ ok: false, code: 'number_out_of_range', field: 'numbers', message: expect.stringContaining('1~78') });
-    expect(validateTarotSelectionNumbers([1, 2], 3)).toMatchObject({ ok: false, code: 'wrong_count', field: 'numbers', message: expect.stringContaining('3') });
-    expect(validateTarotSelectionNumbers([1, 1], 1)).toMatchObject({ ok: false, code: 'wrong_count', field: 'numbers', message: expect.stringContaining('1') });
+    expect(validateTarotSelectionNumbers([1, 2], 3)).toMatchObject({ ok: false, code: 'wrong_count', field: 'numbers', message: expect.stringContaining('개수가 요청과 다릅니다'), hint: expect.stringContaining('Expected 3') });
+    expect(validateTarotSelectionNumbers([1, 1], 1)).toMatchObject({ ok: false, code: 'wrong_count', field: 'numbers', message: expect.stringContaining('개수가 요청과 다릅니다'), hint: expect.stringContaining('received 2') });
   });
 
   it('formats graph-like summary bars from selected cards', () => {

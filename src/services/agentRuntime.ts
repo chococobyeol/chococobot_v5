@@ -138,23 +138,24 @@ export class AgentRuntime {
     let validationFailureFallback: AgentRuntimeOutcome | null = null;
 
     const directTarotSelection = buildDirectTarotSelectionResolution(prompt, options.tarotPending);
-    if (directTarotSelection?.kind === 'outcome') {
-      await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration: 0, decisionKind: 'tarot_selection_feedback' });
-      this.updateTurnContext(key, directTarotSelection.outcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-      return directTarotSelection.outcome;
+    if (directTarotSelection?.kind === 'feedback') {
+      await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration: 0, decisionKind: 'tarot_selection_feedback_required' });
+      validationFeedback = directTarotSelection.feedback;
     }
     if (directTarotSelection?.kind === 'call') {
       await this.executeToolCallWithDiagnostics(directTarotSelection.call, options, observations, toolCalls, runId, 0);
       totalToolCalls += 1;
       const latest = observations.at(-1);
       if (latest?.status !== 'ok') {
-        const fallback = buildTarotFallbackOutcome(observations);
-        if (fallback) {
-          this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-          return fallback;
-        }
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration: 0, decisionKind: 'tarot_selection_feedback_required' });
+        validationFeedback = buildTarotSelectionCorrectionFeedback(prompt, options.tarotPending!, {
+          code: latest?.code,
+          message: latest?.message,
+          hint: latest?.hint
+        });
+      } else {
+        validationFeedback = buildObservationAnswerRequiredFeedback(observations);
       }
-      validationFeedback = buildObservationAnswerRequiredFeedback(observations);
     }
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration += 1) {
@@ -218,6 +219,12 @@ export class AgentRuntime {
         envelope = parsed.envelope;
       }
 
+      if (envelope.kind === 'not_handled' && isTarotSelectionCorrectionFeedback(validationFeedback) && !actionDecisionRetryRequested) {
+        await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'tarot_selection_feedback_required' });
+        actionDecisionRetryRequested = true;
+        validationFeedback = `${validationFeedback}\nnot_handled로 넘기지 말고, 사용자가 다시 번호를 고를 수 있게 clarify JSON으로 답하세요.`;
+        continue;
+      }
       if (envelope.kind === 'confirm_pending' && !options.pendingConfirmation) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'spurious_confirm_pending' });
         if (actionDecisionRetryRequested) return { kind: 'not_handled' };
@@ -286,6 +293,12 @@ export class AgentRuntime {
         await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'web_search_unavailable' });
         this.updateTurnContext(key, webSearchFailure, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
         return webSearchFailure;
+      }
+      if (envelope.kind === 'final' && isTarotSelectionCorrectionFeedback(validationFeedback) && options.tarotPending) {
+        const outcome: AgentRuntimeOutcome = { kind: 'clarify', message: envelope.message };
+        await options.onDiagnostic?.({ stage: 'agent', event: 'decision', runId, iteration, decisionKind: 'tarot_selection_feedback' });
+        this.updateTurnContext(key, outcome, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return outcome;
       }
       if (isEmptyBlockedDecision(envelope, observations, toolCalls)) {
         await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'empty_blocked_decision' });
@@ -612,17 +625,14 @@ function buildPendingActionFailureFallback(priorContext: AgentTurnStoredContext 
 function buildDirectTarotSelectionResolution(
   prompt: string,
   tarotPending: AgentRuntimeOptions['tarotPending']
-): { kind: 'call'; call: AgentToolCall } | { kind: 'outcome'; outcome: AgentRuntimeOutcome } | null {
+): { kind: 'call'; call: AgentToolCall } | { kind: 'feedback'; feedback: string } | null {
   if (!tarotPending) return null;
   const numbers = parseTarotSelectionNumbers(prompt);
   if (!numbers.ok && numbers.reason === '숫자를 찾지 못했어요.') return null;
   if (!numbers.ok) {
     return {
-      kind: 'outcome',
-      outcome: {
-        kind: 'clarify',
-        message: buildTarotSelectionFeedback(tarotPending.spreadCount, numbers.reason)
-      }
+      kind: 'feedback',
+      feedback: buildTarotSelectionCorrectionFeedback(prompt, tarotPending, { reason: numbers.reason })
     };
   }
   return {
@@ -646,9 +656,36 @@ function parseTarotSelectionNumbers(prompt: string): { ok: true; value: number[]
   return { ok: true, value: numericTokens.map((token) => Number(token)) };
 }
 
-function buildTarotSelectionFeedback(expectedCount: number, reason: string): string {
-  if (expectedCount === 1) return `${reason} 1~78 사이 숫자 1개를 골라주세요. 예: 23`;
-  return `${reason} 1~78 사이 숫자 ${expectedCount}개를 중복 없이 골라주세요. 예: 1 23 45`;
+function buildTarotSelectionCorrectionFeedback(
+  prompt: string,
+  tarotPending: NonNullable<AgentRuntimeOptions['tarotPending']>,
+  details: { reason?: string; code?: string; message?: string; hint?: string }
+): string {
+  const parsed = parseTarotSelectionNumbers(prompt);
+  const providedCount = parsed.ok ? parsed.value.length : undefined;
+  const countRelation = providedCount === undefined
+    ? 'unknown'
+    : providedCount < tarotPending.spreadCount
+      ? 'short'
+      : providedCount > tarotPending.spreadCount
+        ? 'too_many'
+        : 'invalid_values';
+  return [
+    '현재 타로 카드 번호 선택 단계예요. 선택 입력이 유효하지 않으니 도구를 호출하지 말고 사용자에게 보낼 clarify JSON만 작성하세요.',
+    `사용자 입력: ${JSON.stringify(prompt.trim())}`,
+    `타로 주제: ${JSON.stringify(tarotPending.topic)}, 필요한 카드 수: ${tarotPending.spreadCount}, 허용 범위: 1..78, 중복 허용: ${tarotPending.spreadCount === 1 ? '해당 없음' : 'false'}`,
+    providedCount !== undefined ? `인식된 숫자 개수: ${providedCount}, 상태: ${countRelation}` : undefined,
+    details.code ? `검증 코드: ${details.code}` : undefined,
+    details.reason ? `검증 이유: ${details.reason}` : undefined,
+    details.message ? `검증 관찰 메시지: ${details.message}` : undefined,
+    details.hint ? `검증 힌트: ${details.hint}` : undefined,
+    '문구는 AI가 새로 자연스럽게 쓰세요. 코드/검증 메시지를 그대로 복사하지 말고, 왜 다시 골라야 하는지 한 문장으로 설명하세요.',
+    '부족한 경우와 너무 많은 경우를 구분하세요. 부족한 입력에 “N개만”처럼 초과를 줄이라는 뉘앙스를 쓰지 마세요.',
+    tarotPending.spreadCount === 1
+      ? '1장 선택에서는 중복 금지/중복 허용을 언급하지 말고, 1~78 사이 번호 하나를 다시 고르라고만 안내하세요.'
+      : '2장 이상 선택에서는 필요하면 서로 다른 번호를 골라야 한다는 점을 자연스럽게 포함하세요.',
+    '출력은 반드시 {"kind":"clarify","message":"..."} 형태의 JSON 하나만 쓰세요. pendingAction은 넣지 마세요.'
+  ].filter(Boolean).join('\n');
 }
 
 function buildPendingConfirmationFeedback(pending: NonNullable<AgentRuntimeOptions['pendingConfirmation']>): string {
@@ -894,6 +931,10 @@ function shouldIncludeTarotPromptGuidance(
   if (priorContext?.lastIntent === 'tarot' || priorContext?.pendingAction?.kind === 'tarot') return true;
   if (validationFeedback && (validationFeedback.includes('타로') || validationFeedback.includes('tarot.'))) return true;
   return false;
+}
+
+function isTarotSelectionCorrectionFeedback(validationFeedback: string | null): boolean {
+  return Boolean(validationFeedback?.includes('현재 타로 카드 번호 선택 단계예요'));
 }
 
 function recoverPlainTextFinalEnvelope(response: string): AgentEnvelope | null {
@@ -1506,14 +1547,17 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
     ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
     ...(bars ? [`그래프:\n${bars}`] : []),
     '타로 해석 작성 규칙:',
+    '- 선택→공개 흐름에서는 카드가 이미 백엔드에서 확정된 입력입니다. 카드를 다시 뽑거나 번호를 요구하지 말고, 관찰된 카드와 그래프만 근거로 해석하세요.',
     '- 첫 문장은 카드 소개가 아니라 사용자의 질문에 대한 방향/결론으로 시작하세요. 예/아니오형이면 “해도 괜찮지만…”, “지금은 미루는 쪽…”처럼 조건까지 말하세요.',
-    '- 카드 이름과 키워드를 그대로 나열하지 말고, 각 카드를 질문 맥락의 역할로 연결하세요: 현재 흐름, 걸림돌, 조언/행동.',
+    '- 질문에 원인, 조심할 점, 하면 좋은 행동 같은 하위 요구가 있으면 그 순서로 답하세요: 결론 → 원인 → 조심할 점 → 하면 좋은 행동 → 한 줄 요약.',
+    '- 5장 복합 질문에서는 카드를 역할로 배정해 해석하세요: 1 현재 흐름, 2 원인, 3 조심할 점, 4 도움이 되는 행동, 5 한 달의 흐름/결과. 실제 카드 이름은 근거에 자연스럽게 섞고 키워드만 나열하지 마세요.',
+    '- 1~3장 질문도 카드 이름과 키워드를 그대로 나열하지 말고, 각 카드를 질문 맥락의 현재 흐름, 걸림돌, 조언/행동으로 연결하세요.',
     '- 같은 카드·비슷한 키워드가 정방향/역방향으로 엇갈리면 “하고 싶은 마음과 브레이크가 같이 나온다”처럼 긴장으로 해석하세요.',
-    '- 그래프는 숫자를 반복하지 말고 판단에 녹이세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다.',
-    '- “기준으로 카드 결과”, “기운이 먼저 보이고”, “쪽을 조심”, “안전한 선택을 우선” 같은 템플릿 문장을 쓰지 마세요.',
+    '- 그래프는 숫자를 반복하지 말고 판단에 녹이세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다. 그래프와 해석이 모순되면 안 됩니다.',
+    '- “기준으로 카드 결과”, “기운이 먼저 보이고”, “쪽을 조심”, “안전한 선택을 우선”, “진행되고 있다/나타난다/필요하다”만 반복하는 문어체 템플릿을 쓰지 마세요.',
     '- presentation이 카드/그래프를 따로 보여주므로 final.message에는 카드 목록이나 그래프 목록을 반복하지 마세요.',
-    '- 4~6문장, 450자 이내, Discord 채팅에 바로 보낼 자연스러운 한국어로 쓰세요. 사용자에게 해석해 달라고 요청하지 마세요.',
-    '- 건강/병원/증상 질문은 오락적 참고라고 선을 긋고, 증상이 있거나 애매하면 의료진/병원 확인을 우선하라고 안내하세요.'
+    '- Discord 채팅에 바로 보낼 자연스러운 한국어로 쓰세요. 1~3장은 4~6문장 450자 이내, 4~5장 복합 질문은 5~8문장 650자 이내로 답하세요. 사용자에게 해석해 달라고 요청하지 마세요.',
+    '- 건강/병원/증상/컨디션 질문은 오락적 참고라고 선을 긋고, 증상이 있거나 애매하면 의료진/병원 확인을 우선하라고 안내하세요. 병원 방문을 미루라는 식으로 단정하지 마세요.'
   ];
 }
 

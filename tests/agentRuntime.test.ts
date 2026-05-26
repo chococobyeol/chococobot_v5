@@ -1926,8 +1926,8 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('타로 pendingAction.missing에 numbers가 있으면');
   });
 
-  it('rejects decimal tarot card selections before splitting them into extra cards', async () => {
-    const ai = { askMessages: vi.fn() };
+  it('asks the model to phrase decimal tarot card selection feedback naturally', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '32.1처럼 소수로는 고를 수 없어요. 1부터 78 사이의 정수 3개를 다시 골라주세요.' })) };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '2 32.1 5', makeOptions({
@@ -1936,13 +1936,15 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'clarify',
-      message: '카드 번호는 소수나 음수 없이 정수로 골라주세요. 1~78 사이 숫자 3개를 중복 없이 골라주세요. 예: 1 23 45'
+      message: '32.1처럼 소수로는 고를 수 없어요. 1부터 78 사이의 정수 3개를 다시 골라주세요.'
     });
-    expect(ai.askMessages).not.toHaveBeenCalled();
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('문구는 AI가 새로 자연스럽게 쓰세요');
+    expect(prompt).toContain('카드 번호는 소수나 음수 없이 정수로 골라주세요');
   });
 
-  it('does not mention duplicate prevention when retrying one-card tarot selections', async () => {
-    const ai = { askMessages: vi.fn() };
+  it('does not tell the model to mention duplicate prevention when retrying one-card tarot selections', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '소수점이 들어간 번호는 쓸 수 없어요. 1부터 78 사이에서 번호 하나만 다시 골라주세요.' })) };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry(), new AgentTurnContextStore());
 
     const outcome = await runtime.run(makeMessage(), '32.1', makeOptions({
@@ -1951,10 +1953,12 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'clarify',
-      message: '카드 번호는 소수나 음수 없이 정수로 골라주세요. 1~78 사이 숫자 1개를 골라주세요. 예: 23'
+      message: '소수점이 들어간 번호는 쓸 수 없어요. 1부터 78 사이에서 번호 하나만 다시 골라주세요.'
     });
+    const prompt = ai.askMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('1장 선택에서는 중복 금지/중복 허용을 언급하지 말고');
+    expect(prompt).not.toContain('서로 다른 번호를 골라야 한다는 점');
     expect(JSON.stringify(outcome)).not.toContain('중복');
-    expect(ai.askMessages).not.toHaveBeenCalled();
   });
 
   it('does not invent a canned tarot interpretation when the model fails after reveal', async () => {
@@ -2323,13 +2327,16 @@ describe('AgentRuntime', () => {
     expect(systemPrompt).toContain('tools=omitted_after_tarot_reveal');
     expect(systemPrompt).not.toContain('tarot.reveal_selection [safe_action_auto]');
     expect(systemPrompt).toContain('카드 이름과 키워드를 그대로 나열하지 말고');
+    expect(systemPrompt).toContain('결론 → 원인 → 조심할 점 → 하면 좋은 행동');
+    expect(systemPrompt).toContain('1 현재 흐름, 2 원인, 3 조심할 점');
     expect(systemPrompt).toContain('“기운이 먼저 보이고”');
+    expect(systemPrompt).toContain('진행되고 있다/나타난다/필요하다');
     expect(systemPrompt).toContain('presentation이 카드/그래프를 따로 보여주므로');
     expect(ai.askMessages.mock.calls[0][0].maxCompletionTokens).toBe(1200);
   });
 
-  it('treats a contiguous tarot number like 123 as one out-of-range card number', async () => {
-    const ai = { askMessages: vi.fn().mockResolvedValue(JSON.stringify({ kind: 'not_handled' })) };
+  it('treats a contiguous tarot number like 123 as one out-of-range card number and lets the model phrase feedback', async () => {
+    const ai = { askMessages: vi.fn().mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '123은 카드 번호 범위를 벗어나요. 1부터 78 사이에서 3개를 다시 골라주세요.' })) };
     const tarotRevealSelection = vi.fn();
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
 
@@ -2340,10 +2347,11 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({
       kind: 'clarify',
-      message: '1~78 사이에서 골라주세요.'
+      message: '123은 카드 번호 범위를 벗어나요. 1부터 78 사이에서 3개를 다시 골라주세요.'
     });
     expect(tarotRevealSelection).not.toHaveBeenCalled();
-    expect(ai.askMessages).not.toHaveBeenCalled();
+    expect(ai.askMessages).toHaveBeenCalledTimes(1);
+    expect(ai.askMessages.mock.calls[0][0].messages[0].content).toContain('검증 코드: number_out_of_range');
   });
 
   it('lets the model handle non-numeric active tarot replies so users can cancel', async () => {
@@ -2373,8 +2381,13 @@ describe('AgentRuntime', () => {
     expect(tarotCancelReading).toHaveBeenCalledWith({}, expect.any(Object));
   });
 
-  it('returns tool feedback for duplicate or wrong-count active tarot selections', async () => {
-    const ai = { askMessages: vi.fn().mockResolvedValue(JSON.stringify({ kind: 'not_handled' })) };
+  it('has the model phrase duplicate or wrong-count active tarot selection feedback', async () => {
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '같은 번호가 섞여 있어요. 서로 다른 카드 번호 3개를 다시 골라주세요.' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'clarify', message: '지금은 2개만 보여요. 카드 번호 3개를 한 번에 다시 골라주세요.' }))
+    };
     const tarotRevealSelection = vi.fn(async (input: { numbers: number[] }) => {
       if (input.numbers.length !== 3) {
         throw new AgentToolExecutionError('wrong_count', '3개만 골라주세요.', 'Retry with exactly 3 unique card numbers.', 'error', 'numbers');
@@ -2395,7 +2408,7 @@ describe('AgentRuntime', () => {
       tarotPending: { topic: '저녁 뭐 먹을지', spreadCount: 3 }
     }))).resolves.toEqual({
       kind: 'clarify',
-      message: '중복된 숫자는 선택할 수 없어요. 서로 다른 번호를 골라주세요.'
+      message: '같은 번호가 섞여 있어요. 서로 다른 카드 번호 3개를 다시 골라주세요.'
     });
 
     await expect(runtime.run(makeMessage(), '1 2', makeOptions({
@@ -2403,9 +2416,11 @@ describe('AgentRuntime', () => {
       tarotPending: { topic: '저녁 뭐 먹을지', spreadCount: 3 }
     }))).resolves.toEqual({
       kind: 'clarify',
-      message: '3개만 골라주세요.'
+      message: '지금은 2개만 보여요. 카드 번호 3개를 한 번에 다시 골라주세요.'
     });
-    expect(ai.askMessages).not.toHaveBeenCalled();
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('상태: short');
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('부족한 입력에 “N개만”처럼');
   });
 
   it('rejects malformed tarot clarify that asks for spreadCount and recovers to a topic-only question', async () => {

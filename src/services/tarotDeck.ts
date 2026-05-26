@@ -122,8 +122,10 @@ export function validateTarotSelectionNumbers(numbers: unknown, expectedCount: n
       ok: false,
       code: 'wrong_count',
       field: 'numbers',
-      message: `${expectedCount}개만 골라주세요.`,
-      hint: expectedCount === 1 ? 'Retry with exactly one card number.' : `Retry with exactly ${expectedCount} unique card numbers.`
+      message: '선택한 카드 번호 개수가 요청과 다릅니다.',
+      hint: expectedCount === 1
+        ? `Expected 1 card number; received ${normalized.length}.`
+        : `Expected ${expectedCount} unique card numbers; received ${normalized.length}.`
     };
   }
   if (new Set(normalized).size !== normalized.length) {
