@@ -733,7 +733,7 @@ function tarotStartReadingTool(handlers: ToolRegistryHandlers): AgentToolDefinit
   return {
     name: 'tarot.start_reading',
     description: 'Start a Discord-chat tarot reading after the AI decides the user wants tarot/fortune and chooses a 1-5 card spread. Creates an active card-selection session and asks the requester to pick numbers from 1 to 78.',
-    inputSchema: '{ topic: string; spreadCount: integer 1..5; spreadName?: string }',
+    inputSchema: '{ topic: string; spreadCount: integer 1..5; spreadName?: string } // spreadCount: 1=yes/no or single advice, 3=general flow, 5=complex range/cause+caution+action/comparison',
     policy: 'safe_action_auto',
     retryable: false,
     logFields: ['topic', 'spreadCount', 'spreadName'],

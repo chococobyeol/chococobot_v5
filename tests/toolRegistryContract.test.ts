@@ -240,6 +240,7 @@ describe('ToolRegistry observation contract', () => {
     expect(registry.get('tarot.start_reading')).toMatchObject({ policy: 'safe_action_auto', retryable: false });
     expect(registry.get('tarot.reveal_selection')).toMatchObject({ policy: 'safe_action_auto', retryable: false });
     expect(registry.get('tarot.cancel_reading')).toMatchObject({ policy: 'safe_action_auto', retryable: false });
+    expect(registry.get('tarot.start_reading')?.inputSchema).toContain('5=complex range/cause+caution+action/comparison');
 
     const invalidStart = await registry.execute('tarot.start_reading', { topic: '연애운', spreadCount: 6 }, { nowMs: 0 });
     const invalidReveal = await registry.execute('tarot.reveal_selection', { numbers: [1, 1, 2] }, { nowMs: 0 });

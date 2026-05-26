@@ -2105,6 +2105,33 @@ describe('AgentRuntime', () => {
     expect(tarotStartReading).toHaveBeenCalledTimes(1);
   });
 
+  it('falls back to a card-selection prompt when tarot start phrasing fails', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '한 달간 컨디션 변화',
+      spreadCount: 5,
+      selection: { min: 1, max: 78, count: 5, unique: true }
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'tool_calls',
+          calls: [{ id: 'start', tool: 'tarot.start_reading', input: { topic: '한 달간 컨디션 변화', spreadCount: 5 } }]
+        }))
+        .mockResolvedValueOnce('응답이 비어 있어요...')
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '앞으로 한 달 컨디션 원인 조심할 점 행동까지 타로로 봐줘', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '한 달간 컨디션 변화에 대한 카드 5장을 볼게요. 1~78 사이 숫자 5개를 중복 없이 골라주세요.'
+    });
+    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '한 달간 컨디션 변화', spreadCount: 5 }, expect.any(Object));
+    expect(ai.askMessages).toHaveBeenCalledTimes(2);
+  });
+
   it('starts a tarot reading for a fully specified lunch-choice prompt', async () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '내일 점심 뭐먹을지',

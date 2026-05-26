@@ -1742,7 +1742,19 @@ function buildTarotFallbackOutcome(observations: readonly AgentToolObservation[]
     const presentation = extractTrustedPresentation(observations);
     return presentation ? { kind: 'final', message: outputMessage, presentation } : { kind: 'final', message: outputMessage };
   }
+  if (latest.toolName === 'tarot.start_reading') {
+    return { kind: 'clarify', message: buildTarotStartFallbackMessage(latest.output) };
+  }
   return null;
+}
+
+function buildTarotStartFallbackMessage(output: Record<string, unknown>): string {
+  const topic = typeof output.topic === 'string' && output.topic.trim() ? output.topic.trim() : '타로';
+  const spreadCount = typeof output.spreadCount === 'number' && Number.isInteger(output.spreadCount) && output.spreadCount >= 1 && output.spreadCount <= 5
+    ? output.spreadCount
+    : 3;
+  if (spreadCount === 1) return `${topic}에 대한 카드 1장을 볼게요. 1~78 사이 숫자 하나를 골라주세요.`;
+  return `${topic}에 대한 카드 ${spreadCount}장을 볼게요. 1~78 사이 숫자 ${spreadCount}개를 중복 없이 골라주세요.`;
 }
 
 function buildVoiceFallbackOutcome(observations: readonly AgentToolObservation[]): AgentRuntimeOutcome | null {
