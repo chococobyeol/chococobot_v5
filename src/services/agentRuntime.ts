@@ -26,6 +26,8 @@ const AGENT_OUTPUT_CONTRACT = [
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"], spreadCount?: 1..5)으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요. 예: "내일 점심 뭐먹을지 타로 봐줘"는 topic="내일 점심 뭐먹을지"로 tarot.start_reading을 호출하세요.',
+  '타로 해석은 카드별 뜻만 나열하지 말고 질문에 대한 결론을 먼저 말한 뒤 근거를 붙이세요. 그래프 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름으로 해석하세요.',
+  '건강/병원/증상 관련 타로는 오락적 참고라고 밝히고, 증상이 있거나 판단이 애매하면 병원/의료진 확인을 우선하라고 답하세요. 병원 방문을 미루라는 식으로 단정하지 마세요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
   '필수 구조화 필드가 부족하면 clarify+pendingAction을 사용하되, missing에는 사용자가 답할 수 있는 필드만 넣어요.',
   'pendingConfirmation 없으면 confirm_pending 금지. 있으면 명확한 승인일 때만 confirm_pending.',
@@ -251,16 +253,6 @@ export class AgentRuntime {
         continue;
       }
       if (envelope.kind === 'not_handled' && priorContext?.pendingAction) {
-        const recoveredTarotStart = buildTarotStartCallFromTopicPrompt(prompt, priorContext.pendingAction);
-        if (recoveredTarotStart) {
-          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_tarot_topic_follow_up' });
-          await this.executeToolCallWithDiagnostics(recoveredTarotStart, options, observations, toolCalls, runId, iteration);
-          const fallback = buildTarotStartFallbackOutcome(observations) ?? buildObservationBasedFallbackOutcome(observations);
-          if (fallback) {
-            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-            return fallback;
-          }
-        }
         await options.onDiagnostic?.({ stage: 'agent', event: 'blocked', runId, iteration, decisionKind: 'pending_action_not_resolved' });
         const fallback = buildPendingActionFailureFallback(priorContext);
         this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
@@ -274,19 +266,9 @@ export class AgentRuntime {
           validationFeedback = buildClarifyFollowUpFeedback(priorContext);
           continue;
         }
-        const recoveredTarotStart = buildTarotStartCallFromTopicPrompt(prompt, priorContext.pendingAction);
-        if (recoveredTarotStart) {
-          await options.onDiagnostic?.({ stage: 'agent', event: 'retry', runId, iteration, decisionKind: 'recovered_tarot_topic_follow_up' });
-          await this.executeToolCallWithDiagnostics(recoveredTarotStart, options, observations, toolCalls, runId, iteration);
-          const fallback = buildTarotStartFallbackOutcome(observations) ?? buildObservationBasedFallbackOutcome(observations);
-          if (fallback) {
-            this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-            return fallback;
-          }
-        }
-        const fallback = buildPendingActionFailureFallback(priorContext);
-        this.updateTurnContext(key, fallback, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
-        return fallback;
+        await options.onDiagnostic?.({ stage: 'agent', event: 'final', runId, iteration, decisionKind: 'final' });
+        this.updateTurnContext(key, envelope, prompt, toolCalls, observations, options.executionContext.nowMs, priorContext);
+        return envelope;
       }
       validationFeedback = null;
       const webSearchFailure = buildWebSearchFailureOutcome(observations);
@@ -650,21 +632,6 @@ function buildTarotSelectionFeedback(expectedCount: number, reason: string): str
   return `${reason} 1~78 사이 숫자 ${expectedCount}개를 중복 없이 골라주세요. 예: 1 23 45`;
 }
 
-function buildTarotStartCallFromTopicPrompt(prompt: string, pendingAction: AgentPendingAction | undefined): AgentToolCall | null {
-  if (!pendingAction || pendingAction.kind !== 'tarot' || !pendingAction.missing.includes('topic')) return null;
-  const topic = prompt.trim();
-  if (!topic) return null;
-  return {
-    id: 'tarot_start_topic_follow_up',
-    tool: 'tarot.start_reading',
-    input: {
-      topic,
-      spreadCount: pendingAction.spreadCount ?? 3,
-      ...(pendingAction.spreadName ? { spreadName: pendingAction.spreadName } : {})
-    }
-  };
-}
-
 function buildPendingConfirmationFeedback(pending: NonNullable<AgentRuntimeOptions['pendingConfirmation']>): string {
   return [
     '현재 사용자 메시지는 대기 중인 확인 작업에 대한 답변일 수 있어요.',
@@ -682,6 +649,7 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
     priorContext.lastAgentMessage ? `이전 clarify 질문: ${priorContext.lastAgentMessage}` : undefined,
     priorContext.pendingAction ? `이전 pendingAction JSON: ${JSON.stringify(priorContext.pendingAction)}` : undefined,
     '현재 답변과 이전 pendingAction/originalPrompt를 합쳐 명확해졌다면 cleanup은 command.cleanup 또는 command.mass_cleanup tool_calls JSON을, history는 history.search tool_calls JSON을 작성하세요. 타로 pendingAction.missing에 topic이 있으면 현재 답변을 topic으로 삼고 카드 개수는 AI가 정해 tarot.start_reading tool_calls JSON을 작성하세요. 타로 pendingAction.missing에 numbers가 있으면 tarot.reveal_selection tool_calls JSON을 작성하세요.',
+    '단, 타로 topic 후속에서 사용자가 주제를 준 것이 아니라 "주제 뭐가 좋을까", "카드 하나 뽑을만한 주제", "예시 알려줘"처럼 타로 주제 추천/사용법을 묻는 메타질문이면 tarot.start_reading을 호출하지 말고 final로 주제 예시를 짧게 추천하세요.',
     'cleanup에서 evidence는 사용자에게 물어보는 값이 아니에요. command.cleanup.evidence는 originalPrompt/현재 답변에 실제로 있는 문구를 그대로 쓰고, command.mass_cleanup에는 evidence를 넣지 마세요.',
     '이전 질문이 대화 기록/요약 범위를 묻는 clarify였다면, 현재 사용자 답변과 현재 채널/서버 문맥으로 범위를 해소해 history.search를 호출하세요. 이전 질문이 타로 주제를 묻는 clarify였다면 현재 답변을 topic으로 tarot.start_reading을 호출하세요. 이전 질문이 타로 카드 번호를 묻는 clarify였다면, 현재 답변의 번호를 AI가 구조화해 tarot.reveal_selection을 호출하고 숫자 검증 오류는 관찰값 그대로 사용자에게 안내하세요.',
     '현재 답변이 봇/다른 사람/지원하지 않는 대상의 메시지를 지우라는 의미라면 blocked JSON으로 "요청자 본인 메시지 삭제 또는 관리자용 전체 채널 삭제만 가능하다"고 자연스럽게 답하세요.',
@@ -692,7 +660,7 @@ function buildClarifyFollowUpFeedback(priorContext: AgentTurnStoredContext): str
 function formatPendingActionPromptHint(pendingAction: AgentPendingAction): string {
   if (pendingAction.kind === 'tarot') {
     if (pendingAction.missing.includes('topic')) {
-      return '타로 pendingAction.missing에 topic이 있으면 현재 답변을 topic으로 삼고, 카드 개수는 사용자에게 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading tool_calls JSON을 작성하세요.';
+      return '타로 pendingAction.missing에 topic이 있으면 현재 답변이 실제로 보고 싶은 대상/질문일 때만 topic으로 삼고, 카드 개수는 사용자에게 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading tool_calls JSON을 작성하세요. 현재 답변이 타로 주제 추천/사용법을 묻는 메타질문이면 tool을 호출하지 말고 final로 예시를 추천하세요.';
     }
     return '타로 pendingAction.missing에 numbers가 있으면 현재 답변의 번호를 구조화해 tarot.reveal_selection tool_calls JSON을 작성하세요.';
   }
@@ -709,6 +677,7 @@ function buildPriorContextFollowUpFeedback(priorContext: AgentTurnStoredContext)
     priorContext.lastToolCalls.length ? `이전 도구 호출 JSON: ${JSON.stringify(priorContext.lastToolCalls)}` : undefined,
     priorContext.observations.length ? `이전 도구 관찰 JSON: ${JSON.stringify(priorContext.observations).slice(0, 900)}` : undefined,
     '현재 사용자 메시지와 이전 문맥을 함께 보고 답할 수 있으면 final/clarify/unavailable/blocked 중 하나로 답하세요.',
+    '직전 문맥이 타로 결과이고 사용자가 "그래서", "가/말아", "자세히"처럼 해석을 요구하면 카드/그래프를 질문에 연결해 결론부터 답하세요. 건강/병원 질문은 증상과 의료진 판단을 우선하라고 안전하게 안내하세요.',
     '특히 web_search_unavailable 후속 질문이면 현재 web 정책 JSON의 mode/providerStatus를 근거로 왜 검색할 수 없는지 설명하고, 사용자가 켤 수 있는 명령이 있으면 짧게 안내하세요.',
     '이전 문맥과 무관한 일반 대화가 확실할 때만 not_handled를 쓰세요.'
   ].filter(Boolean).join('\n');
@@ -1453,6 +1422,7 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
     `타로 관찰: ${topic}`,
     ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
     ...(bars ? [`그래프:\n${bars}`] : []),
+    '해석 규칙: 질문에 대한 결론을 먼저 말하고 카드 근거를 붙이세요. 1~2/5는 낮음/부담, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다. 건강/병원 질문이면 타로보다 증상과 의료진 확인을 우선하라고 안내하세요.',
     '위 카드/방향/키워드/그래프만 근거로 사용자에게 바로 보낼 final.message를 작성하세요. 사용자에게 해석해 달라고 요청하지 마세요.'
   ];
 }

@@ -2163,7 +2163,7 @@ describe('AgentRuntime', () => {
     expect(tarotStartReading).toHaveBeenCalledWith({ topic: '이따 병원갈까', spreadCount: 3 }, expect.any(Object));
   });
 
-  it('recovers a tarot topic follow-up when the model keeps returning not_handled', async () => {
+  it('does not synthesize a tarot topic follow-up when the model keeps returning not_handled', async () => {
     const tarotStartReading = vi.fn(async () => ({
       topic: '저녁 뭐 먹을지',
       spreadCount: 3,
@@ -2190,13 +2190,49 @@ describe('AgentRuntime', () => {
       onDiagnostic: (event: unknown) => diagnostics.push(event)
     }));
 
-    expect(outcome).toEqual({ kind: 'clarify', message: '저녁 뭐 먹을지 주제로 3장 볼게요. 1~78 사이 숫자 3개를 중복 없이 골라주세요.' });
-    expect(tarotStartReading).toHaveBeenCalledWith({ topic: '저녁 뭐 먹을지', spreadCount: 3 }, expect.any(Object));
+    expect(outcome).toEqual({
+      kind: 'clarify',
+      message: '무엇에 대해 타로를 볼까요?',
+      pendingAction: { kind: 'tarot', originalPrompt: '타로 봐줘', missing: ['topic'] }
+    });
+    expect(tarotStartReading).not.toHaveBeenCalled();
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'clarify_follow_up_required' }),
-      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'recovered_tarot_topic_follow_up' }),
-      expect.objectContaining({ stage: 'tool', event: 'tool_call', toolName: 'tarot.start_reading' })
+      expect.objectContaining({ stage: 'agent', event: 'retry', decisionKind: 'clarify_follow_up_required' })
     ]));
+  });
+
+  it('lets the model answer tarot topic recommendation meta-questions instead of starting a reading', async () => {
+    const tarotStartReading = vi.fn(async () => ({
+      topic: '잘못 시작됨',
+      spreadCount: 3,
+      message: '시작되면 안 돼요.'
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'clarify',
+          message: '보고 싶은 주제를 알려주세요',
+          pendingAction: { kind: 'tarot', originalPrompt: '다른거 봐줘', missing: ['topic'] }
+        }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'not_handled' }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'final',
+          message: '한 장으로는 지금 제일 신경 쓰이는 일, 오늘 조심할 점, 지금 내 마음 같은 주제가 좋아요.'
+        }))
+    };
+    const store = new AgentTurnContextStore();
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotStartReading }), store);
+
+    await runtime.run(makeMessage(), '다른거 봐줘', makeOptions({ requesterDisplayName: '테스터' }));
+    const outcome = await runtime.run(makeMessage(), '카드 하나뽑을만한 주제 뭐있지', makeOptions({ requesterDisplayName: '테스터' }));
+
+    expect(outcome).toEqual({
+      kind: 'final',
+      message: '한 장으로는 지금 제일 신경 쓰이는 일, 오늘 조심할 점, 지금 내 마음 같은 주제가 좋아요.'
+    });
+    expect(tarotStartReading).not.toHaveBeenCalled();
+    expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('메타질문이면 tool을 호출하지 말고 final로 예시를 추천하세요');
   });
 
   it('directly reveals active tarot numeric selections before asking the model for interpretation', async () => {
