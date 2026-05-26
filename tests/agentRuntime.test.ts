@@ -2146,6 +2146,8 @@ describe('AgentRuntime', () => {
 
     expect(outcome).toEqual({ kind: 'clarify', message: '1~78 사이 숫자 3개를 골라주세요.' });
     expect(ai.askMessages).toHaveBeenCalledTimes(3);
+    expect(ai.askMessages.mock.calls[1][0].maxCompletionTokens).toBe(300);
+    expect(ai.askMessages.mock.calls[1][0].messages[0].content).toContain('중복 금지는 한 번만 말하세요');
     expect(tarotStartReading).toHaveBeenCalledTimes(1);
   });
 

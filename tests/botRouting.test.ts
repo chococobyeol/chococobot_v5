@@ -320,6 +320,7 @@ describe('handleMessageCreate', () => {
     expect(payload.files).toHaveLength(1);
     expect(payload.files[0].name).toBe('tarot-spread.png');
     expect(payload.embeds[0].data.image.url).toBe('attachment://tarot-spread.png');
+    expect(payload.embeds[0].data.title).toBeUndefined();
   });
 
   it('omits tarot embed summary and card text already present in the answer body', async () => {
@@ -345,6 +346,7 @@ describe('handleMessageCreate', () => {
     const payload = message.reply.mock.calls[0][0];
     expect(payload.embeds[0].data.description).toBeUndefined();
     expect(payload.embeds[0].data.image.url).toBe('attachment://tarot-spread.png');
+    expect(payload.embeds[0].data.title).toBeUndefined();
   });
 
   it('does not fail tarot replies when a trusted presentation file is missing', async () => {
@@ -371,6 +373,7 @@ describe('handleMessageCreate', () => {
       content: '카드 해석은 텍스트로 보낼게요...',
       embeds: expect.any(Array)
     }));
+    expect(message.reply.mock.calls[0][0].embeds[0].data.title).toBe('오늘 운세 타로');
     expect(message.reply).toHaveBeenCalledWith(expect.not.objectContaining({ files: expect.any(Array) }));
   });
 

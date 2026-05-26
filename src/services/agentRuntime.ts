@@ -1471,7 +1471,14 @@ function hasSuccessfulTarotRevealObservation(observations: readonly AgentToolObs
   return observations.some((observation) => observation.toolName === 'tarot.reveal_selection' && observation.status === 'ok');
 }
 
+function hasSuccessfulTarotStartObservation(observations: readonly AgentToolObservation[]): boolean {
+  return observations.some((observation) => observation.toolName === 'tarot.start_reading' && observation.status === 'ok');
+}
+
 function maxCompletionTokensForAgentRequest(configured: number | undefined, observations: readonly AgentToolObservation[]): number | undefined {
+  if (hasSuccessfulTarotStartObservation(observations) && !hasSuccessfulTarotRevealObservation(observations)) {
+    return Math.min(configured ?? 300, 300);
+  }
   if (!hasSuccessfulTarotRevealObservation(observations)) return configured;
   return Math.max(configured ?? 0, 1200);
 }
@@ -1560,7 +1567,7 @@ function buildTarotStartAnswerRequiredFeedback(observations: readonly AgentToolO
   const spreadName = typeof latest.output.spreadName === 'string' && latest.output.spreadName.trim() ? latest.output.spreadName.trim() : undefined;
   const selectionInstruction = spreadCount === 1
     ? '선택 안내는 1~78 범위에서 번호 하나만 고르라고 쓰고, 중복 금지/중복 허용 여부는 말하지 마세요.'
-    : '선택 안내는 1~78 범위, 필요한 개수, 중복 금지를 포함하세요.';
+    : '선택 안내는 1~78 범위, 필요한 개수, 중복 금지를 포함하되 중복 금지는 한 번만 말하세요.';
   return [
     'tarot.start_reading은 이미 성공했고 카드 선택 세션이 만들어졌어요.',
     '추가 도구 호출 없이 사용자에게 바로 보낼 clarify JSON을 작성하세요.',
