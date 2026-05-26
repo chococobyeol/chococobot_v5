@@ -303,22 +303,11 @@ function requireGuildMember(message: Message): GuildMember {
 }
 
 
-async function resolveGuildLeaveTarget(message: Message, args: string[]): Promise<Guild | null | 'ambiguous'> {
+async function resolveGuildLeaveTarget(message: Message, args: string[]): Promise<Guild | null> {
   const rawTarget = args.join(' ').trim() || sourceGuildIdFromLogChannelTopic(message.channel && 'topic' in message.channel ? message.channel.topic : undefined);
-  if (!rawTarget) return null;
-  const client = message.client;
-  const guildManager = client.guilds;
-  const cachedGuilds = Array.from(guildManager.cache.values());
-  const byId = cachedGuilds.find((guild) => guild.id === rawTarget);
-  if (byId) return byId;
-  if (/^\d{10,}$/u.test(rawTarget)) {
-    return await guildManager.fetch(rawTarget).catch(() => null);
-  }
-  const normalizedTarget = normalizeGuildLookupText(rawTarget);
-  const byName = cachedGuilds.filter((guild) => normalizeGuildLookupText(guild.name).includes(normalizedTarget));
-  if (byName.length === 1) return byName[0]!;
-  if (byName.length > 1) return 'ambiguous';
-  return null;
+  if (!rawTarget || !/^\d{10,}$/u.test(rawTarget)) return null;
+  const guildManager = message.client.guilds;
+  return guildManager.cache.get(rawTarget) ?? await guildManager.fetch(rawTarget).catch(() => null);
 }
 
 function sourceGuildIdFromLogChannelTopic(topic: string | null | undefined): string | null {
@@ -326,8 +315,15 @@ function sourceGuildIdFromLogChannelTopic(topic: string | null | undefined): str
   return match?.[1] ?? null;
 }
 
-function normalizeGuildLookupText(value: string): string {
-  return value.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, '');
+function listJoinedGuilds(message: Message): string[] {
+  return Array.from(message.client.guilds.cache.values())
+    .sort((left, right) => left.name.localeCompare(right.name, 'ko'))
+    .map((guild) => `${guild.name} — ${guild.id}`);
+}
+
+function formatGuildListMessage(lines: string[]): string {
+  if (!lines.length) return '현재 확인할 수 있는 가입 서버가 없어요...';
+  return ['현재 봇이 가입된 서버예요...', ...lines].join('\n');
 }
 
 function registerPrefixCommand(commands: Collection<string, PrefixCommand>, command: PrefixCommand): void {
@@ -844,6 +840,22 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
       }
     },
     {
+      name: '서버목록',
+      aliases: ['가입서버', '서버리스트', 'guild-list', 'list-guilds', 'server-list'],
+      description: '로그 서버에서만 봇이 가입된 서버명과 서버 ID를 확인합니다.',
+      aiVisible: false,
+      async execute(message, _args, context) {
+        if (!message.guildId) throw new Error('서버에서만 사용할 수 있어요...');
+        if (message.guildId !== context.settings.loggingGuildId) {
+          throw new Error('로그 서버에서만 사용할 수 있어요...');
+        }
+        if (!message.member?.permissions?.has(PermissionFlagsBits.Administrator)) {
+          throw new Error('서버 관리자만 가입 서버 목록을 확인할 수 있어요...');
+        }
+        await message.reply({ content: formatGuildListMessage(listJoinedGuilds(message)), allowedMentions: { repliedUser: false } });
+      }
+    },
+    {
       name: '서버탈퇴',
       aliases: ['봇서버탈퇴', 'guild-leave', 'leave-guild', 'server-leave', 'bot-leave-guild'],
       description: '로그 서버에서만 봇이 가입된 대상 서버를 탈퇴합니다.',
@@ -857,11 +869,8 @@ export function createPrefixCommands(): Collection<string, PrefixCommand> {
           throw new Error('서버 관리자만 봇 서버 탈퇴를 실행할 수 있어요...');
         }
         const targetGuild = await resolveGuildLeaveTarget(message, args);
-        if (targetGuild === 'ambiguous') {
-          throw new Error('같은 이름으로 보이는 서버가 여러 개예요... 서버 ID로 다시 입력해 주세요...');
-        }
         if (!targetGuild) {
-          throw new Error('탈퇴할 서버를 찾지 못했어요... 로그 채널에서 실행하거나 서버 ID를 입력해 주세요...');
+          throw new Error('탈퇴할 서버 ID를 찾지 못했어요... 로그 채널에서 실행하거나 서버 ID를 입력해 주세요...');
         }
         if (targetGuild.id === context.settings.loggingGuildId) {
           throw new Error('로그 서버에서는 탈퇴할 수 없어요...');

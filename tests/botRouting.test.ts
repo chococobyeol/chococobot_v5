@@ -862,7 +862,49 @@ describe('handleMessageCreate', () => {
 
 
 
-  it('lets logging guild admins make the bot leave the source guild from its log channel', async () => {
+  it('lists joined guild names and IDs only inside the logging guild', async () => {
+    const commands = createPrefixCommands();
+    const context = makeContext({
+      settings: {
+        ttsReadBotMessages: false,
+        ttsMaxChars: 500,
+        cleanMineDefaultTarget: 500,
+        cleanMineMaxLimit: 500,
+        cleanAllDefaultTarget: 1000,
+        cleanAllMaxLimit: 1000,
+        loggingGuildId: 'log-guild'
+      }
+    });
+    const message = makeMessage('!서버목록', {
+      guildId: 'log-guild',
+      client: {
+        user: { id: 'bot-1', username: 'ChococoBot' },
+        guilds: {
+          cache: new Map([
+            ['log-guild', { id: 'log-guild', name: '로그서버' }],
+            ['123456789012345678', { id: '123456789012345678', name: '떠날서버' }]
+          ]),
+          fetch: vi.fn(async () => null)
+        }
+      },
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('떠날서버 — 123456789012345678')
+    }));
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('로그서버 — log-guild')
+    }));
+  });
+
+  it('lets logging guild admins make the bot leave the source guild from its log channel topic id', async () => {
     const commands = createPrefixCommands();
     const targetLeave = vi.fn(async () => undefined);
     const targetGuild = { id: '123456789012345678', name: '떠날서버', leave: targetLeave };
@@ -911,6 +953,42 @@ describe('handleMessageCreate', () => {
       content: '떠날서버 (123456789012345678) 서버에서 탈퇴했어요...'
     }));
     expect(context.activityLog.logCommand).toHaveBeenCalledWith(expect.objectContaining({ commandName: '서버탈퇴' }));
+  });
+
+  it('rejects server leave by guild name even when the name is unique', async () => {
+    const commands = createPrefixCommands();
+    const targetLeave = vi.fn(async () => undefined);
+    const context = makeContext({
+      settings: {
+        ttsReadBotMessages: false,
+        ttsMaxChars: 500,
+        cleanMineDefaultTarget: 500,
+        cleanMineMaxLimit: 500,
+        cleanAllDefaultTarget: 1000,
+        cleanAllMaxLimit: 1000,
+        loggingGuildId: 'log-guild'
+      }
+    });
+    const message = makeMessage('!서버탈퇴 떠날서버', {
+      guildId: 'log-guild',
+      client: {
+        user: { id: 'bot-1', username: 'ChococoBot' },
+        guilds: {
+          cache: new Map([['123456789012345678', { id: '123456789012345678', name: '떠날서버', leave: targetLeave }]]),
+          fetch: vi.fn(async () => null)
+        }
+      },
+      member: {
+        displayName: '관리자',
+        permissions: { has: vi.fn(() => true) },
+        voice: { channel: { id: 'voice-1' } }
+      }
+    });
+
+    await handleMessageCreate(message, commands, context as any, new ConfirmationManager());
+
+    expect(targetLeave).not.toHaveBeenCalled();
+    expect(message.reply).toHaveBeenCalledWith(expect.objectContaining({ content: '탈퇴할 서버 ID를 찾지 못했어요... 로그 채널에서 실행하거나 서버 ID를 입력해 주세요...' }));
   });
 
   it('rejects server leave outside the logging guild', async () => {

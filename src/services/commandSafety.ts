@@ -28,6 +28,7 @@ const WEB_SEARCH = ['웹검색', 'web-search', 'search-mode', '검색설정'];
 const CLEAN_MINE = ['청소', 'clean', 'clean-mine', 'clear', '내청소'];
 const CLEAN_ALL = ['대청소', 'clean-all', 'purge', 'bulk-clear'];
 const GUILD_LEAVE = ['서버탈퇴', '봇서버탈퇴', 'guild-leave', 'leave-guild', 'server-leave', 'bot-leave-guild'];
+const GUILD_LIST = ['서버목록', '가입서버', '서버리스트', 'guild-list', 'list-guilds', 'server-list'];
 
 function normalizeName(value: string): string {
   return value.trim().toLowerCase();
@@ -81,7 +82,7 @@ export function classifyCommandQuery(query: string, commands?: Collection<string
   }
   if (inList(parsed.name, CLEAN_MINE)) return { ...base, level: 'needs-confirmation', intent: 'cleanup', reason: 'deletes user messages' };
   if (inList(parsed.name, CLEAN_ALL)) return { ...base, level: 'destructive', intent: 'cleanup', reason: 'deletes channel messages' };
-  if (inList(parsed.name, GUILD_LEAVE)) return { ...base, level: 'unknown', reason: 'log-server direct prefix command only' };
+  if (inList(parsed.name, GUILD_LEAVE) || inList(parsed.name, GUILD_LIST)) return { ...base, level: 'unknown', reason: 'log-server direct prefix command only' };
 
   if (knownByRegistry) return { ...base, level: 'safe', reason: 'registered command without special planner safety rule' };
   return { ...base, level: 'unknown', reason: 'unknown command' };
