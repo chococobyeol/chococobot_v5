@@ -2022,6 +2022,7 @@ describe('AgentRuntime', () => {
     expect(ai.askMessages).toHaveBeenCalledTimes(4);
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('clarify 질문에 대한 후속 답변');
     expect(ai.askMessages.mock.calls[2][0].messages[0].content).toContain('tarot.start_reading');
+    expect(ai.askMessages.mock.calls[3][0].messages[0].content).toContain('"~를 N장으로"에 억지로 붙이지 말고');
   });
 
   it('returns trusted tarot presentation metadata with the final interpretation', async () => {
@@ -2272,9 +2273,12 @@ describe('AgentRuntime', () => {
     expect(outcome).toEqual({ kind: 'final', message: '가볍고 따뜻한 메뉴가 좋아 보여요...' });
     const systemPrompt = ai.askMessages.mock.calls[0][0].messages[0].content;
     expect(systemPrompt).toContain('"toolName":"tarot.reveal_selection"');
+    expect(systemPrompt).toContain('tools=omitted_after_tarot_reveal');
+    expect(systemPrompt).not.toContain('tarot.reveal_selection [safe_action_auto]');
     expect(systemPrompt).toContain('카드 이름과 키워드를 그대로 나열하지 말고');
     expect(systemPrompt).toContain('“기운이 먼저 보이고”');
     expect(systemPrompt).toContain('presentation이 카드/그래프를 따로 보여주므로');
+    expect(ai.askMessages.mock.calls[0][0].maxCompletionTokens).toBe(1200);
   });
 
   it('treats a contiguous tarot number like 123 as one out-of-range card number', async () => {

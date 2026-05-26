@@ -1860,7 +1860,7 @@ async function executeTarotStartReadingTool(input: TarotStartReadingInput, execu
     ...(session.spreadName ? { spreadName: session.spreadName } : {}),
     expiresAt: session.expiresAt,
     selection: { min: 1, max: 78, count: session.spreadCount, unique: true },
-    responseInstruction: '사용자에게 바로 보낼 clarify.message를 자연스러운 한국어로 작성하세요. topic을 목적어처럼 다루고, 카드 번호 범위와 필요한 개수, 중복 금지를 안내하세요.'
+    responseInstruction: '사용자에게 바로 보낼 clarify.message를 자연스러운 한국어로 작성하세요. topic을 "주제로/기준으로"나 "~를 N장으로"에 붙이지 말고 일상어로 다루며, 카드 번호 범위와 필요한 개수, 중복 금지를 안내하세요.'
   };
 }
 

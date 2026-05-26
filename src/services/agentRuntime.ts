@@ -26,7 +26,7 @@ const AGENT_OUTPUT_CONTRACT = [
   'conversation/이전 agent 문맥이 있으면 사용자의 후속 질문을 그 문맥으로 먼저 해석해요.',
   '이미 성공한 같은 입력의 도구는 다시 호출하지 말고 기존 도구 관찰 JSON으로 답해요.',
   '타로/운세 요청에서 볼 대상이 없으면 clarify+pendingAction(missing:["topic"], spreadCount?: 1..5)으로 무엇에 대해 볼지 물어보세요. 대상이 있으면 카드 개수는 묻지 말고 AI가 1~5장에서 정해 tarot.start_reading을 호출하세요. 예: "내일 점심 뭐먹을지 타로 봐줘"는 topic="내일 점심 뭐먹을지"로 tarot.start_reading을 호출하세요.',
-  '타로 시작/결과 안내 문장은 AI가 자연스럽게 작성하세요. topic을 \"주제로/기준으로\"에 억지로 붙이는 번역투를 피하고, 예: \"‘내일 점심 뭐 먹을지’를 3장으로 볼게요\"처럼 말하세요.',
+  '타로 시작/결과 안내 문장은 AI가 자연스럽게 작성하세요. topic을 \"주제로/기준으로\"나 \"~를 N장으로\"에 억지로 붙이는 번역투를 피하고, 예: \"내일 점심 뭐 먹을지, 타로로 가볍게 볼게요. 카드 3장을 볼 테니 1~78 사이에서 서로 다른 번호 3개를 골라주세요.\"처럼 말하세요.',
   '타로 해석은 카드별 뜻만 나열하지 말고 질문에 대한 결론을 먼저 말한 뒤 근거를 붙이세요. 그래프 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름으로 해석하세요.',
   '건강/병원/증상 관련 타로는 오락적 참고라고 밝히고, 증상이 있거나 판단이 애매하면 병원/의료진 확인을 우선하라고 답하세요. 병원 방문을 미루라는 식으로 단정하지 마세요.',
   '읽기 요청과 실행/삭제/설정/음성 요청이 섞이면 blocked로 답하고 아무 것도 실행하지 마세요.',
@@ -168,7 +168,7 @@ export class AgentRuntime {
           guildId: message.guildId,
           userId: message.author.id,
           usageScope: 'agent',
-          maxCompletionTokens: options.maxCompletionTokens,
+          maxCompletionTokens: maxCompletionTokensForAgentRequest(options.maxCompletionTokens, observations),
           messages
         });
       } catch (error) {
@@ -486,7 +486,9 @@ export class AgentRuntime {
       options.pendingConfirmation ? `pendingConfirmation=${JSON.stringify(options.pendingConfirmation)}` : undefined,
       `web=${formatWebSearchPolicy(options.webSearch)}`,
       `ctx=${formatRuntimeContextForPrompt(message, options)}`,
-      `tools=${formatToolCatalogForPrompt(this.registry.list())}`
+      hasSuccessfulTarotRevealObservation(observations)
+        ? 'tools=omitted_after_tarot_reveal; no more tool calls are allowed, answer only from the tarot.reveal_selection observation'
+        : `tools=${formatToolCatalogForPrompt(this.registry.list())}`
     ].filter(Boolean).join('\n');
     const system = [
       AGENT_OUTPUT_CONTRACT,
@@ -1375,6 +1377,15 @@ function hasSuccessfulVoiceObservation(observations: readonly AgentToolObservati
   return extractSuccessfulVoiceMessages(observations).length > 0;
 }
 
+function hasSuccessfulTarotRevealObservation(observations: readonly AgentToolObservation[]): boolean {
+  return observations.some((observation) => observation.toolName === 'tarot.reveal_selection' && observation.status === 'ok');
+}
+
+function maxCompletionTokensForAgentRequest(configured: number | undefined, observations: readonly AgentToolObservation[]): number | undefined {
+  if (!hasSuccessfulTarotRevealObservation(observations)) return configured;
+  return Math.max(configured ?? 0, 1200);
+}
+
 function buildRepeatedSuccessfulToolFeedback(repeatedCalls: readonly AgentToolCall[], observations: readonly AgentToolObservation[]): string {
   return [
     '이미 같은 입력의 도구 성공 관찰값이 있어요.',
@@ -1447,8 +1458,8 @@ function buildTarotStartAnswerRequiredFeedback(observations: readonly AgentToolO
     '추가 도구 호출 없이 사용자에게 바로 보낼 clarify JSON을 작성하세요.',
     `관찰값: topic=${JSON.stringify(topic)}, spreadCount=${spreadCount}${spreadName ? `, spreadName=${JSON.stringify(spreadName)}` : ''}, numberRange=1..78, unique=true`,
     'pendingAction은 넣지 마세요. 이미 세션은 코드에 저장되어 있고, 사용자는 다음 메시지에서 숫자만 고르면 됩니다.',
-    '문장은 AI가 자연스럽게 쓰세요. topic을 "주제로"에 억지로 붙이지 말고 목적어로 다루세요.',
-    '예시 형식만 참고: {"kind":"clarify","message":"‘질문’을 3장으로 볼게요. 카드 번호는 1~78 사이에서 3개를 중복 없이 골라주세요."}'
+    '문장은 AI가 자연스럽게 쓰세요. topic을 "주제로/기준으로"나 "~를 N장으로"에 억지로 붙이지 말고 사용자가 물은 일을 일상어로 다루세요.',
+    '예시 형식만 참고: {"kind":"clarify","message":"아이스크림 같은 거 먹을지, 타로로 가볍게 볼게요. 카드 3장을 볼 테니 1~78 사이에서 서로 다른 번호 3개를 골라주세요."}'
   ].join('\n');
 }
 
