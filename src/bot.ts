@@ -1897,7 +1897,7 @@ async function executeTarotRevealSelectionTool(input: TarotRevealSelectionInput,
   }));
   return {
     message: `${consumed.topic} 타로 카드 ${drawn.length}장을 확인했어요.`,
-    interpretationInstruction: '카드, 방향, 키워드, 그래프만 근거로 사용자에게 바로 보낼 타로 해석 final.message를 작성하세요. 사용자에게 해석해 달라고 요청하지 마세요.',
+    interpretationInstruction: '카드, 방향, 키워드, 내부 기본 에너지값만 근거로 사용자에게 바로 보낼 타로 해석 final.message와 질문 맞춤 그래프 presentation.summary를 작성하세요. 사용자에게 해석해 달라고 요청하지 마세요.',
     topic: consumed.topic,
     spreadCount: consumed.spreadCount,
     selectedNumbers: validation.numbers,
@@ -1905,7 +1905,6 @@ async function executeTarotRevealSelectionTool(input: TarotRevealSelectionInput,
     visualData: { bars },
     presentation: {
       title: `${consumed.topic} 타로`,
-      summary: bars,
       files: drawn.map((item) => ({ path: item.assetPath, name: item.attachmentName })),
       cards: cards.map((card) => ({
         selectionNumber: card.selectionNumber,

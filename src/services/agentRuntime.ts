@@ -495,8 +495,10 @@ export class AgentRuntime {
 
     const parsed = parseAgentEnvelope(response);
     let messageText: string | null = null;
+    let modelGraphSummary: string | undefined;
     if (parsed.ok && parsed.envelope.kind === 'final') {
       messageText = parsed.envelope.message.trim();
+      modelGraphSummary = extractModelTarotGraphSummary(response);
     } else {
       const recovered = recoverPlainTextFinalEnvelope(response);
       messageText = recovered?.kind === 'final' ? recovered.message.trim() : null;
@@ -512,7 +514,7 @@ export class AgentRuntime {
       }
     }
     if (!messageText) return null;
-    const presentation = extractTrustedPresentation(observations);
+    const presentation = mergeTarotGraphSummary(extractTrustedPresentation(observations), modelGraphSummary);
     return presentation ? { kind: 'final', message: stripTarotGraphGlyphsFromMessage(messageText), presentation } : { kind: 'final', message: messageText };
   }
 
@@ -1249,6 +1251,64 @@ function extractTrustedPresentation(observations: readonly AgentToolObservation[
   return undefined;
 }
 
+function mergeTarotGraphSummary(presentation: AgentDiscordPresentation | undefined, modelGraphSummary: string | undefined): AgentDiscordPresentation | undefined {
+  if (!presentation) return modelGraphSummary ? { summary: modelGraphSummary } : undefined;
+  if (!modelGraphSummary) {
+    const withoutSummary = { ...presentation };
+    delete withoutSummary.summary;
+    return Object.keys(withoutSummary).length ? withoutSummary : undefined;
+  }
+  return { ...presentation, summary: modelGraphSummary };
+}
+
+function extractModelTarotGraphSummary(response: string): string | undefined {
+  const payload = extractJsonPayload(response);
+  if (!payload) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) return undefined;
+  const kind = parseEnvelopeKind(parsed);
+  if (kind !== 'final') return undefined;
+  const body = envelopeBody(parsed, kind);
+  const presentation = isRecord(body.presentation) ? body.presentation : undefined;
+  const rawSummary = typeof presentation?.summary === 'string'
+    ? presentation.summary
+    : typeof body.graph === 'string'
+      ? body.graph
+      : typeof body.graphSummary === 'string'
+        ? body.graphSummary
+        : undefined;
+  return sanitizeModelTarotGraphSummary(rawSummary);
+}
+
+function sanitizeModelTarotGraphSummary(rawSummary: string | undefined): string | undefined {
+  if (!rawSummary) return undefined;
+  const lines = rawSummary
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^맞춤\s*그래프$/i.test(line));
+  const graphLines = lines.flatMap((line) => {
+    const normalized = line.replace(/[()]/g, '').replace(/\s+/g, ' ').trim();
+    const match = normalized.match(/^(.{1,24}?)\s+([▰▱]{5})\s*([1-5])\s*\/\s*5$/u);
+    if (!match) return [];
+    const label = match[1]?.replace(/[:：-]+$/g, '').trim();
+    const blocks = match[2];
+    const score = match[3];
+    if (!label || !blocks || !score) return [];
+    if (!/^[\p{Letter}\p{Number}][\p{Letter}\p{Number}\s/·・+-]{0,23}$/u.test(label)) return [];
+    const filled = [...blocks].filter((char) => char === '▰').length;
+    if (filled !== Number(score)) return [];
+    return [`${label} ${blocks} ${score}/5`];
+  });
+  if (!graphLines.length) return undefined;
+  return graphLines.slice(0, 4).join('\n');
+}
+
 function sanitizePresentation(raw: Record<string, unknown>): AgentDiscordPresentation | undefined {
   const files = Array.isArray(raw.files)
     ? raw.files.flatMap((file) => {
@@ -1496,10 +1556,13 @@ function buildRepeatedSuccessfulToolFeedback(repeatedCalls: readonly AgentToolCa
 function buildTarotInterpretationMessages(observations: readonly AgentToolObservation[]): AiChatMessage[] {
   const system = [
     '너는 Discord 채팅용 타로 해석 전용 작성자예요.',
-    '반드시 JSON 객체 하나만 출력하세요. 형식은 {"kind":"final","message":"..."} 입니다.',
+    '반드시 JSON 객체 하나만 출력하세요. 형식은 {"kind":"final","message":"...","presentation":{"summary":"..."}} 입니다.',
     'tool_calls, clarify, not_handled, unavailable, blocked를 쓰지 마세요. 도구는 이미 실행됐고 카드는 확정됐습니다.',
     'message는 사용자가 바로 읽을 자연스러운 한국어 해석이어야 합니다. 사용자에게 해석해 달라고 요청하지 마세요.',
-    '카드 목록은 Discord 카드 영역에 따로 표시되므로 본문에서 긴 목록을 반복하지 말고, 질문에 대한 결론과 근거에 집중하세요.'
+    '카드 목록은 Discord 카드 영역에 따로 표시되므로 본문에서 긴 목록을 반복하지 말고, 질문에 대한 결론과 근거에 집중하세요.',
+    'presentation.summary에는 질문에 맞춘 그래프 2~4줄을 넣으세요. 각 줄은 "항목명 ▰▰▱▱▱ n/5" 형식입니다.',
+    '그래프 항목명은 질문에서 직접 정하세요. 기본값처럼 흐름/감정/행동만 반복하지 말고, 예: 컨디션 안정, 회복 여지, 주의도, 실행 도움처럼 맥락에 맞게 쓰세요.',
+    '예/아니오 질문이면 presentation.summary에 예 가능성, 아니오/보류, 주의도처럼 예/아니오 판단이 드러나는 항목을 넣으세요.'
   ].join('\n');
   const user = formatTarotEvidenceForFeedback(observations).join('\n');
   return [
@@ -1590,7 +1653,7 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
   return [
     `타로 관찰: ${topic}`,
     ...(cards.length ? cards.map((card, index) => `[${index + 1}] ${card.nameKo} ${card.orientationKo} 키워드=${card.keywords.join(', ')}`) : []),
-    ...(bars ? [`기본 에너지 참고값(Discord embed 그래프로 별도 표시됨. 본문에는 막대 그래프를 다시 쓰지 말고 해석 근거로만 사용):\n${bars}`] : []),
+    ...(bars ? [`기본 에너지 참고값(내부 참고값입니다. 이 항목명을 그대로 표시하지 말고, 질문에 맞춘 새 그래프 항목을 presentation.summary에 작성하세요):\n${bars}`] : []),
     '타로 해석 작성 규칙:',
     '- 선택→공개 흐름에서는 카드가 이미 백엔드에서 확정된 입력입니다. 카드를 다시 뽑거나 번호를 요구하지 말고, 관찰된 카드와 그래프만 근거로 해석하세요.',
     '- 첫 문장은 카드 소개가 아니라 사용자의 질문에 대한 방향/결론으로 시작하세요. 예/아니오형이면 “해도 괜찮지만…”, “지금은 미루는 쪽…”처럼 조건까지 말하세요.',
@@ -1598,8 +1661,10 @@ function formatTarotEvidenceForFeedback(observations: readonly AgentToolObservat
     '- 5장 복합 질문에서는 카드를 역할로 배정해 해석하세요: 1 현재 흐름, 2 원인, 3 조심할 점, 4 도움이 되는 행동, 5 한 달의 흐름/결과. 실제 카드 이름은 근거에 자연스럽게 섞고 키워드만 나열하지 마세요.',
     '- 1~3장 질문도 카드 이름과 키워드를 그대로 나열하지 말고, 각 카드를 질문 맥락의 현재 흐름, 걸림돌, 조언/행동으로 연결하세요.',
     '- 같은 카드·비슷한 키워드가 정방향/역방향으로 엇갈리면 “하고 싶은 마음과 브레이크가 같이 나온다”처럼 긴장으로 해석하세요.',
-    '- final.message에는 ▰▱ 막대 그래프, 점수표, "맞춤 그래프" 단락을 넣지 마세요. 그래프는 Discord embed가 따로 표시합니다.',
-    '- 기본 에너지 참고값은 본문에 복사하지 말고 해석의 근거로만 쓰세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다.',
+    '- final.message에는 ▰▱ 막대 그래프, 점수표, "맞춤 그래프" 단락을 넣지 마세요. 그래프는 presentation.summary에만 넣습니다.',
+    '- presentation.summary에는 질문 맞춤 그래프 2~4줄을 작성하세요. 각 줄은 "항목명 ▰▰▱▱▱ n/5" 형식이며 항목명은 질문 맥락에 맞게 새로 정하세요.',
+    '- 예/아니오 질문이면 그래프 항목에 예 가능성, 아니오/보류, 주의도처럼 예/아니오 판단이 보이게 하세요. 단순히 흐름/감정/행동으로 쓰지 마세요.',
+    '- 기본 에너지 참고값은 본문이나 그래프 항목명에 그대로 복사하지 말고 해석의 근거로만 쓰세요. 1~2/5는 낮은 지원/에너지/부담 신호, 3/5는 보통/망설임, 4~5/5는 강한 흐름입니다.',
     '- “기준으로 카드 결과”, “기운이 먼저 보이고”, “쪽을 조심”, “안전한 선택을 우선”, “진행되고 있다/나타난다/필요하다”만 반복하는 문어체 템플릿을 쓰지 마세요.',
     '- presentation이 카드/그래프를 따로 보여주므로 final.message에는 카드 목록이나 그래프 목록을 반복하지 마세요.',
     '- Discord 채팅에 바로 보낼 자연스러운 한국어로 쓰세요. 1~3장은 4~6문장 450자 이내, 4~5장 복합 질문은 5~8문장 650자 이내로 답하세요. 사용자에게 해석해 달라고 요청하지 마세요.',

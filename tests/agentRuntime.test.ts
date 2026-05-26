@@ -2111,7 +2111,7 @@ describe('AgentRuntime', () => {
           kind: 'tool_calls',
           calls: [{ id: 'reveal', tool: 'tarot.reveal_selection', input: { numbers: [7] } }]
         }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '오늘은 앞으로 밀고 나가는 힘이 좋아요...' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '오늘은 앞으로 밀고 나가는 힘이 좋아요...', presentation: { summary: '추진력 ▰▰▰▰▱ 4/5\n주의도 ▰▰▱▱▱ 2/5' } }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
 
@@ -2122,7 +2122,7 @@ describe('AgentRuntime', () => {
       message: '오늘은 앞으로 밀고 나가는 힘이 좋아요...',
       presentation: expect.objectContaining({
         files: [{ path: 'assets/tarot/07-TheChariot.png', name: 'tarot-07-TheChariot.png' }],
-        summary: expect.stringContaining('흐름')
+        summary: expect.stringContaining('추진력')
       })
     });
   });
@@ -2376,8 +2376,8 @@ describe('AgentRuntime', () => {
     expect(evidencePrompt).toContain('카드 이름과 키워드를 그대로 나열하지 말고');
     expect(evidencePrompt).toContain('결론 → 원인 → 조심할 점 → 하면 좋은 행동');
     expect(evidencePrompt).toContain('1 현재 흐름, 2 원인, 3 조심할 점');
-    expect(evidencePrompt).toContain('본문에는 막대 그래프를 다시 쓰지 말고');
-    expect(evidencePrompt).toContain('그래프는 Discord embed가 따로 표시합니다');
+    expect(evidencePrompt).toContain('presentation.summary에는 질문 맞춤 그래프');
+    expect(evidencePrompt).toContain('예/아니오 질문이면 그래프 항목에 예 가능성');
     expect(evidencePrompt).not.toContain('질문 맞춤 그래프를 한 번 직접 넣으세요');
     expect(evidencePrompt).toContain('“기운이 먼저 보이고”');
     expect(evidencePrompt).toContain('진행되고 있다/나타난다/필요하다');
@@ -2404,7 +2404,7 @@ describe('AgentRuntime', () => {
       askMessages: vi
         .fn()
         .mockResolvedValueOnce(JSON.stringify({ kind: 'tool_calls', calls: [{ id: 'reveal', tool: 'tarot.reveal_selection', input: { numbers: [34] } }] }))
-        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '지금 식사는 안정적인 선택이 좋아 보여요. 현재 결정 흐름은 약하지만(▰▱▱▱▱) 식욕은 보통(▰▰▰▱▱)이며 행동 의지는 강합니다(▰▰▰▰▱). 한 줄 요약: 실용적인 한 끼가 좋겠어요.' }))
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'final', message: '지금 식사는 안정적인 선택이 좋아 보여요. 현재 결정 흐름은 약하지만(▰▱▱▱▱) 식욕은 보통(▰▰▰▱▱)이며 행동 의지는 강합니다(▰▰▰▰▱). 한 줄 요약: 실용적인 한 끼가 좋겠어요.', presentation: { summary: '식사 적합도 ▰▰▰▰▱ 4/5\n부담감 ▰▰▱▱▱ 2/5\n실행 도움 ▰▰▰▰▱ 4/5' } }))
     };
     const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
 
@@ -2417,10 +2417,51 @@ describe('AgentRuntime', () => {
       kind: 'final',
       message: '지금 식사는 안정적인 선택이 좋아 보여요. 현재 결정 흐름은 약하지만 식욕은 보통이며 행동 의지는 강합니다. 한 줄 요약: 실용적인 한 끼가 좋겠어요.',
       presentation: expect.objectContaining({
-        summary: expect.stringContaining('흐름 ▰▱▱▱▱ 1/5')
+        summary: expect.stringContaining('식사 적합도 ▰▰▰▰▱ 4/5')
       })
     });
     expect(JSON.stringify(outcome)).toContain('presentation');
+  });
+
+  it('uses model-provided yes/no graph labels for yes-or-no tarot questions', async () => {
+    const tarotRevealSelection = vi.fn(async () => ({
+      message: '이따 병원갈지 타로 카드 1장을 확인했어요.',
+      topic: '이따 병원갈지',
+      spreadCount: 1,
+      selectedNumbers: [3],
+      cards: [{ selectionNumber: 3, nameKo: '전차', orientation: 'upright', orientationKo: '정방향', keywords: ['전진'], assetPath: 'assets/tarot/tarot_chariot.png', attachmentName: 'tarot-3.png' }],
+      visualData: { bars: '흐름 ▰▰▰▰▱ 4/5\n감정 ▰▰▰▱▱ 3/5\n행동 ▰▰▰▰▱ 4/5' },
+      presentation: {
+        title: '이따 병원갈지 타로',
+        summary: '흐름 ▰▰▰▰▱ 4/5\n감정 ▰▰▰▱▱ 3/5\n행동 ▰▰▰▰▱ 4/5',
+        files: [{ path: 'assets/tarot/tarot_chariot.png', name: 'tarot-3.png' }],
+        cards: [{ selectionNumber: 3, name: '전차', orientation: '정방향', attachmentName: 'tarot-3.png' }]
+      }
+    }));
+    const ai = {
+      askMessages: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ kind: 'tool_calls', calls: [{ id: 'reveal', tool: 'tarot.reveal_selection', input: { numbers: [3] } }] }))
+        .mockResolvedValueOnce(JSON.stringify({
+          kind: 'final',
+          message: '가도 괜찮은 쪽으로 기울지만, 몸 상태가 애매하면 확인을 우선하는 게 좋아요.',
+          presentation: { summary: '예 가능성 ▰▰▰▰▱ 4/5\n아니오/보류 ▰▰▱▱▱ 2/5\n주의도 ▰▰▰▱▱ 3/5' }
+        }))
+    };
+    const runtime = new AgentRuntime(ai as any, createDefaultToolRegistry({ tarotRevealSelection }), new AgentTurnContextStore());
+
+    const outcome = await runtime.run(makeMessage(), '3', makeOptions({
+      requesterDisplayName: '테스터',
+      tarotPending: { topic: '이따 병원갈지', spreadCount: 1 }
+    }));
+
+    expect(outcome).toMatchObject({
+      kind: 'final',
+      presentation: expect.objectContaining({
+        summary: '예 가능성 ▰▰▰▰▱ 4/5\n아니오/보류 ▰▰▱▱▱ 2/5\n주의도 ▰▰▰▱▱ 3/5'
+      })
+    });
+    expect(JSON.stringify(outcome)).not.toContain('흐름 ▰▰▰▰▱ 4/5');
   });
 
   it('lets the model parse Korean tarot number words but normalizes invented select-card tool aliases', async () => {
