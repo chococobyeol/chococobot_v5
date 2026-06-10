@@ -1,6 +1,7 @@
 import Groq, { APIError } from 'groq-sdk';
 import type { Settings } from '../config.js';
 import type { UsageStore } from './usageStore.js';
+import { redactSecrets } from './privacyRedaction.js';
 
 export class AiLimitError extends Error {}
 
@@ -93,10 +94,15 @@ export class AiService {
       throw new AiLimitError(formatTokenLimitMessage('guild'));
     }
 
+    const safeMessages = params.messages.map((message) => ({
+      ...message,
+      content: redactSecrets(message.content).text
+    }));
+
     const { data: completion, response } = await this.groq.chat.completions.create({
       model: this.settings.groqModel,
       max_completion_tokens: params.maxCompletionTokens ?? this.settings.aiMaxCompletionTokens,
-      messages: params.messages
+      messages: safeMessages
     }).withResponse();
 
     const usage = completion.usage;

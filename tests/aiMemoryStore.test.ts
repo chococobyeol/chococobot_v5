@@ -53,4 +53,37 @@ describe('AiMemoryStore', () => {
     expect(reset.summary).toBe('');
     expect(reset.unsummarizedCount).toBe(0);
   });
+
+  it('prunes only raw turns older than the retention cutoff', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'chococo-memory-')), 'memory.sqlite3');
+    const store = new SqliteAiMemoryStore(dbPath);
+    store.appendTurn({
+      guildId: 'g1',
+      channelId: 'c1',
+      userId: 'u1',
+      userName: '홍길동',
+      role: 'user',
+      content: '오래된 대화',
+      importance: 0,
+      createdAt: new Date('2026-01-01T00:00:00.000Z')
+    });
+    store.appendTurn({
+      guildId: 'g1',
+      channelId: 'c1',
+      userId: 'u1',
+      userName: '홍길동',
+      role: 'user',
+      content: '최근 대화',
+      importance: 0,
+      createdAt: new Date('2026-06-01T00:00:00.000Z')
+    });
+    store.replaceSummaryAndMarkCompacted('g1', '요약은 유지');
+
+    const pruned = store.pruneGuildTurnsBefore('g1', new Date('2026-05-01T00:00:00.000Z'));
+    const snapshot = store.getGuildSnapshot('g1', 8);
+
+    expect(pruned).toBe(1);
+    expect(snapshot.summary).toBe('요약은 유지');
+    expect(snapshot.unsummarizedCount).toBe(0);
+  });
 });

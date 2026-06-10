@@ -219,6 +219,7 @@ export class AiChatService {
           })
           .catch((error) => logger.warn('Failed to log AI command:', error));
 
+        this.pruneExpiredGuildMemory(message.guildId!);
         const snapshot = this.memory.getGuildSnapshot(message.guildId!, this.settings.aiMemoryRecentTurns);
         const messages: AiChatMessage[] = [{ role: 'system', content: this.settings.aiSystemPrompt }];
         if (snapshot.summary) {
@@ -300,6 +301,7 @@ export class AiChatService {
           .catch((error) => logger.warn('Failed to log AI response:', error));
 
         await this.withGuildLock(message.guildId!, async () => {
+          this.pruneExpiredGuildMemory(message.guildId!);
           const at = new Date();
           const userName = message.member?.displayName ?? message.author.username;
           this.memory.appendTurn({
@@ -339,6 +341,7 @@ export class AiChatService {
 
   getConversationContext(guildId: string, limit = this.settings.aiMemoryRecentTurns): string {
     const safeLimit = Math.max(1, Math.min(limit, this.settings.aiMemoryRecentTurns));
+    this.pruneExpiredGuildMemory(guildId);
     const snapshot = this.memory.getGuildSnapshot(guildId, safeLimit);
     const sections: string[] = [];
     if (snapshot.summary.trim()) {
@@ -353,6 +356,7 @@ export class AiChatService {
   async rememberExchange(message: Message, prompt: string, answer: string): Promise<void> {
     if (!message.guildId || message.author.bot) return;
     await this.withGuildLock(message.guildId, async () => {
+      this.pruneExpiredGuildMemory(message.guildId!);
       const at = new Date();
       const userName = message.member?.displayName ?? message.author.username;
       this.memory.appendTurn({
@@ -450,6 +454,7 @@ export class AiChatService {
 
   private async maybeCompactGuildMemory(guildId: string, userId: string): Promise<void> {
     try {
+      this.pruneExpiredGuildMemory(guildId);
       const snapshot = this.memory.getGuildSnapshot(guildId, this.settings.aiMemoryRecentTurns);
       if (
         snapshot.unsummarizedCount < this.settings.aiMemoryCompactAfterTurns &&
@@ -517,5 +522,16 @@ export class AiChatService {
 
   private withGuildLock<T>(guildId: string, task: () => Promise<T>): Promise<T> {
     return this.enqueue(this.guildLocks, guildId, task);
+  }
+
+  private pruneExpiredGuildMemory(guildId: string): void {
+    const retentionDays = this.settings.aiMemoryRawRetentionDays ?? 30;
+    if (retentionDays <= 0 || typeof this.memory.pruneGuildTurnsBefore !== 'function') return;
+    const before = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    try {
+      this.memory.pruneGuildTurnsBefore(guildId, before);
+    } catch (error) {
+      logger.warn('AI memory retention pruning failed:', error);
+    }
   }
 }

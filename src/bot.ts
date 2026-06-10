@@ -1257,10 +1257,34 @@ function isManagedLogTextChannel(channel: { type: ChannelType; name?: string; to
   return channel.type === ChannelType.GuildText && (channel.name?.startsWith('LOG-') || Boolean(channel.topic?.startsWith('Source guild: ')));
 }
 
+function requiresRequesterHistoryAccess(context: BotContext): boolean {
+  return context.settings.historyRequireRequesterChannelAccess !== false;
+}
+
+function requesterCanReadHistoryChannel(message: Message, channel: GuildTextBasedChannel, context: BotContext): boolean {
+  if (!requiresRequesterHistoryAccess(context)) return true;
+  const channelWithPermissions = channel as GuildTextBasedChannel & {
+    permissionsFor?: (memberOrUser: unknown) => { has(permission: bigint): boolean } | null;
+  };
+  const permissions = channelWithPermissions.permissionsFor?.(message.member ?? message.author.id)
+    ?? message.member?.permissionsIn?.(channel);
+
+  if (!permissions) {
+    return typeof channelWithPermissions.permissionsFor !== 'function' && typeof message.member?.permissionsIn !== 'function';
+  }
+
+  return permissions.has(PermissionFlagsBits.ViewChannel) && permissions.has(PermissionFlagsBits.ReadMessageHistory);
+}
+
+function requesterHistoryAccessDeniedMessage(channel: GuildTextBasedChannel): string {
+  return `<#${channel.id}> 기록은 요청자가 볼 수 있는 채널에서만 확인할 수 있어요...`;
+}
+
 function searchableHistoryChannels(message: Message, context: BotContext): GuildTextBasedChannel[] {
   return Array.from(message.guild?.channels.cache.values() ?? [])
     .filter((candidate): candidate is GuildTextBasedChannel => candidate.type === ChannelType.GuildText && 'messages' in candidate)
-    .filter((candidate) => !isLoggingGuild(message, context) || !isManagedLogTextChannel(candidate));
+    .filter((candidate) => !isLoggingGuild(message, context) || !isManagedLogTextChannel(candidate))
+    .filter((candidate) => requesterCanReadHistoryChannel(message, candidate, context));
 }
 
 async function fetchRecentGuildTextHistory(
@@ -1636,6 +1660,10 @@ async function handleChannelHistoryPlan(
       await message.reply({ content: '로그 채널 내용은 관리자만 확인할 수 있어요...', allowedMentions: { repliedUser: false } });
       return true;
     }
+    if (!requesterCanReadHistoryChannel(message, targetChannel, context)) {
+      await message.reply({ content: requesterHistoryAccessDeniedMessage(targetChannel), allowedMentions: { repliedUser: false } });
+      return true;
+    }
     const assessment = assessChannelHistoryQuery(route.query);
     if (assessment.status !== 'ready') {
       await message.reply({ content: assessment.prompt, allowedMentions: { repliedUser: false } });
@@ -1743,6 +1771,9 @@ async function executeHistorySearchTool(
     if (isLoggingGuild(message, context) && isManagedLogTextChannel(targetChannel) && !canAccessLoggingHistory(message)) {
       throw new Error('로그 채널 내용은 관리자만 확인할 수 있어요...');
     }
+    if (!requesterCanReadHistoryChannel(message, targetChannel, context)) {
+      throw new Error(requesterHistoryAccessDeniedMessage(targetChannel));
+    }
     const indexedSearch = queryTopic
       ? await searchIndexedGuildTextHistory(message, context, input.query, { limit: searchLimit, channelIds: [targetChannel.id] })
       : { history: [], source: 'disabled' as const };
@@ -1785,7 +1816,9 @@ async function executeHistorySearchTool(
     throw new Error('로그 서버의 전체 대화 검색은 관리자만 사용할 수 있어요...');
   }
   const searchableChannels = searchableHistoryChannels(message, context);
-  const searchableChannelIds = isLoggingGuild(message, context) ? searchableChannels.map((channel) => channel.id) : undefined;
+  const searchableChannelIds = isLoggingGuild(message, context) || requiresRequesterHistoryAccess(context)
+    ? searchableChannels.map((channel) => channel.id)
+    : undefined;
   const indexedSearch = queryTopic
     ? await searchIndexedGuildTextHistory(message, context, input.query, { limit: searchLimit, channelIds: searchableChannelIds })
     : { history: [], source: 'disabled' as const };
@@ -2157,7 +2190,9 @@ async function handleGuildChannelHistoryPlan(
     const searchLimit = queryTopic && assessment.limit === DEFAULT_HISTORY_MESSAGE_LIMIT ? MAX_HISTORY_MESSAGE_LIMIT : assessment.limit;
     const searchLookbackHours = queryTopic && assessment.lookbackHours === DEFAULT_HISTORY_LOOKBACK_HOURS ? MAX_HISTORY_LOOKBACK_HOURS : assessment.lookbackHours;
     const searchableChannels = searchableHistoryChannels(message, context);
-    const searchableChannelIds = isLoggingGuild(message, context) ? searchableChannels.map((channel) => channel.id) : undefined;
+    const searchableChannelIds = isLoggingGuild(message, context) || requiresRequesterHistoryAccess(context)
+      ? searchableChannels.map((channel) => channel.id)
+      : undefined;
     const indexedSearch = queryTopic
       ? await searchIndexedGuildTextHistory(message, context, query, { limit: searchLimit, channelIds: searchableChannelIds })
       : { history: [], source: 'disabled' as const };
@@ -2820,7 +2855,12 @@ export async function createBot(
   const usageStore = new UsageStore(settings.databasePath);
   const memoryStore = new SqliteAiMemoryStore(settings.databasePath);
   const voiceSettings = new SqliteVoiceSettingsStore(settings.databasePath);
-  const activityLog = new BotActivityLogService(client, new SqliteBotActivityLogStore(settings.databasePath), settings.loggingGuildId);
+  const activityLog = new BotActivityLogService(
+    client,
+    new SqliteBotActivityLogStore(settings.databasePath),
+    settings.loggingGuildId,
+    { includeContent: settings.logIncludeContent }
+  );
   const ai = new AiService(settings, usageStore);
   const aiCommandPlanner = new AiCommandPlanner(ai);
   const agentTurnContextStore = new AgentTurnContextStore();

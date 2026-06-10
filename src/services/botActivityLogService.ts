@@ -1,6 +1,7 @@
 import { ChannelType, type CategoryChannel, type Client, type Guild, type TextChannel } from 'discord.js';
 import type { BotActivityLogStore } from './botActivityLogStore.js';
 import { logger } from '../logger.js';
+import { formatRedactionMetadata, redactSecrets } from './privacyRedaction.js';
 
 
 export type AiDiagnosticLogDetails = {
@@ -118,11 +119,16 @@ function sanitizeAiDiagnosticText(value: string | undefined, details: AiDiagnost
 }
 
 export class BotActivityLogService {
+  private readonly includeContent: boolean;
+
   constructor(
     private readonly client: Client,
     private readonly store: BotActivityLogStore,
-    private readonly loggingGuildId: string
-  ) {}
+    private readonly loggingGuildId: string,
+    options: { includeContent?: boolean } = {}
+  ) {
+    this.includeContent = options.includeContent ?? false;
+  }
 
   async resetLoggingGuildLayout(): Promise<void> {
     const guild = await this.resolveLoggingGuild();
@@ -236,7 +242,7 @@ export class BotActivityLogService {
           `guildName=${details.guildName ?? 'unknown'}`,
           `userName=${details.userName ?? 'unknown'}`,
           `command=${details.commandName}`,
-          `summary=${details.summary}`
+          this.formatSummaryLine(details.summary)
         ].join('\n'))
     }).catch((error) => logger.warn('Failed to send command log:', error));
   }
@@ -273,11 +279,11 @@ export class BotActivityLogService {
           `guildName=${details.guildName ?? 'unknown'}`,
           `userName=${details.userName ?? 'unknown'}`,
           `mode=${details.mode}`,
-          details.topic ? `topic=${details.topic}` : undefined,
+          details.topic ? this.formatContentField('topic', details.topic, 500) : undefined,
           details.targetChannelId ? `targetChannel=${await this.resolveSourceChannelLabel(details.guildId, details.targetChannelId)}` : undefined,
-          `query=${truncate(details.query, 500)}`,
+          this.formatContentField('query', details.query, 500),
           details.searchSource ? `searchSource=${details.searchSource}` : undefined,
-          details.searchError ? `searchError=${truncate(details.searchError, 500)}` : undefined,
+          details.searchError ? this.formatContentField('searchError', details.searchError, 500) : undefined,
           `scannedChannels=${details.scannedChannels}`,
           `matchedMessages=${details.matchedMessages}`,
           `usedMessages=${details.usedMessages}`
@@ -306,8 +312,8 @@ export class BotActivityLogService {
           `guildName=${details.guildName ?? 'unknown'}`,
           `userName=${details.userName ?? 'unknown'}`,
           `command=${details.commandName}`,
-          `summary=${details.summary}`,
-          `error=${errorText}`
+          this.formatSummaryLine(details.summary),
+          this.formatRedactedValueLine('error', errorText, 500)
         ].join('\n'))
     }).catch((error) => logger.warn('Failed to send error log:', error));
   }
@@ -317,9 +323,6 @@ export class BotActivityLogService {
     const channel = await this.ensureGuildLogChannel(details.guildId);
     if (!channel) return;
     const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
-    const observationSummary = sanitizeAiDiagnosticText(details.observationSummary, details);
-    const promptSnippet = sanitizeAiDiagnosticText(details.promptSnippet, details);
-    const responseSnippet = sanitizeAiDiagnosticText(details.responseSnippet, details);
     const headers = details.rateLimitHeaders && Object.keys(details.rateLimitHeaders).length
       ? Object.entries(details.rateLimitHeaders)
           .filter(([key]) => AI_RATE_LIMIT_HEADER_WHITELIST.has(key.toLowerCase()))
@@ -342,18 +345,18 @@ export class BotActivityLogService {
           details.toolCallId ? `toolCallId=${details.toolCallId}` : undefined,
           details.toolName ? `toolName=${details.toolName}` : undefined,
           details.policy ? `policy=${details.policy}` : undefined,
-          observationSummary ? `observationSummary=${truncate(observationSummary, 500)}` : undefined,
+          details.observationSummary ? this.formatAiDiagnosticContentField('observationSummary', details.observationSummary, details, 500) : undefined,
           typeof details.retryCount === 'number' ? `retryCount=${details.retryCount}` : undefined,
-          details.validationErrors?.length ? `validationErrors=${truncate(details.validationErrors.join('; '), 500)}` : undefined,
-          promptSnippet ? `prompt=${truncate(promptSnippet, 500)}` : undefined,
-          responseSnippet ? `response=${truncate(responseSnippet, 500)}` : undefined,
+          details.validationErrors?.length ? this.formatRedactedValueLine('validationErrors', details.validationErrors.join('; '), 500) : undefined,
+          details.promptSnippet ? this.formatAiDiagnosticContentField('prompt', details.promptSnippet, details, 500) : undefined,
+          details.responseSnippet ? this.formatAiDiagnosticContentField('response', details.responseSnippet, details, 500) : undefined,
           typeof details.promptTokens === 'number' ? `promptTokens=${details.promptTokens}` : undefined,
           typeof details.completionTokens === 'number' ? `completionTokens=${details.completionTokens}` : undefined,
           typeof details.totalTokens === 'number' ? `totalTokens=${details.totalTokens}` : undefined,
           headers ? `rateLimitHeaders=${truncate(headers, 500)}` : undefined,
           typeof details.status === 'number' ? `status=${details.status}` : undefined,
           details.errorName ? `errorName=${details.errorName}` : undefined,
-          details.errorMessage ? `errorMessage=${truncate(details.errorMessage, 500)}` : undefined
+          details.errorMessage ? this.formatRedactedValueLine('errorMessage', details.errorMessage, 500) : undefined
         ].filter(Boolean).join('\n'))
     }).catch((error) => logger.warn('Failed to send AI diagnostic log:', error));
   }
@@ -374,7 +377,7 @@ export class BotActivityLogService {
         [
           `${sourceLabel}-VOICE`,
           `guildName=${details.guildName ?? 'unknown'}`,
-          `message=${details.message}`
+          this.formatRedactedValueLine('message', details.message, 500)
         ].join('\n'))
     }).catch((error) => logger.warn('Failed to send voice log:', error));
   }
@@ -396,7 +399,7 @@ export class BotActivityLogService {
     const sourceLabel = await this.resolveSourceChannelLabel(details.guildId, details.channelId);
     const body =
       details.source === 'command'
-        ? `text=${truncate(details.text ?? '')}`
+        ? this.formatContentField('text', details.text ?? '', 500)
         : `textLength=${details.textLength ?? 0}`;
     await channel.send({
       content: truncate(
@@ -412,6 +415,39 @@ export class BotActivityLogService {
           .filter(Boolean)
           .join('\n'))
     }).catch((error) => logger.warn('Failed to send TTS log:', error));
+  }
+
+  private formatSummaryLine(summary: string): string {
+    const match = /^(prompt|answer|text|query|args)=(.*)$/su.exec(summary);
+    if (!match) return this.formatRedactedValueLine('summary', summary, 500);
+    const [, field, value] = match;
+    const redacted = redactSecrets(value);
+    if (this.includeContent) {
+      return `summary=${field}=${truncate(redacted.text, 500)}`;
+    }
+    return `summary=${field}Length=${value.length}${formatRedactionMetadata(redacted.redactions)}`;
+  }
+
+  private formatContentField(field: string, value: string, limit: number): string {
+    const redacted = redactSecrets(value);
+    if (this.includeContent) {
+      return `${field}=${truncate(redacted.text, limit)}`;
+    }
+    return `${field}Length=${value.length}${formatRedactionMetadata(redacted.redactions)}`;
+  }
+
+  private formatAiDiagnosticContentField(field: string, value: string, details: AiDiagnosticLogDetails, limit: number): string {
+    const sanitized = sanitizeAiDiagnosticText(value, details) ?? '';
+    const redacted = redactSecrets(sanitized);
+    if (this.includeContent) {
+      return `${field}=${truncate(redacted.text, limit)}`;
+    }
+    return `${field}Length=${value.length}${formatRedactionMetadata(redacted.redactions)}`;
+  }
+
+  private formatRedactedValueLine(field: string, value: string, limit: number): string {
+    const redacted = redactSecrets(value);
+    return `${field}=${truncate(redacted.text, limit)}`;
   }
 
   private buildLogChannelName(sourceGuild: Guild): string {

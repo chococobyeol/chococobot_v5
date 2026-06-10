@@ -37,6 +37,7 @@ export interface AiMemoryStore {
   appendTurn(turn: AppendTurnInput): void;
   replaceSummaryAndMarkCompacted(guildId: string, summary: string): void;
   resetGuildMemory(guildId: string): void;
+  pruneGuildTurnsBefore?(guildId: string, before: Date): number;
   close?(): void;
 }
 
@@ -164,6 +165,13 @@ export class SqliteAiMemoryStore implements AiMemoryStore {
     transaction();
   }
 
+  pruneGuildTurnsBefore(guildId: string, before: Date): number {
+    const result = this.db
+      .prepare('DELETE FROM ai_memory_turns WHERE guild_id = ? AND created_at < ?')
+      .run(guildId, before.toISOString());
+    return Number(result.changes);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -215,5 +223,18 @@ export class InMemoryAiMemoryStore implements AiMemoryStore {
     for (let index = this.turns.length - 1; index >= 0; index -= 1) {
       if (this.turns[index].guildId === guildId) this.turns.splice(index, 1);
     }
+  }
+
+  pruneGuildTurnsBefore(guildId: string, before: Date): number {
+    const beforeIso = before.toISOString();
+    let pruned = 0;
+    for (let index = this.turns.length - 1; index >= 0; index -= 1) {
+      const turn = this.turns[index];
+      if (turn.guildId === guildId && turn.createdAt < beforeIso) {
+        this.turns.splice(index, 1);
+        pruned += 1;
+      }
+    }
+    return pruned;
   }
 }

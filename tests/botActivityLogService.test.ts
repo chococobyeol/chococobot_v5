@@ -100,7 +100,7 @@ describe('BotActivityLogService.logAiDiagnostic', () => {
         fetch: vi.fn(async (id?: string) => (id === 'log-guild' ? loggingGuild : sourceGuild))
       }
     } as any;
-    const service = new BotActivityLogService(client, new InMemoryBotActivityLogStore(), 'log-guild');
+    const service = new BotActivityLogService(client, new InMemoryBotActivityLogStore(), 'log-guild', { includeContent: true });
 
     await service.logAiDiagnostic({
       guildId: 'guild-1',
@@ -155,7 +155,7 @@ describe('BotActivityLogService.logAiDiagnostic', () => {
         fetch: vi.fn(async (id?: string) => (id === 'log-guild' ? loggingGuild : sourceGuild))
       }
     } as any;
-    const service = new BotActivityLogService(client, new InMemoryBotActivityLogStore(), 'log-guild');
+    const service = new BotActivityLogService(client, new InMemoryBotActivityLogStore(), 'log-guild', { includeContent: true });
 
     await service.logAiDiagnostic({
       guildId: 'guild-1',
@@ -175,6 +175,76 @@ describe('BotActivityLogService.logAiDiagnostic', () => {
     expect(content).toContain('toolName=web.search');
     expect(content).toContain('[redacted-web-search-query]');
     expect(content).not.toContain('private raw query');
+  });
+
+  it('omits prompt, answer, query, and TTS command content by default while redacting secrets', async () => {
+    const send = vi.fn(async () => undefined);
+    const logChannel = { id: 'log-channel', type: ChannelType.GuildText, name: 'LOG-source', topic: 'Source guild: source (guild-1)', edit: vi.fn(async () => undefined), send };
+    const sourceChannel = { id: 'channel-1', type: ChannelType.GuildText, name: 'general' };
+    const loggingGuild = {
+      id: 'log-guild',
+      name: 'log',
+      channels: {
+        fetch: vi.fn(async (id?: string) => (id === 'log-channel' ? logChannel : null)),
+        create: vi.fn(async () => logChannel),
+        cache: new Map()
+      }
+    };
+    const sourceGuild = {
+      id: 'guild-1',
+      name: 'source',
+      channels: {
+        fetch: vi.fn(async (id?: string) => (id === 'channel-1' ? sourceChannel : null)),
+        cache: new Map([['channel-1', sourceChannel]])
+      }
+    };
+    const client = {
+      guilds: {
+        fetch: vi.fn(async (id?: string) => (id === 'log-guild' ? loggingGuild : sourceGuild))
+      }
+    } as any;
+    const service = new BotActivityLogService(client, new InMemoryBotActivityLogStore(), 'log-guild');
+    const secret = 'gsk_abcdefghijklmnopqrstuvwxyz123456';
+
+    await service.logCommand({
+      guildId: 'guild-1',
+      guildName: 'source',
+      channelId: 'channel-1',
+      userId: 'user-1',
+      userName: 'tester',
+      commandName: 'ai-chat',
+      summary: `prompt=내 이메일은 a@example.com 이고 키는 ${secret}`
+    });
+    await service.logChannelHistory({
+      guildId: 'guild-1',
+      guildName: 'source',
+      channelId: 'channel-1',
+      userId: 'user-1',
+      userName: 'tester',
+      mode: 'qa',
+      query: `찾아줘 ${secret}`,
+      scannedChannels: 1,
+      matchedMessages: 1,
+      usedMessages: 1
+    });
+    await service.logTtsRequest({
+      guildId: 'guild-1',
+      guildName: 'source',
+      channelId: 'channel-1',
+      userId: 'user-1',
+      userName: 'tester',
+      source: 'command',
+      engine: 'edge',
+      text: `읽어줘 ${secret}`
+    });
+
+    const content = send.mock.calls.map((call) => (call as unknown as [{ content: string }])[0].content).join('\n---\n');
+    expect(content).toContain('summary=promptLength=');
+    expect(content).toContain('queryLength=');
+    expect(content).toContain('textLength=');
+    expect(content).not.toContain('a@example.com');
+    expect(content).not.toContain(secret);
+    expect(content).toContain('redactions=groq-api-key');
   });
 
 });

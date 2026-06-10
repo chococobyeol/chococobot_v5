@@ -12,6 +12,7 @@ export type Settings = {
   aiMemoryRecentTurns: number;
   aiMemoryCompactAfterTurns: number;
   aiMemoryMaxSummaryChars: number;
+  aiMemoryRawRetentionDays?: number;
   aiConfirmOwnCleanup: boolean;
   webSearchEnabled: boolean;
   webSearchProvider: 'searxng';
@@ -32,7 +33,9 @@ export type Settings = {
   ttsMaxChars: number;
   ttsReadBotMessages: boolean;
   ttsVoicePresets: Readonly<Record<string, string>>;
+  logIncludeContent?: boolean;
   logLevel: string;
+  historyRequireRequesterChannelAccess?: boolean;
 };
 
 export const DEFAULT_TTS_VOICE_PRESETS: Readonly<Record<string, string>> = {
@@ -100,6 +103,7 @@ export function loadSettings(): Settings {
     aiMemoryRecentTurns: positiveIntFromEnv('AI_MEMORY_RECENT_TURNS', 4),
     aiMemoryCompactAfterTurns: positiveIntFromEnv('AI_MEMORY_COMPACT_AFTER_TURNS', 12),
     aiMemoryMaxSummaryChars: positiveIntFromEnv('AI_MEMORY_MAX_SUMMARY_CHARS', 900),
+    aiMemoryRawRetentionDays: nonNegativeIntFromEnv('AI_MEMORY_RAW_RETENTION_DAYS', 30),
     aiConfirmOwnCleanup: boolFromEnv('AI_CONFIRM_OWN_CLEANUP', false),
     webSearchEnabled: boolFromEnv('WEB_SEARCH_ENABLED', true),
     webSearchProvider: enumFromEnv('WEB_SEARCH_PROVIDER', 'searxng', ['searxng']),
@@ -120,7 +124,9 @@ export function loadSettings(): Settings {
     ttsMaxChars: positiveIntFromEnv('TTS_MAX_CHARS', 500),
     ttsReadBotMessages: boolFromEnv('TTS_READ_BOT_MESSAGES', false),
     ttsVoicePresets: DEFAULT_TTS_VOICE_PRESETS,
-    logLevel: process.env.LOG_LEVEL ?? 'info'
+    logIncludeContent: boolFromEnv('LOG_INCLUDE_CONTENT', false),
+    logLevel: process.env.LOG_LEVEL ?? 'info',
+    historyRequireRequesterChannelAccess: boolFromEnv('HISTORY_REQUIRE_REQUESTER_CHANNEL_ACCESS', true)
   };
 }
 

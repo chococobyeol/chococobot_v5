@@ -84,4 +84,36 @@ describe('AiService internal token limits', () => {
       messages: [{ role: 'user', content: '안녕' }]
     })).rejects.toThrow(new AiLimitError('오늘 봇 AI 토큰 한도를 거의 다 썼어요... 내일 다시 시도하거나 한도를 조정해 주세요.'));
   });
+
+  it('redacts API tokens before sending messages to the AI provider', async () => {
+    const usageStore = {
+      summarizeGuild: vi.fn(() => ({ requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 })),
+      summarizeUser: vi.fn(() => ({ requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 })),
+      recordAiUsage: vi.fn()
+    };
+    const service = new AiService(makeSettings(), usageStore as any);
+    const create = vi.fn(() => ({
+      withResponse: vi.fn(async () => ({
+        data: {
+          model: 'openai/gpt-oss-120b',
+          choices: [{ message: { content: '확인했어요' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 }
+        },
+        response: new Response(null, { status: 200 })
+      }))
+    }));
+    (service as any).groq = { chat: { completions: { create } } };
+    const secret = 'gsk_abcdefghijklmnopqrstuvwxyz123456';
+
+    await service.askMessagesDetailed({
+      guildId: 'guild-1',
+      userId: 'user-1',
+      messages: [{ role: 'user', content: `내 키는 ${secret} 이고 이메일은 a@example.com` }]
+    });
+
+    const call = (create.mock.calls as unknown as Array<[{ messages: Array<{ content: string }> }]>)[0][0];
+    expect(call.messages[0].content).not.toContain(secret);
+    expect(call.messages[0].content).toContain('[redacted-secret]');
+    expect(call.messages[0].content).toContain('a@example.com');
+  });
 });

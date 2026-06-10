@@ -84,6 +84,7 @@ Optional v1 settings:
 | `AI_MEMORY_RECENT_TURNS` | `8` | How many recent unsummarized AI turns are kept in the live prompt. |
 | `AI_MEMORY_COMPACT_AFTER_TURNS` | `12` | When the bot compacts guild AI memory into a summary. |
 | `AI_MEMORY_MAX_SUMMARY_CHARS` | `2000` | Maximum stored summary length after compaction. |
+| `AI_MEMORY_RAW_RETENTION_DAYS` | `30` | How long raw AI conversation turns are retained before pruning. Compacted summaries remain. Set `0` to disable pruning. |
 | `AI_CONFIRM_OWN_CLEANUP` | `false` | If `true`, AI-routed own-message cleanup (`!청소`) asks for confirmation before deleting. `!대청소` still always requires confirmation/admin checks. |
 | `WEB_SEARCH_ENABLED` | `true` | Enables the AI agent's web-search tool. The tool still requires a provider base URL before it can search. |
 | `WEB_SEARCH_PROVIDER` | `searxng` | Web-search provider. Currently only `searxng` is implemented. |
@@ -95,6 +96,8 @@ Optional v1 settings:
 | `SEARXNG_READY_TIMEOUT_SECONDS` | `25` | Startup readiness wait for local SearXNG before the bot starts anyway. |
 | `SMOKE_MODE` | _(none)_ | Set to `1` for login-free startup smoke validation; this mode never calls `client.login`. |
 | `BOT_TIME_ZONE` | `Asia/Seoul` | Fallback server time zone for features that cannot use Discord's client-local timestamp rendering. Current-time AI replies use Discord timestamp tags instead. |
+| `LOG_INCLUDE_CONTENT` | `false` | If `false`, bot activity logs store content length/metadata instead of raw prompts, answers, queries, and TTS text. Secret/API-token patterns are redacted either way. |
+| `HISTORY_REQUIRE_REQUESTER_CHANNEL_ACCESS` | `true` | Limits channel-history search to channels the requesting member can view and read. |
 | `LOG_LEVEL` | `info` | Logging verbosity label. |
 
 Deferred AI/Groq variables (`GROQ_API_KEY`, `GROQ_MODEL`, `AI_*`) remain in `.env.example` for compatibility, but they are not required for the cleanup/TTS v1 startup path.
